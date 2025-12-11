@@ -1,0 +1,191 @@
+Build a complete Rice Mill Management Software with all modules described in the context. Generate clean, modular code with clear folder structure, reusable components, and well-defined APIs. Use TypeScript, Node.js, Express.js for backend, PostgreSQL for database, and React.js + Tailwind CSS for frontend.
+Include authentication, role-based access, multi-language support (English + Urdu), reporting engine, and WhatsApp document sharing.
+Make the system production-ready, scalable, and easy to extend.
+
+context
+
+The application is a Rice Mill Management Software that acts as a digital command center for rice mill operations. It manages accounts, products, purchases, stock processing, sales, reports, ledgers, profit/loss, and WhatsApp document sharing.
+The system should include:
+
+1. Initial Setup
+
+Accounts management
+
+Customers → Assets
+
+Suppliers → Liabilities
+
+Banks
+
+Expense categories
+
+Product registration
+
+Support English + Urdu names
+
+User setup
+
+Add user, password, role
+
+Reminders + desktop alerts
+
+2. Core Workflow
+Purchases
+
+Vehicle number
+
+Broker commission calculator (add/sub percentages)
+
+Purchase bill generator (printable)
+
+Processing
+
+Move purchased stock to processing
+
+Record processed final weight
+
+Add processed stock back to inventory
+
+Sales
+
+Customer selection
+
+Product selection
+
+Vehicle number
+
+Additional charges (loading, weighing etc.)
+
+Urdu gate-pass generator
+
+Printable sales invoice
+
+3. Reporting & Analysis
+
+Stock Report
+
+Purchase Report
+
+Sales Report
+
+Ledger (Party Khata)
+
+Trial Balance
+
+Profit/Loss
+
+WhatsApp sharing for invoices, ledgers
+
+4. Technical Requirements
+
+Multi-language support (Urdu + English)
+
+Role-based permissions
+
+Clean UI with modern UX
+
+Fast PDF generation for bills, reports
+
+Reusable API endpoints
+
+Use metric system throughout
+
+Dashboard with analytics
+
+persona
+
+You are a senior full-stack engineer proficient in TypeScript, SQL, accounting logic, and scalable architecture. You write clean code, clear folder structures, and accurate business logic. You understand rice-mill workflows and accounting terms like ledgers, trial balance, stock valuation, commissions, and supplier/customer categories. Your goal is to generate a complete production-ready app.
+
+input
+
+Generate:
+
+Complete backend architecture
+
+Folder structure
+
+Database schema (PostgreSQL)
+
+API routes
+
+Controllers + services
+
+Auth (JWT)
+
+Role system (admin, manager, accountant, operator)
+
+PDF generation for invoices and reports
+
+WhatsApp API integration
+
+Complete frontend architecture
+
+Folder structure
+
+Screens for all modules
+
+Reusable forms + tables
+
+Urdu/English UI toggle
+
+Dashboard charts
+
+Print views (purchase bill, sale invoice, gate pass, ledger)
+
+Business logic
+
+Purchase → Processing → Sale workflow
+
+Stock calculations
+
+Ledger calculations
+
+Profit/loss formula
+
+Trial balance calculations
+
+Example data
+
+Sample customers
+
+Sample suppliers
+
+Sample rice products
+
+Sample invoices
+
+Deployment guide
+
+Environment variables
+
+Docker setup
+
+Build commands
+
+Nginx config
+
+output
+
+Provide:
+
+Full project folder structure
+
+PostgreSQL schema
+
+Backend code for routes, controllers, services
+
+Frontend pages, components, hooks, API calls
+
+Working examples for purchase, processing, sale
+
+PDF templates (HTML/CSS)
+
+Urdu/English text examples
+
+Seed data
+
+Deployment instructions
+
+Any missing clarifications automatically filled based on best practices
+
+The output should be structured, readable, and split into multiple sections so it can be pasted directly into a code generator.
