@@ -1,0 +1,232 @@
+import { useState } from "react";
+import { Save, Globe, Palette, Shield, Building } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { useLanguage } from "@/contexts/language-context";
+import { useTheme } from "@/contexts/theme-context";
+import { useToast } from "@/hooks/use-toast";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+export default function SettingsPage() {
+  const { t, language, setLanguage, isRTL } = useLanguage();
+  const { theme, setTheme } = useTheme();
+  const { toast } = useToast();
+  
+  const [businessName, setBusinessName] = useState("Rice Mill Enterprise");
+  const [businessNameUrdu, setBusinessNameUrdu] = useState("رائس مل انٹرپرائز");
+  const [phone, setPhone] = useState("+92 300 1234567");
+  const [address, setAddress] = useState("Industrial Area, Lahore");
+
+  const handleSave = () => {
+    toast({ title: t("savedSuccessfully") });
+  };
+
+  return (
+    <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
+      <div className={isRTL ? "text-right" : ""}>
+        <h1 className="text-2xl font-semibold">{t("settings")}</h1>
+        <p className="text-sm text-muted-foreground">
+          {language === "ur" ? "ایپلیکیشن کی ترتیبات" : "Application settings and preferences"}
+        </p>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader className={isRTL ? "text-right" : ""}>
+            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+              <Building className="h-4 w-4" />
+              {language === "ur" ? "کاروبار کی معلومات" : "Business Information"}
+            </CardTitle>
+            <CardDescription>
+              {language === "ur" ? "اپنے کاروبار کی تفصیلات" : "Your business details for documents"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <Label className={isRTL ? "font-urdu" : ""}>
+                  {language === "ur" ? "کاروبار کا نام (انگریزی)" : "Business Name (English)"}
+                </Label>
+                <Input 
+                  value={businessName} 
+                  onChange={(e) => setBusinessName(e.target.value)}
+                  data-testid="input-business-name"
+                />
+              </div>
+              <div>
+                <Label className="font-urdu">کاروبار کا نام (اردو)</Label>
+                <Input 
+                  value={businessNameUrdu} 
+                  onChange={(e) => setBusinessNameUrdu(e.target.value)}
+                  className="font-urdu text-right"
+                  dir="rtl"
+                  data-testid="input-business-name-urdu"
+                />
+              </div>
+            </div>
+            <div>
+              <Label className={isRTL ? "font-urdu" : ""}>
+                {language === "ur" ? "فون نمبر" : "Phone Number"}
+              </Label>
+              <Input 
+                value={phone} 
+                onChange={(e) => setPhone(e.target.value)}
+                data-testid="input-phone"
+              />
+            </div>
+            <div>
+              <Label className={isRTL ? "font-urdu" : ""}>
+                {language === "ur" ? "پتہ" : "Address"}
+              </Label>
+              <Input 
+                value={address} 
+                onChange={(e) => setAddress(e.target.value)}
+                data-testid="input-address"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className={isRTL ? "text-right" : ""}>
+            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+              <Globe className="h-4 w-4" />
+              {language === "ur" ? "زبان کی ترتیبات" : "Language Settings"}
+            </CardTitle>
+            <CardDescription>
+              {language === "ur" ? "ایپلیکیشن کی زبان تبدیل کریں" : "Change application language"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className={`flex items-center justify-between p-4 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}>
+              <div className={isRTL ? "text-right" : ""}>
+                <p className="font-medium">{language === "ur" ? "موجودہ زبان" : "Current Language"}</p>
+                <p className="text-sm text-muted-foreground">
+                  {language === "ur" ? "اردو (دائیں سے بائیں)" : "English (Left to Right)"}
+                </p>
+              </div>
+              <Badge variant="default">
+                {language === "en" ? "English" : "اردو"}
+              </Badge>
+            </div>
+            
+            <div>
+              <Label className={isRTL ? "font-urdu" : ""}>
+                {language === "ur" ? "زبان منتخب کریں" : "Select Language"}
+              </Label>
+              <Select value={language} onValueChange={(val: "en" | "ur") => setLanguage(val)}>
+                <SelectTrigger data-testid="select-language">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">English</SelectItem>
+                  <SelectItem value="ur">اردو (Urdu)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className={isRTL ? "text-right" : ""}>
+            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+              <Palette className="h-4 w-4" />
+              {language === "ur" ? "ظاہری شکل" : "Appearance"}
+            </CardTitle>
+            <CardDescription>
+              {language === "ur" ? "ڈارک یا لائٹ موڈ" : "Dark or light mode"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className={`flex items-center justify-between p-4 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}>
+              <div className={isRTL ? "text-right" : ""}>
+                <p className="font-medium">{language === "ur" ? "ڈارک موڈ" : "Dark Mode"}</p>
+                <p className="text-sm text-muted-foreground">
+                  {language === "ur" ? "آنکھوں کے لیے آرام دہ" : "Easier on the eyes"}
+                </p>
+              </div>
+              <Switch 
+                checked={theme === "dark"} 
+                onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+                data-testid="switch-theme"
+              />
+            </div>
+            
+            <div>
+              <Label className={isRTL ? "font-urdu" : ""}>
+                {language === "ur" ? "تھیم منتخب کریں" : "Select Theme"}
+              </Label>
+              <Select value={theme} onValueChange={(val: "light" | "dark") => setTheme(val)}>
+                <SelectTrigger data-testid="select-theme">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="light">{language === "ur" ? "لائٹ" : "Light"}</SelectItem>
+                  <SelectItem value="dark">{language === "ur" ? "ڈارک" : "Dark"}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className={isRTL ? "text-right" : ""}>
+            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+              <Shield className="h-4 w-4" />
+              {language === "ur" ? "سیکیورٹی" : "Security"}
+            </CardTitle>
+            <CardDescription>
+              {language === "ur" ? "صارف اور رسائی کی ترتیبات" : "User and access settings"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className={`p-4 rounded-lg bg-muted/30 ${isRTL ? "text-right" : ""}`}>
+              <p className="font-medium">{language === "ur" ? "موجودہ صارف" : "Current User"}</p>
+              <p className="text-sm text-muted-foreground mt-1">admin@ricemillerp.com</p>
+              <Badge variant="secondary" className="mt-2">
+                {language === "ur" ? "ایڈمن" : "Admin"}
+              </Badge>
+            </div>
+
+            <Separator />
+
+            <div className={`space-y-3 ${isRTL ? "text-right" : ""}`}>
+              <p className="text-sm font-medium">{language === "ur" ? "رسائی کی سطحیں" : "Access Levels"}</p>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="default">{language === "ur" ? "ایڈمن" : "Admin"}</Badge>
+                <Badge variant="secondary">{language === "ur" ? "مینیجر" : "Manager"}</Badge>
+                <Badge variant="outline">{language === "ur" ? "اکاؤنٹنٹ" : "Accountant"}</Badge>
+                <Badge variant="outline">{language === "ur" ? "آپریٹر" : "Operator"}</Badge>
+              </div>
+            </div>
+
+            <Button variant="outline" className="w-full" disabled>
+              {language === "ur" ? "صارفین کا انتظام" : "Manage Users"}
+              <Badge variant="secondary" className="ml-2 text-xs">
+                {language === "ur" ? "جلد آ رہا ہے" : "Coming Soon"}
+              </Badge>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className={`flex ${isRTL ? "justify-start" : "justify-end"}`}>
+        <Button onClick={handleSave} data-testid="button-save-settings">
+          <Save className="h-4 w-4" />
+          {t("saveSettings")}
+        </Button>
+      </div>
+    </div>
+  );
+}
