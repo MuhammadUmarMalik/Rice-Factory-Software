@@ -7,47 +7,49 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
 
+type TrialBalanceRow = {
+  account: Account;
+  debit: string;
+  credit: string;
+};
+
 export default function TrialBalancePage() {
   const { t, isRTL, language } = useLanguage();
 
-  const { data: accounts = [], isLoading } = useQuery<Account[]>({
-    queryKey: ["/api/accounts"],
+  const { data: rows = [], isLoading } = useQuery<TrialBalanceRow[]>({
+    queryKey: ["/api/reports/trial-balance"],
   });
 
-  const accountsWithBalance = accounts.filter(a => 
-    parseFloat(a.currentBalance || "0") !== 0 || parseFloat(a.openingBalance || "0") !== 0
-  );
+  const accountsWithBalance = rows;
 
   const totalDebit = accountsWithBalance
-    .filter(a => parseFloat(a.currentBalance || "0") > 0)
-    .reduce((sum, a) => sum + parseFloat(a.currentBalance || "0"), 0);
+    .reduce((sum, a) => sum + parseFloat(a.debit || "0"), 0);
 
   const totalCredit = accountsWithBalance
-    .filter(a => parseFloat(a.currentBalance || "0") < 0)
-    .reduce((sum, a) => sum + Math.abs(parseFloat(a.currentBalance || "0")), 0);
+    .reduce((sum, a) => sum + parseFloat(a.credit || "0"), 0);
 
-  const columns: Column<Account>[] = [
+  const columns: Column<TrialBalanceRow>[] = [
     {
       key: "name",
       title: "Account Name",
-      titleUrdu: "اکاؤنٹ کا نام",
+      titleUrdu: "OUcOOU+U1 UcO U+OU.",
       render: (item) => (
         <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
           <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
-            item.type === "customer" ? "bg-primary/10" :
-            item.type === "supplier" ? "bg-chart-2/10" :
-            item.type === "bank" ? "bg-chart-5/10" : "bg-chart-3/10"
+            item.account.type === "customer" ? "bg-primary/10" :
+            item.account.type === "supplier" ? "bg-chart-2/10" :
+            item.account.type === "bank" ? "bg-chart-5/10" : "bg-chart-3/10"
           }`}>
             <Users className={`h-4 w-4 ${
-              item.type === "customer" ? "text-primary" :
-              item.type === "supplier" ? "text-chart-2" :
-              item.type === "bank" ? "text-chart-5" : "text-chart-3"
+              item.account.type === "customer" ? "text-primary" :
+              item.account.type === "supplier" ? "text-chart-2" :
+              item.account.type === "bank" ? "text-chart-5" : "text-chart-3"
             }`} />
           </div>
           <div>
-            <p className="font-medium">{item.name}</p>
-            {item.nameUrdu && (
-              <p className="text-sm text-muted-foreground font-urdu">{item.nameUrdu}</p>
+            <p className="font-medium">{item.account.name}</p>
+            {item.account.nameUrdu && (
+              <p className="text-sm text-muted-foreground font-urdu">{item.account.nameUrdu}</p>
             )}
           </div>
         </div>
@@ -56,26 +58,26 @@ export default function TrialBalancePage() {
     {
       key: "type",
       title: "Type",
-      titleUrdu: "قسم",
+      titleUrdu: "U,O3U.",
       align: "center",
       render: (item) => (
         <Badge variant={
-          item.type === "customer" ? "default" :
-          item.type === "supplier" ? "secondary" : "outline"
+          item.account.type === "customer" ? "default" :
+          item.account.type === "supplier" ? "secondary" : "outline"
         } className="text-xs">
-          {item.type === "customer" ? t("customer") :
-           item.type === "supplier" ? t("supplier") :
-           item.type === "bank" ? (language === "ur" ? "بینک" : "Bank") : t("expenses")}
+          {item.account.type === "customer" ? t("customer") :
+           item.account.type === "supplier" ? t("supplier") :
+           item.account.type === "bank" ? (language === "ur" ? "O\"UOU+Uc" : "Bank") : t("expenses")}
         </Badge>
       ),
     },
     {
       key: "debit",
       title: "Debit",
-      titleUrdu: "ڈیبٹ",
+      titleUrdu: "U^UOO\"U1",
       align: "right",
       render: (item) => {
-        const balance = parseFloat(item.currentBalance || "0");
+        const balance = parseFloat(item.debit || "0");
         return balance > 0 ? (
           <div className={`flex items-center gap-1 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
             <ArrowUpRight className="h-3 w-3 text-muted-foreground" />
@@ -89,15 +91,15 @@ export default function TrialBalancePage() {
     {
       key: "credit",
       title: "Credit",
-      titleUrdu: "کریڈٹ",
+      titleUrdu: "UcOñUOU^U1",
       align: "right",
       render: (item) => {
-        const balance = parseFloat(item.currentBalance || "0");
-        return balance < 0 ? (
+        const balance = parseFloat(item.credit || "0");
+        return balance > 0 ? (
           <div className={`flex items-center gap-1 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
             <ArrowDownRight className="h-3 w-3 text-muted-foreground" />
             <span className="font-mono font-medium">
-              Rs. {Math.abs(balance).toLocaleString()}
+              Rs. {balance.toLocaleString()}
             </span>
           </div>
         ) : null;
@@ -111,7 +113,7 @@ export default function TrialBalancePage() {
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("trialBalance")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "ٹرائل بیلنس رپورٹ" : "Trial balance report"}
+            {language === "ur" ? "U1OñOOÝU, O\"UOU,U+O3 OñU_U^OñU1" : "Trial balance report"}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -130,7 +132,7 @@ export default function TrialBalancePage() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "کل اکاؤنٹس" : "Total Accounts"}
+              {language === "ur" ? "UcU, OUcOOU+U1O3" : "Total Accounts"}
             </CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
@@ -144,7 +146,7 @@ export default function TrialBalancePage() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "کل ڈیبٹ" : "Total Debit"}
+              {language === "ur" ? "UcU, U^UOO\"U1" : "Total Debit"}
             </CardTitle>
             <ArrowUpRight className="h-4 w-4 text-destructive" />
           </CardHeader>
@@ -158,7 +160,7 @@ export default function TrialBalancePage() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "کل کریڈٹ" : "Total Credit"}
+              {language === "ur" ? "UcU, UcOñUOU^U1" : "Total Credit"}
             </CardTitle>
             <ArrowDownRight className="h-4 w-4 text-primary" />
           </CardHeader>
@@ -182,15 +184,15 @@ export default function TrialBalancePage() {
           <div className={`mt-4 pt-4 border-t flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
             <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
               <Wallet className="h-4 w-4 text-muted-foreground" />
-              <span className="font-medium">{language === "ur" ? "کل" : "Total"}</span>
+              <span className="font-medium">{language === "ur" ? "UcU," : "Total"}</span>
             </div>
             <div className={`flex gap-12 ${isRTL ? "flex-row-reverse" : ""}`}>
               <div className="text-right">
-                <p className="text-sm text-muted-foreground">{language === "ur" ? "ڈیبٹ" : "Debit"}</p>
+                <p className="text-sm text-muted-foreground">{language === "ur" ? "U^UOO\"U1" : "Debit"}</p>
                 <p className="font-mono font-bold text-lg">Rs. {totalDebit.toLocaleString()}</p>
               </div>
               <div className="text-right">
-                <p className="text-sm text-muted-foreground">{language === "ur" ? "کریڈٹ" : "Credit"}</p>
+                <p className="text-sm text-muted-foreground">{language === "ur" ? "UcOñUOU^U1" : "Credit"}</p>
                 <p className="font-mono font-bold text-lg">Rs. {totalCredit.toLocaleString()}</p>
               </div>
             </div>

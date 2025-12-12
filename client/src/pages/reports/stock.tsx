@@ -7,35 +7,42 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import type { Product } from "@shared/schema";
 
+type StockReportRow = {
+  product: Product;
+  totalPurchased: string;
+  totalSold: string;
+  currentStock: string;
+};
+
 export default function StockReportPage() {
   const { t, isRTL, language } = useLanguage();
 
-  const { data: products = [], isLoading } = useQuery<Product[]>({
-    queryKey: ["/api/products"],
+  const { data: products = [], isLoading } = useQuery<StockReportRow[]>({
+    queryKey: ["/api/reports/stock"],
   });
 
   const totalStockValue = products.reduce((sum, p) => {
     const stock = parseFloat(p.currentStock || "0");
-    const price = parseFloat(p.avgPurchasePrice || "0");
-    return sum + (stock * price);
+    const price = parseFloat(p.product.avgPurchasePrice || "0");
+    return sum + stock * price;
   }, 0);
 
   const totalQuantity = products.reduce((sum, p) => sum + parseFloat(p.currentStock || "0"), 0);
 
-  const columns: Column<Product>[] = [
+  const columns: Column<StockReportRow>[] = [
     {
       key: "name",
       title: "Product",
-      titleUrdu: "مصنوعات",
+      titleUrdu: "U.OæU+U^O1OO¦",
       render: (item) => (
         <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
             <Package className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <p className="font-medium">{item.name}</p>
-            {item.nameUrdu && (
-              <p className="text-sm text-muted-foreground font-urdu">{item.nameUrdu}</p>
+            <p className="font-medium">{item.product.name}</p>
+            {item.product.nameUrdu && (
+              <p className="text-sm text-muted-foreground font-urdu">{item.product.nameUrdu}</p>
             )}
           </div>
         </div>
@@ -44,18 +51,18 @@ export default function StockReportPage() {
     {
       key: "unit",
       title: "Unit",
-      titleUrdu: "یونٹ",
+      titleUrdu: "UOU^U+U1",
       align: "center",
       render: (item) => (
         <Badge variant="secondary" className="font-mono">
-          {item.unit}
+          {item.product.unit}
         </Badge>
       ),
     },
     {
       key: "currentStock",
       title: "Current Stock",
-      titleUrdu: "موجودہ سٹاک",
+      titleUrdu: "U.U^OªU^O_U? O3U1OUc",
       align: "right",
       render: (item) => {
         const stock = parseFloat(item.currentStock || "0");
@@ -63,7 +70,7 @@ export default function StockReportPage() {
           <div className={`flex items-center gap-2 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
             <Scale className="h-3 w-3 text-muted-foreground" />
             <span className={`font-mono font-medium ${stock > 0 ? "" : "text-muted-foreground"}`}>
-              {stock.toLocaleString()} {item.unit}
+              {stock.toLocaleString()} {item.product.unit}
             </span>
           </div>
         );
@@ -72,33 +79,33 @@ export default function StockReportPage() {
     {
       key: "avgPurchasePrice",
       title: "Avg. Cost",
-      titleUrdu: "اوسط لاگت",
+      titleUrdu: "OU^O3Oú U,OU_O¦",
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm">
-          Rs. {parseFloat(item.avgPurchasePrice || "0").toLocaleString()}/{item.unit}
+          Rs. {parseFloat(item.product.avgPurchasePrice || "0").toLocaleString()}/{item.product.unit}
         </span>
       ),
     },
     {
       key: "salePrice",
       title: "Sale Price",
-      titleUrdu: "فروخت قیمت",
+      titleUrdu: "U?OñU^OrO¦ U,UOU.O¦",
       align: "right",
       render: (item) => (
         <span className="font-mono font-medium text-primary">
-          Rs. {parseFloat(item.salePrice || "0").toLocaleString()}/{item.unit}
+          Rs. {parseFloat(item.product.salePrice || "0").toLocaleString()}/{item.product.unit}
         </span>
       ),
     },
     {
       key: "value",
       title: "Stock Value",
-      titleUrdu: "سٹاک ویلیو",
+      titleUrdu: "O3U1OUc U^UOU,UOU^",
       align: "right",
       render: (item) => {
         const stock = parseFloat(item.currentStock || "0");
-        const price = parseFloat(item.avgPurchasePrice || "0");
+        const price = parseFloat(item.product.avgPurchasePrice || "0");
         const value = stock * price;
         return (
           <span className="font-mono font-medium">
@@ -115,7 +122,7 @@ export default function StockReportPage() {
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("stockReport")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "موجودہ سٹاک کی تفصیلات" : "Current inventory details"}
+            {language === "ur" ? "U.U^OªU^O_U? O3U1OUc UcUO O¦U?OæUOU,OO¦" : "Current inventory details"}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -134,7 +141,7 @@ export default function StockReportPage() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "کل آئٹمز" : "Total Products"}
+              {language === "ur" ? "UcU, O›OÝU1U.Oý" : "Total Products"}
             </CardTitle>
             <Package className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
@@ -148,7 +155,7 @@ export default function StockReportPage() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "کل مقدار" : "Total Quantity"}
+              {language === "ur" ? "UcU, U.U,O_OOñ" : "Total Quantity"}
             </CardTitle>
             <Scale className="h-4 w-4 text-muted-foreground" />
           </CardHeader>

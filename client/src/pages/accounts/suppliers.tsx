@@ -59,12 +59,7 @@ export default function SuppliersPage() {
   });
 
   const { data: suppliers = [], isLoading } = useQuery<Account[]>({
-    queryKey: ["/api/accounts", "supplier"],
-    queryFn: async () => {
-      const res = await fetch("/api/accounts?type=supplier");
-      if (!res.ok) throw new Error("Failed to fetch suppliers");
-      return res.json();
-    },
+    queryKey: ["/api/accounts?type=supplier"],
   });
 
   const createMutation = useMutation({
@@ -72,6 +67,7 @@ export default function SuppliersPage() {
       apiRequest("POST", "/api/accounts", { ...data, type: "supplier" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier"] });
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -83,6 +79,7 @@ export default function SuppliersPage() {
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier"] });
       setIsDialogOpen(false);
       setEditingSupplier(null);
       form.reset();

@@ -17,7 +17,7 @@ export default function SalesReportPage() {
   const [dateTo, setDateTo] = useState<string>("");
 
   const { data: sales = [], isLoading } = useQuery<(Sale & { customer?: Account })[]>({
-    queryKey: ["/api/sales"],
+    queryKey: ["/api/reports/sales"],
   });
 
   const filteredSales = sales.filter(sale => {

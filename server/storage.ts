@@ -1,14 +1,20 @@
 import { db } from "./db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import {
-  users, accounts, products, purchases, purchaseItems,
+  users, accounts, products, purchases, purchaseItems, purchaseCharges,
   processing, sales, saleItems, ledgerEntries,
   type User, type InsertUser, type Account, type InsertAccount,
   type Product, type InsertProduct, type Purchase, type InsertPurchase,
-  type PurchaseItem, type InsertPurchaseItem, type Processing, type InsertProcessing,
+  type PurchaseItem, type InsertPurchaseItem, type PurchaseCharge, type InsertPurchaseCharge,
+  type Processing, type InsertProcessing,
   type Sale, type InsertSale, type SaleItem, type InsertSaleItem,
   type LedgerEntry, type InsertLedgerEntry
 } from "@shared/schema";
+
+type DbClient = typeof db;
+type PurchaseItemInput = Omit<InsertPurchaseItem, "id" | "purchaseId">;
+type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
+type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
 
 export interface IStorage {
   // Users
@@ -22,23 +28,25 @@ export interface IStorage {
   getAccount(id: number): Promise<Account | undefined>;
   createAccount(account: InsertAccount): Promise<Account>;
   updateAccount(id: number, account: Partial<InsertAccount>): Promise<Account | undefined>;
-  updateAccountBalance(id: number, amount: string, type: 'add' | 'subtract'): Promise<void>;
 
   // Products
   getProducts(): Promise<Product[]>;
   getProduct(id: number): Promise<Product | undefined>;
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
-  updateProductStock(id: number, quantity: string, type: 'add' | 'subtract'): Promise<void>;
+  deleteProduct(id: number): Promise<boolean>;
 
   // Purchases
   getPurchases(): Promise<Purchase[]>;
   getPurchase(id: number): Promise<Purchase | undefined>;
-  createPurchase(purchase: InsertPurchase, items: InsertPurchaseItem[]): Promise<Purchase>;
+  getPurchaseWithDetails(id: number): Promise<(Purchase & { items: PurchaseItem[]; charges: PurchaseCharge[] }) | undefined>;
+  createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase>;
+  updatePurchase(id: number, purchase: Partial<InsertPurchase>, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase | undefined>;
   getNextPurchaseInvoiceNumber(): Promise<string>;
 
   // Purchase Items
   getPurchaseItems(purchaseId: number): Promise<PurchaseItem[]>;
+  getPurchaseCharges(purchaseId: number): Promise<PurchaseCharge[]>;
 
   // Processing
   getProcessingBatches(): Promise<Processing[]>;
@@ -50,7 +58,7 @@ export interface IStorage {
   // Sales
   getSales(): Promise<Sale[]>;
   getSale(id: number): Promise<Sale | undefined>;
-  createSale(sale: InsertSale, items: InsertSaleItem[]): Promise<Sale>;
+  createSale(sale: InsertSale, items: SaleItemInput[]): Promise<Sale>;
   getNextSaleInvoiceNumber(): Promise<string>;
   getNextGatePassNumber(): Promise<string>;
 
@@ -64,18 +72,74 @@ export interface IStorage {
   // Reports
   getStockReport(): Promise<{ product: Product; totalPurchased: string; totalSold: string; currentStock: string }[]>;
   getTrialBalance(): Promise<{ account: Account; debit: string; credit: string }[]>;
-  getProfitLoss(startDate?: Date, endDate?: Date): Promise<{ totalPurchases: string; totalSales: string; expenses: string; grossProfit: string }>;
+  getProfitLoss(startDate?: Date, endDate?: Date): Promise<{
+    totalPurchases: string;
+    totalSales: string;
+    expenses: string;
+    grossProfit: string;
+    netProfit: string;
+    purchaseCount: number;
+    saleCount: number;
+  }>;
+}
+
+function parseAmount(value: string | number | null | undefined): number {
+  const num = typeof value === "number" ? value : parseFloat(value || "0");
+  if (!Number.isFinite(num)) {
+    throw new Error("Invalid numeric value");
+  }
+  return num;
+}
+
+function toWords(n: number): string {
+  // Simple integer-to-words helper for positive amounts (English, up to billions)
+  const belowTwenty = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
+  const tens = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
+  const scales = ["","thousand","million","billion"];
+
+  if (n === 0) return "zero";
+  const chunk = (num: number): string => {
+    let word = "";
+    if (num >= 100) {
+      word += `${belowTwenty[Math.floor(num / 100)]} hundred`;
+      num %= 100;
+      if (num) word += " ";
+    }
+    if (num >= 20) {
+      word += tens[Math.floor(num / 10)];
+      num %= 10;
+      if (num) word += `-${belowTwenty[num]}`;
+    } else if (num > 0) {
+      word += belowTwenty[num];
+    }
+    return word;
+  };
+
+  const parts: string[] = [];
+  let remaining = Math.floor(n);
+  let scaleIndex = 0;
+  while (remaining > 0) {
+    const c = remaining % 1000;
+    if (c) {
+      const prefix = chunk(c);
+      const suffix = scales[scaleIndex];
+      parts.unshift(suffix ? `${prefix} ${suffix}` : prefix);
+    }
+    remaining = Math.floor(remaining / 1000);
+    scaleIndex += 1;
+  }
+  return parts.join(" ");
 }
 
 export class DatabaseStorage implements IStorage {
   // Users
   async getUser(id: number): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.id, id));
+    const [user] = db.select().from(users).where(eq(users.id, id)).all();
     return user;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.username, username));
+    const [user] = db.select().from(users).where(eq(users.username, username)).all();
     return user;
   }
 
@@ -85,7 +149,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUsers(): Promise<User[]> {
-    return db.select().from(users).orderBy(users.fullName);
+    return db.select().from(users).orderBy(users.fullName).all();
   }
 
   // Accounts
@@ -93,13 +157,14 @@ export class DatabaseStorage implements IStorage {
     if (type) {
       return db.select().from(accounts)
         .where(eq(accounts.type, type as any))
-        .orderBy(accounts.name);
+        .orderBy(accounts.name)
+        .all();
     }
-    return db.select().from(accounts).orderBy(accounts.name);
+    return db.select().from(accounts).orderBy(accounts.name).all();
   }
 
   async getAccount(id: number): Promise<Account | undefined> {
-    const [account] = await db.select().from(accounts).where(eq(accounts.id, id));
+    const [account] = db.select().from(accounts).where(eq(accounts.id, id)).all();
     return account;
   }
 
@@ -117,21 +182,27 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAccountBalance(id: number, amount: string, type: 'add' | 'subtract'): Promise<void> {
-    const operator = type === 'add' ? sql`+` : sql`-`;
-    await db.update(accounts)
-      .set({
-        currentBalance: sql`${accounts.currentBalance} ${operator} ${amount}::decimal`
-      })
+    return this.updateAccountBalanceInternal(db, id, amount, type);
+  }
+
+  private async updateAccountBalanceInternal(client: DbClient, id: number, amount: string, type: "add" | "subtract") {
+    const [account] = client.select().from(accounts).where(eq(accounts.id, id)).all();
+    const current = parseAmount(account?.currentBalance || "0");
+    const amt = parseAmount(amount || "0");
+    const newBalance = type === "add" ? current + amt : current - amt;
+
+    await client.update(accounts)
+      .set({ currentBalance: newBalance.toString() })
       .where(eq(accounts.id, id));
   }
 
   // Products
   async getProducts(): Promise<Product[]> {
-    return db.select().from(products).orderBy(products.name);
+    return db.select().from(products).orderBy(products.name).all();
   }
 
   async getProduct(id: number): Promise<Product | undefined> {
-    const [product] = await db.select().from(products).where(eq(products.id, id));
+    const [product] = db.select().from(products).where(eq(products.id, id)).all();
     return product;
   }
 
@@ -145,220 +216,520 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deleteProduct(id: number): Promise<boolean> {
+    const result = await db.delete(products).where(eq(products.id, id)).run();
+    return result.changes > 0;
+  }
+
   async updateProductStock(id: number, quantity: string, type: 'add' | 'subtract'): Promise<void> {
-    if (type === 'add') {
-      await db.update(products)
-        .set({
-          currentStock: sql`${products.currentStock} + ${quantity}::decimal`
-        })
-        .where(eq(products.id, id));
-    } else {
-      await db.update(products)
-        .set({
-          currentStock: sql`${products.currentStock} - ${quantity}::decimal`
-        })
-        .where(eq(products.id, id));
+    return this.updateProductStockInternal(db, id, quantity, type);
+  }
+
+  private async updateProductStockInternal(client: DbClient, id: number, quantity: string, type: "add" | "subtract") {
+    const [product] = client.select().from(products).where(eq(products.id, id)).all();
+    const current = parseAmount(product?.currentStock || "0");
+    const qty = parseAmount(quantity || "0");
+    const newStock = type === "add" ? current + qty : current - qty;
+
+    if (type === "subtract" && newStock < 0) {
+      throw new Error(`Insufficient stock for product ${product?.name || id}`);
     }
+
+    await client.update(products)
+      .set({ currentStock: newStock.toString() })
+      .where(eq(products.id, id));
   }
 
   // Purchases
   async getPurchases(): Promise<Purchase[]> {
-    return db.select().from(purchases).orderBy(desc(purchases.purchaseDate));
+    return db.select().from(purchases).orderBy(desc(purchases.id)).all(); // Use ID for stability
   }
 
   async getPurchase(id: number): Promise<Purchase | undefined> {
-    const [purchase] = await db.select().from(purchases).where(eq(purchases.id, id));
+    const [purchase] = db.select().from(purchases).where(eq(purchases.id, id)).all();
     return purchase;
+  }
+
+  async getPurchaseWithDetails(id: number): Promise<(Purchase & { items: PurchaseItem[]; charges: PurchaseCharge[] }) | undefined> {
+    const purchase = await this.getPurchase(id);
+    if (!purchase) return undefined;
+    const [items, charges] = await Promise.all([
+      this.getPurchaseItems(id),
+      this.getPurchaseCharges(id),
+    ]);
+    return { ...purchase, items, charges };
   }
 
   async getNextPurchaseInvoiceNumber(): Promise<string> {
     const year = new Date().getFullYear();
-    const [last] = await db.select().from(purchases)
-      .where(sql`EXTRACT(YEAR FROM ${purchases.purchaseDate}) = ${year}`)
+    const [last] = db.select().from(purchases)
       .orderBy(desc(purchases.id))
-      .limit(1);
-    
-    const nextNum = last ? parseInt(last.invoiceNumber.split('-').pop() || '0') + 1 : 1;
-    return `PUR-${year}-${String(nextNum).padStart(4, '0')}`;
+      .limit(1)
+      .all();
+
+    const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+    return `PUR-${year}-${String(nextNum).padStart(4, "0")}`;
   }
 
-  async createPurchase(purchase: InsertPurchase, items: InsertPurchaseItem[]): Promise<Purchase> {
-    const invoiceNumber = await this.getNextPurchaseInvoiceNumber();
-    
-    let subtotal = 0;
-    for (const item of items) {
-      subtotal += parseFloat(item.totalPrice);
+  private normalizePurchaseItem(item: PurchaseItemInput) {
+    const serialNo = item.serialNo ?? null;
+    const bags = parseAmount(item.bags);
+    const filling = parseAmount(item.fillingPerBagKg);
+    const looseKgs = parseAmount(item.looseKgs || 0);
+    const lessKg = parseAmount(item.lessKg || 0);
+    const bardanaKatKg = parseAmount(item.bardanaKatKg || 0);
+    const rate = parseAmount(item.rate);
+    const grossWeightKg = (bags * filling) + looseKgs;
+    const netWeightKg = Math.max(grossWeightKg - lessKg - bardanaKatKg, 0);
+    const moundQtyFloat = netWeightKg / 40;
+    const moundQty = Math.floor(moundQtyFloat);
+    const moundRemainderKg = Math.max(netWeightKg - (moundQty * 40), 0);
+
+    const unit = item.rateUnit;
+    let billingQty = netWeightKg;
+    if (unit === "mound") billingQty = netWeightKg / 40;
+    if (unit === "bag") billingQty = bags;
+    if (unit === "quintal") billingQty = netWeightKg / 100;
+    if (unit === "ton") billingQty = netWeightKg / 1000;
+
+    const amount = rate * billingQty;
+
+    return {
+      ...item,
+      serialNo: serialNo ?? undefined,
+      marka: item.marka || null,
+      bags: bags.toString(),
+      fillingPerBagKg: filling.toString(),
+      looseKgs: looseKgs.toString(),
+      grossWeightKg: grossWeightKg.toString(),
+      lessKg: lessKg.toString(),
+      bardanaKatKg: bardanaKatKg.toString(),
+      netWeightKg: netWeightKg.toString(),
+      moundQty: moundQty.toString(),
+      moundRemainderKg: moundRemainderKg.toString(),
+      rate: rate.toString(),
+      amount: amount.toString(),
+    };
+  }
+
+  private sumCharges(charges: PurchaseChargeInput[]) {
+    let add = 0;
+    let less = 0;
+    for (const c of charges) {
+      const amt = parseAmount(c.amount);
+      if (c.mode === "less") less += amt; else add += amt;
     }
-    
-    const brokerCommission = parseFloat(purchase.brokerCommissionAmount || "0");
-    const totalAmount = subtotal + brokerCommission;
+    return { add, less };
+  }
 
-    const [newPurchase] = await db.insert(purchases).values({
-      ...purchase,
-      invoiceNumber,
-      subtotal: subtotal.toString(),
-      totalAmount: totalAmount.toString(),
-    }).returning();
+  async createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase> {
+    return db.transaction(async (tx) => {
+      const year = new Date().getFullYear();
+      const [last] = tx.select().from(purchases).orderBy(desc(purchases.id)).limit(1).all();
+      const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+      const invoiceNumber = `PUR-${year}-${String(nextNum).padStart(4, "0")}`;
 
-    for (const item of items) {
-      await db.insert(purchaseItems).values({
-        ...item,
-        purchaseId: newPurchase.id,
+      let subtotal = 0;
+      let totalBags = 0;
+      let totalGrossWeightKg = 0;
+      let totalNetWeightKg = 0;
+
+      const normalizedItems = items.map((item, idx) => {
+        const normalized = this.normalizePurchaseItem({
+          serialNo: item.serialNo ?? idx + 1,
+          ...item,
+        });
+        subtotal += parseAmount(normalized.amount);
+        totalBags += parseAmount(normalized.bags);
+        totalGrossWeightKg += parseAmount(normalized.grossWeightKg);
+        totalNetWeightKg += parseAmount(normalized.netWeightKg);
+        return normalized;
       });
-      await this.updateProductStock(item.productId, item.quantity, 'add');
-    }
 
-    await this.updateAccountBalance(purchase.supplierId, totalAmount.toString(), 'add');
+      const totalMoundQtyFloat = totalNetWeightKg / 40;
+      const totalMoundQty = Math.floor(totalMoundQtyFloat);
+      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * 40), 0);
 
-    await this.createLedgerEntry({
-      accountId: purchase.supplierId,
-      transactionType: "credit",
-      amount: totalAmount.toString(),
-      balance: "0",
-      description: `Purchase Invoice: ${invoiceNumber}`,
-      referenceType: "purchase",
-      referenceId: newPurchase.id,
-      entryDate: new Date(),
+      const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
+      const brokerCommissionPercent = parseAmount(purchase.brokerCommissionPercent || "0");
+      const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
+
+      const lineSubtotal = subtotal + brokerCommission;
+      const grandAmount = lineSubtotal + chargesAdd - chargesLess;
+      const paidAmount = parseAmount((purchase as any).paidAmount || 0);
+      const balanceDue = grandAmount - paidAmount;
+      const amountInWords = `${toWords(Math.round(grandAmount))} only`;
+
+      const client = tx as unknown as DbClient;
+
+      const [newPurchase] = await tx.insert(purchases).values({
+        ...purchase,
+        invoiceNumber,
+        subtotal: lineSubtotal.toString(),
+        totalAmount: grandAmount.toString(),
+        totalBags: totalBags.toString(),
+        totalGrossWeightKg: totalGrossWeightKg.toString(),
+        totalNetWeightKg: totalNetWeightKg.toString(),
+        totalMoundQty: totalMoundQty.toString(),
+        totalMoundRemainderKg: totalMoundRemainderKg.toString(),
+        chargesAdd: chargesAdd.toString(),
+        chargesLess: chargesLess.toString(),
+        buyerAmount: grandAmount.toString(),
+        balanceDue: balanceDue.toString(),
+        brokerCommissionAmount: brokerCommission.toString(),
+        paidAmount: paidAmount.toString(),
+        amountInWords,
+      }).returning();
+
+      for (const item of normalizedItems) {
+        await tx.insert(purchaseItems).values({
+          ...item,
+          purchaseId: newPurchase.id,
+        });
+
+        const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+        const currentStock = parseAmount(product?.currentStock || "0");
+        const currentAvg = parseAmount(product?.avgPurchasePrice || "0");
+        const qtyKg = parseAmount(item.netWeightKg); // maintain stock in kg
+        const pricePerKg = parseAmount(item.amount) / Math.max(qtyKg, 1); // effective rate per kg
+        const newStock = currentStock + qtyKg;
+
+        const totalValue = (currentStock * currentAvg) + (qtyKg * pricePerKg);
+        const newAvg = newStock > 0 ? totalValue / newStock : 0;
+
+        await tx.update(products)
+          .set({
+            currentStock: newStock.toString(),
+            avgPurchasePrice: newAvg.toString(),
+          })
+          .where(eq(products.id, item.productId));
+      }
+
+      for (const charge of charges) {
+        await tx.insert(purchaseCharges).values({
+          ...charge,
+          purchaseId: newPurchase.id,
+          amount: parseAmount(charge.amount).toString(),
+        });
+      }
+
+      await this.updateAccountBalanceInternal(client, purchase.supplierId, grandAmount.toString(), "add");
+
+      await this.createLedgerEntryInternal(client, {
+        accountId: purchase.supplierId,
+        transactionType: "credit",
+        amount: grandAmount.toString(),
+        balance: "0",
+        description: `Purchase Invoice: ${invoiceNumber}`,
+        referenceType: "purchase",
+        referenceId: newPurchase.id,
+        entryDate: new Date(),
+      });
+
+      return newPurchase;
     });
-
-    return newPurchase;
   }
 
-  // Purchase Items
   async getPurchaseItems(purchaseId: number): Promise<PurchaseItem[]> {
-    return db.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, purchaseId));
+    return db.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, purchaseId)).all();
+  }
+
+  async getPurchaseCharges(purchaseId: number): Promise<PurchaseCharge[]> {
+    return db.select().from(purchaseCharges).where(eq(purchaseCharges.purchaseId, purchaseId)).all();
+  }
+
+  async updatePurchase(id: number, purchase: Partial<InsertPurchase>, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase | undefined> {
+    const existing = await this.getPurchaseWithDetails(id);
+    if (!existing) return undefined;
+
+    return db.transaction(async (tx) => {
+      const client = tx as unknown as DbClient;
+
+      // Rollback previous stock impact
+      for (const item of existing.items) {
+        await this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
+      }
+
+      // Rollback supplier balance by old total
+      const oldTotal = parseAmount(existing.totalAmount);
+      await this.updateAccountBalanceInternal(client, existing.supplierId, oldTotal.toString(), "subtract");
+
+      // Rebuild new items/totals
+      let subtotal = 0;
+      let totalBags = 0;
+      let totalGrossWeightKg = 0;
+      let totalNetWeightKg = 0;
+
+      const normalizedItems = items.map((item, idx) => {
+        const normalized = this.normalizePurchaseItem({
+          serialNo: item.serialNo ?? idx + 1,
+          ...item,
+        });
+        subtotal += parseAmount(normalized.amount);
+        totalBags += parseAmount(normalized.bags);
+        totalGrossWeightKg += parseAmount(normalized.grossWeightKg);
+        totalNetWeightKg += parseAmount(normalized.netWeightKg);
+        return normalized;
+      });
+
+      const totalMoundQtyFloat = totalNetWeightKg / 40;
+      const totalMoundQty = Math.floor(totalMoundQtyFloat);
+      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * 40), 0);
+
+      const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
+      const brokerCommissionPercent = parseAmount((purchase as any).brokerCommissionPercent ?? existing.brokerCommissionPercent ?? "0");
+      const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
+
+      const lineSubtotal = subtotal + brokerCommission;
+      const grandAmount = lineSubtotal + chargesAdd - chargesLess;
+      const paidAmount = parseAmount((purchase as any).paidAmount ?? existing.paidAmount ?? 0);
+      const balanceDue = grandAmount - paidAmount;
+      const amountInWords = `${toWords(Math.round(grandAmount))} only`;
+
+      const [updatedPurchase] = await tx.update(purchases).set({
+        ...purchase,
+        subtotal: lineSubtotal.toString(),
+        totalAmount: grandAmount.toString(),
+        totalBags: totalBags.toString(),
+        totalGrossWeightKg: totalGrossWeightKg.toString(),
+        totalNetWeightKg: totalNetWeightKg.toString(),
+        totalMoundQty: totalMoundQty.toString(),
+        totalMoundRemainderKg: totalMoundRemainderKg.toString(),
+        chargesAdd: chargesAdd.toString(),
+        chargesLess: chargesLess.toString(),
+        buyerAmount: grandAmount.toString(),
+        balanceDue: balanceDue.toString(),
+        brokerCommissionAmount: brokerCommission.toString(),
+        paidAmount: paidAmount.toString(),
+        amountInWords,
+      }).where(eq(purchases.id, id)).returning();
+
+      // Replace items
+      await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id)).run();
+      for (const item of normalizedItems) {
+        await tx.insert(purchaseItems).values({ ...item, purchaseId: id });
+        await this.updateProductStockInternal(client, item.productId, item.netWeightKg, "add");
+      }
+
+      // Replace charges
+      await tx.delete(purchaseCharges).where(eq(purchaseCharges.purchaseId, id)).run();
+      for (const charge of charges) {
+        await tx.insert(purchaseCharges).values({
+          ...charge,
+          purchaseId: id,
+          amount: parseAmount(charge.amount).toString(),
+        });
+      }
+
+      // Adjust supplier balance with delta
+      const delta = grandAmount - oldTotal;
+      if (delta !== 0) {
+        await this.updateAccountBalanceInternal(
+          client,
+          purchase.supplierId ?? existing.supplierId,
+          Math.abs(delta).toString(),
+          delta > 0 ? "add" : "subtract"
+        );
+        await this.createLedgerEntryInternal(client, {
+          accountId: purchase.supplierId ?? existing.supplierId,
+          transactionType: delta > 0 ? "credit" : "debit",
+          amount: Math.abs(delta).toString(),
+          balance: "0",
+          description: `Purchase Update Adjustment #${id}`,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: new Date(),
+        });
+      }
+
+      return updatedPurchase;
+    });
   }
 
   // Processing
   async getProcessingBatches(): Promise<Processing[]> {
-    return db.select().from(processing).orderBy(desc(processing.startDate));
+    return db.select().from(processing).orderBy(desc(processing.startDate)).all();
   }
 
   async getProcessingBatch(id: number): Promise<Processing | undefined> {
-    const [batch] = await db.select().from(processing).where(eq(processing.id, id));
+    const [batch] = db.select().from(processing).where(eq(processing.id, id)).all();
     return batch;
   }
 
   async getNextBatchNumber(): Promise<string> {
     const year = new Date().getFullYear();
-    const [last] = await db.select().from(processing)
-      .where(sql`EXTRACT(YEAR FROM ${processing.startDate}) = ${year}`)
+    const [last] = db.select().from(processing)
       .orderBy(desc(processing.id))
-      .limit(1);
-    
+      .limit(1)
+      .all();
+
     const nextNum = last ? parseInt(last.batchNumber.split('-').pop() || '0') + 1 : 1;
     return `PRO-${year}-${String(nextNum).padStart(3, '0')}`;
   }
 
   async createProcessing(batch: InsertProcessing): Promise<Processing> {
-    const batchNumber = await this.getNextBatchNumber();
-    
-    await this.updateProductStock(batch.sourceProductId, batch.sourceQuantity, 'subtract');
-    
-    const [newBatch] = await db.insert(processing).values({
-      ...batch,
-      batchNumber,
-    }).returning();
+    return db.transaction(async (tx) => {
+      const year = new Date().getFullYear();
+      const [last] = tx.select().from(processing).orderBy(desc(processing.id)).limit(1).all();
+      const nextNum = last ? parseInt(last.batchNumber.split("-").pop() || "0") + 1 : 1;
+      const batchNumber = `PRO-${year}-${String(nextNum).padStart(3, "0")}`;
 
-    return newBatch;
+      const client = tx as unknown as DbClient;
+
+      // Reduce stock for source product
+      await this.updateProductStockInternal(client, batch.sourceProductId, batch.sourceQuantity, "subtract");
+
+      const [newBatch] = await tx.insert(processing).values({
+        ...batch,
+        batchNumber,
+      }).returning();
+
+      return newBatch;
+    });
   }
 
   async updateProcessing(id: number, batch: Partial<InsertProcessing>): Promise<Processing | undefined> {
     const existingBatch = await this.getProcessingBatch(id);
     if (!existingBatch) return undefined;
 
-    if (batch.status === 'completed' && existingBatch.status !== 'completed') {
-      if (batch.outputProductId && batch.outputQuantity) {
-        await this.updateProductStock(batch.outputProductId, batch.outputQuantity, 'add');
-      }
-      batch.completedDate = new Date();
-    }
+    return db.transaction(async (tx) => {
+      const updatePayload: Partial<InsertProcessing> = { ...batch };
+      const client = tx as unknown as DbClient;
 
-    const [updated] = await db.update(processing).set(batch).where(eq(processing.id, id)).returning();
-    return updated;
+      if (batch.status === "in_progress" && existingBatch.status === "pending") {
+        updatePayload.startDate = new Date();
+      }
+
+      if (batch.status === "completed" && existingBatch.status !== "completed") {
+        const outputProductId = batch.outputProductId || existingBatch.outputProductId;
+        const outputQuantity = batch.outputQuantity || existingBatch.outputQuantity;
+
+        if (outputProductId && outputQuantity) {
+          await this.updateProductStockInternal(
+            client,
+            outputProductId,
+            outputQuantity,
+            "add",
+          );
+        }
+        updatePayload.completedDate = new Date();
+      }
+
+      const [updated] = await tx.update(processing).set(updatePayload).where(eq(processing.id, id)).returning();
+      return updated;
+    });
   }
 
   // Sales
   async getSales(): Promise<Sale[]> {
-    return db.select().from(sales).orderBy(desc(sales.saleDate));
+    return db.select().from(sales).orderBy(desc(sales.saleDate)).all();
   }
 
   async getSale(id: number): Promise<Sale | undefined> {
-    const [sale] = await db.select().from(sales).where(eq(sales.id, id));
+    const [sale] = db.select().from(sales).where(eq(sales.id, id)).all();
     return sale;
   }
 
   async getNextSaleInvoiceNumber(): Promise<string> {
     const year = new Date().getFullYear();
-    const [last] = await db.select().from(sales)
-      .where(sql`EXTRACT(YEAR FROM ${sales.saleDate}) = ${year}`)
+    const [last] = db.select().from(sales)
       .orderBy(desc(sales.id))
-      .limit(1);
-    
-    const nextNum = last ? parseInt(last.invoiceNumber.split('-').pop() || '0') + 1 : 1;
-    return `SAL-${year}-${String(nextNum).padStart(4, '0')}`;
+      .limit(1)
+      .all();
+
+    const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+    return `SAL-${year}-${String(nextNum).padStart(4, "0")}`;
   }
 
   async getNextGatePassNumber(): Promise<string> {
     const year = new Date().getFullYear();
-    const [last] = await db.select().from(sales)
-      .where(sql`EXTRACT(YEAR FROM ${sales.saleDate}) = ${year}`)
+    const [last] = db.select().from(sales)
       .orderBy(desc(sales.id))
-      .limit(1);
-    
-    const nextNum = last ? parseInt(last.gatePassNumber?.split('-').pop() || '0') + 1 : 1;
-    return `GP-${year}-${String(nextNum).padStart(4, '0')}`;
+      .limit(1)
+      .all();
+
+    const nextNum = last ? parseInt(last.gatePassNumber?.split("-").pop() || "0") + 1 : 1;
+    return `GP-${year}-${String(nextNum).padStart(4, "0")}`;
   }
 
-  async createSale(sale: InsertSale, items: InsertSaleItem[]): Promise<Sale> {
-    const invoiceNumber = await this.getNextSaleInvoiceNumber();
-    const gatePassNumber = await this.getNextGatePassNumber();
-    
-    let subtotal = 0;
-    for (const item of items) {
-      subtotal += parseFloat(item.totalPrice);
-    }
-    
-    const charges = parseFloat(sale.loadingCharges || "0") + 
-                   parseFloat(sale.weighingCharges || "0") + 
-                   parseFloat(sale.otherCharges || "0");
-    const totalAmount = subtotal + charges;
+  async createSale(sale: InsertSale, items: SaleItemInput[]): Promise<Sale> {
+    return db.transaction(async (tx) => {
+      const year = new Date().getFullYear();
+      const [lastSale] = tx.select().from(sales).orderBy(desc(sales.id)).limit(1).all();
+      const nextInvoice = lastSale ? parseInt(lastSale.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+      const invoiceNumber = `SAL-${year}-${String(nextInvoice).padStart(4, "0")}`;
 
-    const [newSale] = await db.insert(sales).values({
-      ...sale,
-      invoiceNumber,
-      gatePassNumber,
-      subtotal: subtotal.toString(),
-      totalAmount: totalAmount.toString(),
-    }).returning();
+      const [lastGp] = tx.select().from(sales).orderBy(desc(sales.id)).limit(1).all();
+      const nextGp = lastGp ? parseInt(lastGp.gatePassNumber?.split("-").pop() || "0") + 1 : 1;
+      const gatePassNumber = `GP-${year}-${String(nextGp).padStart(4, "0")}`;
 
-    for (const item of items) {
-      await db.insert(saleItems).values({
-        ...item,
-        saleId: newSale.id,
+      const client = tx as unknown as DbClient;
+
+      let subtotal = 0;
+      const normalizedItems = items.map((item) => {
+        const qty = parseAmount(item.quantity);
+        const price = parseAmount(item.pricePerUnit);
+        const total = qty * price;
+        subtotal += total;
+        return {
+          ...item,
+          quantity: qty.toString(),
+          pricePerUnit: price.toString(),
+          totalPrice: total.toString(),
+        };
       });
-      await this.updateProductStock(item.productId, item.quantity, 'subtract');
-    }
 
-    await this.updateAccountBalance(sale.customerId, totalAmount.toString(), 'add');
+      // Validate stock first
+      for (const item of normalizedItems) {
+        const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+        const currentStock = parseAmount(product?.currentStock || "0");
+        const qty = parseAmount(item.quantity);
+        if (currentStock < qty) {
+          throw new Error(`Insufficient stock for product ${product?.name || item.productId}. Available: ${currentStock}, Required: ${qty}`);
+        }
+      }
 
-    await this.createLedgerEntry({
-      accountId: sale.customerId,
-      transactionType: "debit",
-      amount: totalAmount.toString(),
-      balance: "0",
-      description: `Sale Invoice: ${invoiceNumber}`,
-      referenceType: "sale",
-      referenceId: newSale.id,
-      entryDate: new Date(),
+      const charges = parseAmount(sale.loadingCharges || "0") + 
+                     parseAmount(sale.weighingCharges || "0") + 
+                     parseAmount(sale.otherCharges || "0");
+      const totalAmount = subtotal + charges;
+
+      const [newSale] = await tx.insert(sales).values({
+        ...sale,
+        invoiceNumber,
+        gatePassNumber,
+        subtotal: subtotal.toString(),
+        totalAmount: totalAmount.toString(),
+      }).returning();
+
+      for (const item of normalizedItems) {
+        await tx.insert(saleItems).values({
+          ...item,
+          saleId: newSale.id,
+        });
+        await this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
+      }
+
+      await this.updateAccountBalanceInternal(client, sale.customerId, totalAmount.toString(), "add");
+
+      await this.createLedgerEntryInternal(client, {
+        accountId: sale.customerId,
+        transactionType: "debit",
+        amount: totalAmount.toString(),
+        balance: "0",
+        description: `Sale Invoice: ${invoiceNumber}`,
+        referenceType: "sale",
+        referenceId: newSale.id,
+        entryDate: new Date(),
+      });
+
+      return newSale;
     });
-
-    return newSale;
   }
 
   // Sale Items
   async getSaleItems(saleId: number): Promise<SaleItem[]> {
-    return db.select().from(saleItems).where(eq(saleItems.saleId, saleId));
+    return db.select().from(saleItems).where(eq(saleItems.saleId, saleId)).all();
   }
 
   // Ledger
@@ -366,18 +737,24 @@ export class DatabaseStorage implements IStorage {
     if (accountId) {
       return db.select().from(ledgerEntries)
         .where(eq(ledgerEntries.accountId, accountId))
-        .orderBy(desc(ledgerEntries.entryDate));
+        .orderBy(desc(ledgerEntries.entryDate))
+        .all();
     }
-    return db.select().from(ledgerEntries).orderBy(desc(ledgerEntries.entryDate));
+    return db.select().from(ledgerEntries).orderBy(desc(ledgerEntries.entryDate)).all();
+  }
+
+  private async createLedgerEntryInternal(client: DbClient, entry: InsertLedgerEntry): Promise<LedgerEntry> {
+    const [account] = client.select().from(accounts).where(eq(accounts.id, entry.accountId)).all();
+    const balance = account?.currentBalance || "0";
+    const [newEntry] = await client.insert(ledgerEntries).values({
+      ...entry,
+      balance,
+    }).returning();
+    return newEntry;
   }
 
   async createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry> {
-    const account = await this.getAccount(entry.accountId);
-    const [newEntry] = await db.insert(ledgerEntries).values({
-      ...entry,
-      balance: account?.currentBalance || "0",
-    }).returning();
-    return newEntry;
+    return this.createLedgerEntryInternal(db, entry);
   }
 
   // Reports
@@ -385,14 +762,20 @@ export class DatabaseStorage implements IStorage {
     const allProducts = await this.getProducts();
     const result = [];
 
+    // Optimize N+1 by fetching all IDs inside loop? No, use improved queries if possible.
+    // Drizzle doesn't support easy bulk group-by maps without raw SQL.
+    // For now, stick to loop but use COALESCE instead of IFNULL.
+    // Optimization (group by) is simpler to implement correctly in next phase if performance is still issue.
+    // Issue #8 is High, but Correctness (COALESCE) is CRITICAL.
+    
     for (const product of allProducts) {
-      const [purchasedResult] = await db.select({
-        total: sql<string>`COALESCE(SUM(${purchaseItems.quantity}), 0)`
-      }).from(purchaseItems).where(eq(purchaseItems.productId, product.id));
+      const [purchasedResult] = db.select({
+        total: sql<string>`COALESCE(SUM(${purchaseItems.netWeightKg}), 0)`
+      }).from(purchaseItems).where(eq(purchaseItems.productId, product.id)).all();
 
-      const [soldResult] = await db.select({
+      const [soldResult] = db.select({
         total: sql<string>`COALESCE(SUM(${saleItems.quantity}), 0)`
-      }).from(saleItems).where(eq(saleItems.productId, product.id));
+      }).from(saleItems).where(eq(saleItems.productId, product.id)).all();
 
       result.push({
         product,
@@ -410,21 +793,21 @@ export class DatabaseStorage implements IStorage {
     const result = [];
 
     for (const account of allAccounts) {
-      const [debitResult] = await db.select({
+      const [debitResult] = db.select({
         total: sql<string>`COALESCE(SUM(${ledgerEntries.amount}), 0)`
       }).from(ledgerEntries)
         .where(and(
           eq(ledgerEntries.accountId, account.id),
           eq(ledgerEntries.transactionType, "debit")
-        ));
+        )).all();
 
-      const [creditResult] = await db.select({
+      const [creditResult] = db.select({
         total: sql<string>`COALESCE(SUM(${ledgerEntries.amount}), 0)`
       }).from(ledgerEntries)
         .where(and(
           eq(ledgerEntries.accountId, account.id),
           eq(ledgerEntries.transactionType, "credit")
-        ));
+        )).all();
 
       result.push({
         account,
@@ -436,28 +819,59 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getProfitLoss(startDate?: Date, endDate?: Date): Promise<{ totalPurchases: string; totalSales: string; expenses: string; grossProfit: string }> {
-    const [purchaseTotal] = await db.select({
-      total: sql<string>`COALESCE(SUM(${purchases.totalAmount}), 0)`
+  async getProfitLoss(startDate?: Date, endDate?: Date): Promise<{
+    totalPurchases: string;
+    totalSales: string;
+    expenses: string;
+    grossProfit: string;
+    netProfit: string;
+    purchaseCount: number;
+    saleCount: number;
+  }> {
+    const purchaseConditions = [];
+    if (startDate) purchaseConditions.push(gte(purchases.purchaseDate, startDate));
+    if (endDate) purchaseConditions.push(lte(purchases.purchaseDate, endDate));
+
+    const purchaseQuery = db.select({
+      total: sql<string>`COALESCE(SUM(${purchases.totalAmount}), 0)`,
+      count: sql<number>`COUNT(*)`
     }).from(purchases);
+    const [purchaseTotal] = (purchaseConditions.length
+      ? purchaseQuery.where(and(...purchaseConditions))
+      : purchaseQuery
+    ).all();
 
-    const [saleTotal] = await db.select({
-      total: sql<string>`COALESCE(SUM(${sales.totalAmount}), 0)`
+    const saleConditions = [];
+    if (startDate) saleConditions.push(gte(sales.saleDate, startDate));
+    if (endDate) saleConditions.push(lte(sales.saleDate, endDate));
+
+    const saleQuery = db.select({
+      total: sql<string>`COALESCE(SUM(${sales.totalAmount}), 0)`,
+      count: sql<number>`COUNT(*)`
     }).from(sales);
+    const [saleTotal] = (saleConditions.length
+      ? saleQuery.where(and(...saleConditions))
+      : saleQuery
+    ).all();
 
+    // Filter expenes?
     const expenseAccounts = await this.getAccounts("expense");
     let expenseTotal = 0;
     for (const acc of expenseAccounts) {
       expenseTotal += parseFloat(acc.currentBalance);
     }
 
-    const grossProfit = parseFloat(saleTotal?.total || "0") - parseFloat(purchaseTotal?.total || "0") - expenseTotal;
+    const grossProfit = parseFloat(saleTotal?.total || "0") - parseFloat(purchaseTotal?.total || "0");
+    const netProfit = grossProfit - expenseTotal;
 
     return {
       totalPurchases: purchaseTotal?.total || "0",
       totalSales: saleTotal?.total || "0",
       expenses: expenseTotal.toString(),
       grossProfit: grossProfit.toString(),
+      netProfit: netProfit.toString(),
+      purchaseCount: purchaseTotal?.count ?? 0,
+      saleCount: saleTotal?.count ?? 0,
     };
   }
 }

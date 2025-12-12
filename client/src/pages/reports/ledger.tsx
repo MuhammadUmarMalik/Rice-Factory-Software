@@ -31,6 +31,13 @@ export default function LedgerPage() {
   const { data: ledgerEntries = [], isLoading } = useQuery<LedgerEntry[]>({
     queryKey: ["/api/ledger", selectedAccountId],
     enabled: !!selectedAccountId,
+    queryFn: async () => {
+      const res = await fetch(`/api/ledger?accountId=${selectedAccountId}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch ledger");
+      return res.json();
+    },
   });
 
   const selectedAccount = accounts.find(a => a.id.toString() === selectedAccountId);

@@ -6,45 +6,41 @@ import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useState } from "react";
-import type { Purchase, Sale, Account } from "@shared/schema";
+
+type ProfitLossResponse = {
+  totalPurchases: string;
+  totalSales: string;
+  expenses: string;
+  grossProfit: string; // Sales - Purchases
+  netProfit: string; // Gross - Expenses
+  purchaseCount: number;
+  saleCount: number;
+};
 
 export default function ProfitLossPage() {
   const { t, isRTL, language } = useLanguage();
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
 
-  const { data: purchases = [] } = useQuery<Purchase[]>({
-    queryKey: ["/api/purchases"],
+  const { data: profitLoss } = useQuery<ProfitLossResponse>({
+    queryKey: ["/api/reports/profit-loss", dateFrom, dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (dateFrom) params.set("startDate", dateFrom);
+      if (dateTo) params.set("endDate", dateTo);
+      const res = await fetch(`/api/reports/profit-loss?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to fetch profit/loss");
+      return res.json();
+    },
   });
 
-  const { data: sales = [] } = useQuery<Sale[]>({
-    queryKey: ["/api/sales"],
-  });
-
-  const { data: accounts = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts"],
-  });
-
-  const filterByDate = <T extends { purchaseDate?: string; saleDate?: string }>(items: T[], dateField: keyof T): T[] => {
-    return items.filter(item => {
-      const itemDate = new Date(item[dateField] as string);
-      if (dateFrom && itemDate < new Date(dateFrom)) return false;
-      if (dateTo && itemDate > new Date(dateTo)) return false;
-      return true;
-    });
-  };
-
-  const filteredPurchases = filterByDate(purchases, "purchaseDate" as keyof Purchase);
-  const filteredSales = filterByDate(sales, "saleDate" as keyof Sale);
-
-  const totalPurchases = filteredPurchases.reduce((sum, p) => sum + parseFloat(p.totalAmount || "0"), 0);
-  const totalSales = filteredSales.reduce((sum, s) => sum + parseFloat(s.totalAmount || "0"), 0);
-
-  const expenseAccounts = accounts.filter(a => a.type === "expense");
-  const totalExpenses = expenseAccounts.reduce((sum, a) => sum + Math.abs(parseFloat(a.currentBalance || "0")), 0);
-
-  const grossProfit = totalSales - totalPurchases;
-  const netProfit = grossProfit - totalExpenses;
+  const totalPurchases = parseFloat(profitLoss?.totalPurchases || "0");
+  const totalSales = parseFloat(profitLoss?.totalSales || "0");
+  const totalExpenses = parseFloat(profitLoss?.expenses || "0");
+  const grossProfit = parseFloat(profitLoss?.grossProfit || "0");
+  const netProfit = parseFloat(profitLoss?.netProfit || grossProfit.toString());
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
@@ -114,7 +110,7 @@ export default function ProfitLossPage() {
                   <div className={isRTL ? "text-right" : ""}>
                     <p className="font-medium">{t("totalSales")}</p>
                     <p className="text-sm text-muted-foreground">
-                      {filteredSales.length} {language === "ur" ? "ٹرانزیکشنز" : "transactions"}
+                      {profitLoss?.saleCount ?? 0} {language === "ur" ? "ٹرانزیکشنز" : "transactions"}
                     </p>
                   </div>
                 </div>
@@ -150,7 +146,7 @@ export default function ProfitLossPage() {
                   <div className={isRTL ? "text-right" : ""}>
                     <p className="font-medium">{t("purchases")}</p>
                     <p className="text-sm text-muted-foreground">
-                      {filteredPurchases.length} {language === "ur" ? "ٹرانزیکشنز" : "transactions"}
+                      {profitLoss?.purchaseCount ?? 0} {language === "ur" ? "ٹرانزیکشنز" : "transactions"}
                     </p>
                   </div>
                 </div>
@@ -167,7 +163,7 @@ export default function ProfitLossPage() {
                   <div className={isRTL ? "text-right" : ""}>
                     <p className="font-medium">{t("expenses")}</p>
                     <p className="text-sm text-muted-foreground">
-                      {expenseAccounts.length} {language === "ur" ? "زمرہ جات" : "categories"}
+                      1 {language === "ur" ? "زمرہ جات" : "category"}
                     </p>
                   </div>
                 </div>

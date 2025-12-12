@@ -79,16 +79,19 @@ export default function SalesPage() {
   });
 
   const { data: sales = [], isLoading } = useQuery<(Sale & { customer?: Account })[]>({
-    queryKey: ["/api/sales"],
+    queryKey: ["/api/reports/sales"],
   });
 
   const { data: customers = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts", "customer"],
+    queryKey: ["/api/accounts?type=customer"],
   });
 
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+
+  const getUnitForProduct = (productId?: string) =>
+    products.find((p) => p.id.toString() === productId)?.unit;
 
   const createMutation = useMutation({
     mutationFn: (data: SaleFormData) =>
@@ -101,8 +104,15 @@ export default function SalesPage() {
           pricePerUnit: item.pricePerUnit,
         })),
       }),
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: language === "ur" ? "Stock error" : "Stock error",
+        description: error.message,
+      });
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
       form.reset();
@@ -111,6 +121,25 @@ export default function SalesPage() {
   });
 
   const handleSubmit = (data: SaleFormData) => {
+    for (let index = 0; index < data.items.length; index++) {
+      const item = data.items[index];
+      const product = products.find((p) => p.id === parseInt(item.productId));
+      if (!product) continue;
+
+      const available = parseFloat(product.currentStock || "0");
+      const requested = parseFloat(item.quantity || "0");
+
+      if (requested > available) {
+        form.setError(`items.${index}.quantity`, { type: "manual", message: "Insufficient stock" });
+        toast({
+          variant: "destructive",
+          title: language === "ur" ? "Insufficient stock" : "Insufficient stock",
+          description: `${product.name} has only ${available.toLocaleString()} ${product.unit} available.`,
+        });
+        return;
+      }
+    }
+
     createMutation.mutate(data);
   };
 
@@ -341,11 +370,16 @@ export default function SalesPage() {
                 <div className="space-y-3">
                   {fields.map((field, index) => (
                     <div key={field.id} className="grid grid-cols-12 gap-2 items-end">
-                      <div className="col-span-5">
-                        <FormField
-                          control={form.control}
-                          name={`items.${index}.productId`}
-                          render={({ field }) => (
+                      {(() => {
+                        const selectedProductId = form.watch(`items.${index}.productId`);
+                        const unit = getUnitForProduct(selectedProductId) || "unit";
+                        return (
+                          <>
+                          <div className="col-span-5">
+                            <FormField
+                              control={form.control}
+                              name={`items.${index}.productId`}
+                              render={({ field }) => (
                             <FormItem>
                               {index === 0 && <FormLabel>{language === "ur" ? "مصنوعات" : "Product"}</FormLabel>}
                               <Select onValueChange={field.onChange} value={field.value}>
@@ -357,7 +391,7 @@ export default function SalesPage() {
                                 <SelectContent>
                                   {products.map((p) => (
                                     <SelectItem key={p.id} value={p.id.toString()}>
-                                      {p.name} ({parseFloat(p.currentStock).toLocaleString()} {p.unit})
+                                      {p.name} ({p.unit}) — {parseFloat(p.currentStock).toLocaleString()} {p.unit} in stock
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
@@ -366,50 +400,53 @@ export default function SalesPage() {
                             </FormItem>
                           )}
                         />
-                      </div>
-                      <div className="col-span-3">
-                        <FormField
-                          control={form.control}
-                          name={`items.${index}.quantity`}
-                          render={({ field }) => (
-                            <FormItem>
-                              {index === 0 && <FormLabel>{t("quantity")} (kg)</FormLabel>}
-                              <FormControl>
-                                <Input {...field} type="number" step="0.01" data-testid={`input-quantity-${index}`} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
+                          </div>
+                          <div className="col-span-3">
+                            <FormField
+                              control={form.control}
+                              name={`items.${index}.quantity`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {index === 0 && <FormLabel>{`${t("quantity")} (${unit})`}</FormLabel>}
+                                  <FormControl>
+                                    <Input {...field} type="number" step="0.01" data-testid={`input-quantity-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
                           )}
                         />
                       </div>
-                      <div className="col-span-3">
-                        <FormField
-                          control={form.control}
-                          name={`items.${index}.pricePerUnit`}
-                          render={({ field }) => (
-                            <FormItem>
-                              {index === 0 && <FormLabel>{t("pricePerUnit")}</FormLabel>}
-                              <FormControl>
-                                <Input {...field} type="number" step="0.01" data-testid={`input-price-${index}`} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
+                          <div className="col-span-3">
+                            <FormField
+                              control={form.control}
+                              name={`items.${index}.pricePerUnit`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {index === 0 && <FormLabel>{`${t("pricePerUnit")} (${unit})`}</FormLabel>}
+                                  <FormControl>
+                                    <Input {...field} type="number" step="0.01" data-testid={`input-price-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
                           )}
                         />
                       </div>
-                      <div className="col-span-1">
-                        {fields.length > 1 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => remove(index)}
-                            data-testid={`button-remove-item-${index}`}
-                          >
-                            &times;
-                          </Button>
-                        )}
-                      </div>
+                          <div className="col-span-1">
+                            {fields.length > 1 && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => remove(index)}
+                                data-testid={`button-remove-item-${index}`}
+                              >
+                                &times;
+                              </Button>
+                            )}
+                          </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>

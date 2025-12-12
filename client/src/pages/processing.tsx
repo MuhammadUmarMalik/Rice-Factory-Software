@@ -65,7 +65,7 @@ export default function ProcessingPage() {
     defaultValues: {
       sourceProductId: "",
       sourceQuantity: "",
-      outputProductId: "",
+      outputProductId: "same",
       notes: "",
     },
   });
@@ -92,13 +92,22 @@ export default function ProcessingPage() {
       apiRequest("POST", "/api/processing", {
         ...data,
         sourceProductId: parseInt(data.sourceProductId),
-        outputProductId: data.outputProductId ? parseInt(data.outputProductId) : null,
+        outputProductId: data.outputProductId === "same"
+          ? parseInt(data.sourceProductId)
+          : data.outputProductId
+          ? parseInt(data.outputProductId)
+          : null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/processing"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
-      form.reset();
+      form.reset({
+        sourceProductId: "",
+        sourceQuantity: "",
+        outputProductId: "same",
+        notes: "",
+      });
       toast({ title: t("savedSuccessfully") });
     },
   });
@@ -141,7 +150,7 @@ export default function ProcessingPage() {
   const handleComplete = (processing: Processing) => {
     setSelectedProcessing(processing);
     completeForm.reset({
-      outputProductId: processing.outputProductId?.toString() || "",
+      outputProductId: (processing.outputProductId ?? processing.sourceProductId).toString(),
       outputQuantity: "",
       wastageQuantity: "0",
     });
@@ -322,7 +331,7 @@ export default function ProcessingPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("sourceProduct")}</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value || undefined}>
                       <FormControl>
                         <SelectTrigger data-testid="select-source-product">
                           <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select product"} />
@@ -366,7 +375,7 @@ export default function ProcessingPage() {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="">Same as source</SelectItem>
+                        <SelectItem value="same">Same as source</SelectItem>
                         {products.map((p) => (
                           <SelectItem key={p.id} value={p.id.toString()}>
                             {p.name}

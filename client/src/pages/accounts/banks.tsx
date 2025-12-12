@@ -53,12 +53,7 @@ export default function BanksPage() {
   });
 
   const { data: banks = [], isLoading } = useQuery<Account[]>({
-    queryKey: ["/api/accounts", "bank"],
-    queryFn: async () => {
-      const res = await fetch("/api/accounts?type=bank");
-      if (!res.ok) throw new Error("Failed to fetch banks");
-      return res.json();
-    },
+    queryKey: ["/api/accounts?type=bank"],
   });
 
   const createMutation = useMutation({
@@ -66,6 +61,7 @@ export default function BanksPage() {
       apiRequest("POST", "/api/accounts", { ...data, type: "bank" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank"] });
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -77,6 +73,7 @@ export default function BanksPage() {
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank"] });
       setIsDialogOpen(false);
       setEditingBank(null);
       form.reset();

@@ -7,32 +7,43 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
+import { format } from "date-fns";
 
-const mockChartData = [
-  { name: "Jan", purchases: 400000, sales: 520000 },
-  { name: "Feb", purchases: 350000, sales: 480000 },
-  { name: "Mar", purchases: 450000, sales: 550000 },
-  { name: "Apr", purchases: 380000, sales: 490000 },
-  { name: "May", purchases: 420000, sales: 580000 },
-  { name: "Jun", purchases: 460000, sales: 620000 },
-];
+type DashboardStats = {
+  totalPurchases: string;
+  totalSales: string;
+  stockValue: string;
+  totalProfit: string;
+};
 
-const mockProductData = [
-  { name: "Basmati", stock: 25000 },
-  { name: "Super", stock: 18000 },
-  { name: "Sella", stock: 12000 },
-  { name: "Broken", stock: 8000 },
-];
+type ActivityItem = {
+  type: "purchase" | "sale" | "processing";
+  id: number;
+  amount: string;
+  date: string | Date;
+  reference: string;
+};
 
 export default function Dashboard() {
   const { t, isRTL, language } = useLanguage();
 
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
   });
 
-  const { data: recentActivity, isLoading: activityLoading } = useQuery({
+  const { data: recentActivity = [], isLoading: activityLoading } = useQuery<ActivityItem[]>({
     queryKey: ["/api/dashboard/recent"],
+  });
+
+  const { data: chartData, isLoading: chartLoading } = useQuery<{
+    monthlyTotals: { name: string; purchases: number; sales: number }[];
+    productStock: { name: string; stock: number; unit: string }[];
+  }>({
+    queryKey: ["/api/dashboard/charts"],
+  });
+
+  const { data: processingBatches = [], isLoading: processingLoading } = useQuery<any[]>({
+    queryKey: ["/api/processing"],
   });
 
   const statCards = [
@@ -75,9 +86,9 @@ export default function Dashboard() {
   ];
 
   const quickActions = [
-    { title: t("newPurchase"), url: "/purchases/new", icon: ShoppingCart, color: "bg-chart-2 text-white" },
-    { title: t("newSale"), url: "/sales/new", icon: TrendingUp, color: "bg-primary text-primary-foreground" },
-    { title: t("processStock"), url: "/processing/new", icon: Factory, color: "bg-chart-3 text-white" },
+    { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, color: "bg-chart-2 text-white" },
+    { title: t("newSale"), url: "/sales", icon: TrendingUp, color: "bg-primary text-primary-foreground" },
+    { title: t("processStock"), url: "/processing", icon: Factory, color: "bg-chart-3 text-white" },
   ];
 
   return (
@@ -164,35 +175,41 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={mockChartData}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="name" className="text-xs" />
-                  <YAxis className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: "hsl(var(--card))", 
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "6px"
-                    }}
-                    formatter={(value: number) => [`Rs. ${value.toLocaleString()}`, ""]}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="purchases" 
-                    stroke="hsl(var(--chart-2))" 
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="sales" 
-                    stroke="hsl(var(--primary))" 
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              {chartLoading ? (
+                <div className="flex items-center justify-center h-full">
+                  <Skeleton className="h-16 w-1/2" />
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData?.monthlyTotals || []}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                    <XAxis dataKey="name" className="text-xs" />
+                    <YAxis className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: "hsl(var(--card))", 
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "6px"
+                      }}
+                      formatter={(value: number) => [`Rs. ${value.toLocaleString()}`, ""]}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="purchases" 
+                      stroke="hsl(var(--chart-2))" 
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="sales" 
+                      stroke="hsl(var(--primary))" 
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -208,22 +225,28 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={mockProductData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
-                  <XAxis type="number" className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                  <YAxis type="category" dataKey="name" className="text-xs" width={60} />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: "hsl(var(--card))", 
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "6px"
-                    }}
-                    formatter={(value: number) => [`${value.toLocaleString()} kg`, ""]}
-                  />
-                  <Bar dataKey="stock" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {chartLoading ? (
+                <div className="flex items-center justify-center h-full">
+                  <Skeleton className="h-16 w-1/2" />
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData?.productStock || []} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
+                    <XAxis type="number" className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
+                    <YAxis type="category" dataKey="name" className="text-xs" width={80} />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: "hsl(var(--card))", 
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "6px"
+                      }}
+                      formatter={(value: number) => [`${value.toLocaleString()} kg`, ""]}
+                    />
+                    <Bar dataKey="stock" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -256,42 +279,47 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-4">
-                {[
-                  { type: "purchase", party: "Ahmed Rice Traders", amount: "Rs. 125,000", time: "2 hours ago" },
-                  { type: "sale", party: "Karachi Wholesalers", amount: "Rs. 245,000", time: "4 hours ago" },
-                  { type: "processing", party: "Batch #PRO-2024-156", amount: "5,000 kg", time: "6 hours ago" },
-                  { type: "purchase", party: "Punjab Farmers Coop", amount: "Rs. 180,000", time: "Yesterday" },
-                ].map((item, index) => (
-                  <div 
-                    key={index} 
-                    className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}
-                    data-testid={`activity-item-${index}`}
-                  >
-                    <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                      item.type === "purchase" ? "bg-chart-2/10" : 
-                      item.type === "sale" ? "bg-primary/10" : "bg-chart-3/10"
-                    }`}>
-                      {item.type === "purchase" ? (
-                        <ShoppingCart className="h-4 w-4 text-chart-2" />
-                      ) : item.type === "sale" ? (
-                        <TrendingUp className="h-4 w-4 text-primary" />
-                      ) : (
-                        <Factory className="h-4 w-4 text-chart-3" />
-                      )}
+                {(recentActivity || []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">
+                    {language === "ur" ? "No recent activity yet." : "No recent activity yet."}
+                  </p>
+                ) : (
+                  (recentActivity || []).map((item: any, index: number) => (
+                    <div 
+                      key={index} 
+                      className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}
+                      data-testid={`activity-item-${index}`}
+                    >
+                      <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                        item.type === "purchase" ? "bg-chart-2/10" : 
+                        item.type === "sale" ? "bg-primary/10" : "bg-chart-3/10"
+                      }`}>
+                        {item.type === "purchase" ? (
+                          <ShoppingCart className="h-4 w-4 text-chart-2" />
+                        ) : item.type === "sale" ? (
+                          <TrendingUp className="h-4 w-4 text-primary" />
+                        ) : (
+                          <Factory className="h-4 w-4 text-chart-3" />
+                        )}
+                      </div>
+                      <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
+                        <p className="text-sm font-medium">{item.reference}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {format(new Date(item.date), "dd MMM yyyy")}
+                        </p>
+                      </div>
+                      <div className={`${isRTL ? "text-left" : "text-right"}`}>
+                        <p className="text-sm font-mono font-medium">
+                          {item.type === "processing" ? `${item.amount} kg` : `Rs. ${parseFloat(item.amount || 0).toLocaleString()}`}
+                        </p>
+                        <Badge variant="secondary" className="text-xs">
+                          {item.type === "purchase" ? t("purchases") : 
+                           item.type === "sale" ? t("sales") : t("processing")}
+                        </Badge>
+                      </div>
                     </div>
-                    <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
-                      <p className="text-sm font-medium">{item.party}</p>
-                      <p className="text-xs text-muted-foreground">{item.time}</p>
-                    </div>
-                    <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                      <p className="text-sm font-mono font-medium">{item.amount}</p>
-                      <Badge variant="secondary" className="text-xs">
-                        {item.type === "purchase" ? t("purchases") : 
-                         item.type === "sale" ? t("sales") : t("processing")}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             )}
           </CardContent>
@@ -309,36 +337,45 @@ export default function Dashboard() {
             </Link>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {[
-                { batch: "PRO-2024-157", product: "Basmati Rice", quantity: "3,500 kg", status: "pending" },
-                { batch: "PRO-2024-158", product: "Super Rice", quantity: "2,200 kg", status: "in_progress" },
-                { batch: "PRO-2024-159", product: "Sella Rice", quantity: "4,100 kg", status: "pending" },
-              ].map((item, index) => (
-                <div 
-                  key={index} 
-                  className={`flex items-center gap-3 p-3 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}
-                  data-testid={`pending-item-${index}`}
-                >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-3/10">
-                    <Factory className="h-4 w-4 text-chart-3" />
-                  </div>
-                  <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
-                    <p className="text-sm font-medium">{item.product}</p>
-                    <p className="text-xs text-muted-foreground font-mono">{item.batch}</p>
-                  </div>
-                  <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                    <p className="text-sm font-mono">{item.quantity}</p>
-                    <Badge 
-                      variant={item.status === "in_progress" ? "default" : "secondary"}
-                      className="text-xs"
-                    >
-                      {item.status === "in_progress" ? t("inProgress") : t("pending")}
-                    </Badge>
-                  </div>
+              {processingLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full" />)}
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="space-y-4">
+                  {processingBatches.filter((p: any) => p.status !== "completed").slice(0, 3).map((item: any, index: number) => (
+                    <div 
+                      key={index} 
+                      className={`flex items-center gap-3 p-3 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}
+                      data-testid={`pending-item-${index}`}
+                    >
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-3/10">
+                        <Factory className="h-4 w-4 text-chart-3" />
+                      </div>
+                      <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
+                        <p className="text-sm font-medium">{item.sourceProduct?.name || "-"}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{item.batchNumber}</p>
+                      </div>
+                      <div className={`${isRTL ? "text-left" : "text-right"}`}>
+                        <p className="text-sm font-mono">
+                          {parseFloat(item.sourceQuantity || "0").toLocaleString()} kg
+                        </p>
+                        <Badge 
+                          variant={item.status === "in_progress" ? "default" : "secondary"}
+                          className="text-xs"
+                        >
+                          {item.status === "in_progress" ? t("inProgress") : t("pending")}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                  {processingBatches.filter((p: any) => p.status !== "completed").length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      {language === "ur" ? "No pending processing." : "No pending processing."}
+                    </p>
+                  )}
+                </div>
+              )}
           </CardContent>
         </Card>
       </div>

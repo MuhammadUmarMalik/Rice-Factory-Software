@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Eye, Printer, Truck, Calculator } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,12 @@ import type { Purchase, Account, Product } from "@shared/schema";
 import { format } from "date-fns";
 
 const purchaseFormSchema = z.object({
+  purchaseDate: z.string().optional(),
+  dueDate: z.string().optional(),
+  billNo: z.string().optional(),
+  bookNo: z.string().optional(),
   supplierId: z.string().min(1, "Supplier is required"),
+  expenseAccountId: z.string().min(1, "Expense account is required"),
   vehicleNumber: z.string().optional(),
   brokerId: z.string().optional(),
   brokerCommissionPercent: z.string().default("0"),
@@ -47,9 +52,33 @@ const purchaseFormSchema = z.object({
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
-    quantity: z.string().min(1, "Quantity is required"),
-    pricePerUnit: z.string().min(1, "Price is required"),
+    marka: z.string().optional(),
+    bags: z.string().default("0"),
+    fillingPerBagKg: z.string().default("0"),
+    looseKgs: z.string().default("0"),
+    lessKg: z.string().default("0"),
+    bardanaKatKg: z.string().default("0"),
+    rate: z.string().default("0"),
+    rateUnit: z.enum(["kg", "mound", "bag", "quintal", "ton"]),
   })).min(1, "At least one item is required"),
+  charges: z.array(z.object({
+    type: z.enum([
+      "weight",
+      "freight",
+      "loading_filling",
+      "market_fee",
+      "mitha_sukri",
+      "other",
+      "phone_analysis",
+      "brokerage",
+      "commission",
+      "bardana",
+      "broken_allowance",
+    ]),
+    mode: z.enum(["add", "less"]).default("add"),
+    amount: z.string().default("0"),
+    accountId: z.string().optional(),
+  })).default([]),
 });
 
 type PurchaseFormData = z.infer<typeof purchaseFormSchema>;
@@ -58,17 +87,39 @@ export default function PurchasesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [customProductDrafts, setCustomProductDrafts] = useState<Record<number, { name: string; unit: string }>>({});
+  const [creatingProductIndex, setCreatingProductIndex] = useState<number | null>(null);
+
+  const defaultCharges = useMemo(() => ([
+    "weight",
+    "freight",
+    "loading_filling",
+    "market_fee",
+    "mitha_sukri",
+    "other",
+    "phone_analysis",
+    "brokerage",
+    "commission",
+    "bardana",
+    "broken_allowance",
+  ] as const).map((type) => ({ type, mode: "add" as const, amount: "0", accountId: "" })), []);
 
   const form = useForm<PurchaseFormData>({
     resolver: zodResolver(purchaseFormSchema),
     defaultValues: {
+      purchaseDate: new Date().toISOString().slice(0, 10),
+      dueDate: new Date().toISOString().slice(0, 10),
+      billNo: "",
+      bookNo: "",
       supplierId: "",
+      expenseAccountId: "",
       vehicleNumber: "",
       brokerId: "",
       brokerCommissionPercent: "0",
       paidAmount: "0",
       notes: "",
-      items: [{ productId: "", quantity: "", pricePerUnit: "" }],
+      items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
+      charges: defaultCharges,
     },
   });
 
@@ -78,31 +129,94 @@ export default function PurchasesPage() {
   });
 
   const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
-    queryKey: ["/api/purchases"],
+    queryKey: ["/api/reports/purchases"],
   });
 
   const { data: suppliers = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts", "supplier"],
+    queryKey: ["/api/accounts?type=supplier"],
+  });
+
+  const { data: expenseAccounts = [] } = useQuery<Account[]>({
+    queryKey: ["/api/accounts?type=expense"],
+  });
+
+  const { data: accounts = [] } = useQuery<Account[]>({
+    queryKey: ["/api/accounts"],
   });
 
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
 
+  const getUnitForProduct = (productId?: string) =>
+    products.find((p) => p.id.toString() === productId)?.unit;
+  const unitOptions = [
+    { value: "kg", label: "Kilogram (kg)" },
+    { value: "quintal", label: "Quintal (100 kg)" },
+    { value: "ton", label: "Ton (1000 kg)" },
+    { value: "bag", label: "Bag" },
+  ];
+
+  const createInlineProduct = async (index: number) => {
+    const draft = customProductDrafts[index];
+    if (!draft || !draft.name.trim()) {
+      toast({ title: "Enter a product name first", variant: "destructive" });
+      return;
+    }
+    try {
+      setCreatingProductIndex(index);
+      const res = await apiRequest("POST", "/api/products", {
+        name: draft.name.trim(),
+        unit: draft.unit,
+        salePrice: "0",
+        currentStock: "0",
+        avgPurchasePrice: "0",
+      });
+      const product: Product = await res.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      form.setValue(`items.${index}.productId`, product.id.toString(), { shouldDirty: true, shouldValidate: true });
+      setCustomProductDrafts((prev) => {
+        const copy = { ...prev };
+        delete copy[index];
+        return copy;
+      });
+      toast({ title: "Product added", description: `${product.name} (${product.unit})` });
+    } catch (err: any) {
+      toast({ title: "Failed to add product", description: err?.message || "Unknown error", variant: "destructive" });
+    } finally {
+      setCreatingProductIndex(null);
+    }
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: PurchaseFormData) =>
       apiRequest("POST", "/api/purchases", {
         ...data,
         supplierId: parseInt(data.supplierId),
+        expenseAccountId: parseInt(data.expenseAccountId),
+        purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
+        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
         brokerId: data.brokerId ? parseInt(data.brokerId) : null,
-        items: data.items.map(item => ({
+        items: data.items.map((item, idx) => ({
           productId: parseInt(item.productId),
-          quantity: item.quantity,
-          pricePerUnit: item.pricePerUnit,
+          marka: item.marka,
+          serialNo: idx + 1,
+          bags: item.bags,
+          fillingPerBagKg: item.fillingPerBagKg,
+          looseKgs: item.looseKgs,
+          lessKg: item.lessKg,
+          bardanaKatKg: item.bardanaKatKg,
+          rate: item.rate,
+          rateUnit: item.rateUnit,
+        })),
+        charges: data.charges.map((c) => ({
+          ...c,
+          amount: c.amount || "0",
+          accountId: c.accountId ? parseInt(c.accountId) : undefined,
         })),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
       form.reset();
@@ -116,28 +230,115 @@ export default function PurchasesPage() {
 
   const handleAddNew = () => {
     form.reset({
+      purchaseDate: new Date().toISOString().slice(0, 10),
+      dueDate: new Date().toISOString().slice(0, 10),
+      billNo: "",
+      bookNo: "",
       supplierId: "",
+      expenseAccountId: "",
       vehicleNumber: "",
       brokerId: "",
       brokerCommissionPercent: "0",
       paidAmount: "0",
       notes: "",
-      items: [{ productId: "", quantity: "", pricePerUnit: "" }],
+      items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
+      charges: defaultCharges,
     });
     setIsDialogOpen(true);
+    setCustomProductDrafts({});
+    setCreatingProductIndex(null);
+  };
+
+  const numberToWords = (num: number) => {
+    const belowTwenty = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
+    const tens = ["","","twenty","thirty","forty","fifty","sixty","seventy","eighty","ninety"];
+    const scales = ["","thousand","million","billion"];
+    if (!Number.isFinite(num)) return "";
+    if (num === 0) return "zero";
+    const chunk = (n: number) => {
+      let word = "";
+      if (n >= 100) {
+        word += `${belowTwenty[Math.floor(n / 100)]} hundred`;
+        n %= 100;
+        if (n) word += " ";
+      }
+      if (n >= 20) {
+        word += tens[Math.floor(n / 10)];
+        n %= 10;
+        if (n) word += `-${belowTwenty[n]}`;
+      } else if (n > 0) {
+        word += belowTwenty[n];
+      }
+      return word;
+    };
+    const parts: string[] = [];
+    let remaining = Math.floor(num);
+    let idx = 0;
+    while (remaining > 0) {
+      const c = remaining % 1000;
+      if (c) {
+        const prefix = chunk(c);
+        const suffix = scales[idx];
+        parts.unshift(suffix ? `${prefix} ${suffix}` : prefix);
+      }
+      remaining = Math.floor(remaining / 1000);
+      idx += 1;
+    }
+    return parts.join(" ");
   };
 
   const watchItems = form.watch("items");
+  const watchCharges = form.watch("charges");
   const watchCommission = form.watch("brokerCommissionPercent");
-  
-  const subtotal = watchItems.reduce((sum, item) => {
-    const qty = parseFloat(item.quantity) || 0;
-    const price = parseFloat(item.pricePerUnit) || 0;
-    return sum + (qty * price);
-  }, 0);
-  
+  const watchPaidAmount = form.watch("paidAmount");
+
+  const computedItems = watchItems.map((item) => {
+    const bags = parseFloat(item.bags) || 0;
+    const filling = parseFloat(item.fillingPerBagKg) || 0;
+    const loose = parseFloat(item.looseKgs) || 0;
+    const less = parseFloat(item.lessKg) || 0;
+    const bardana = parseFloat(item.bardanaKatKg) || 0;
+    const rate = parseFloat(item.rate) || 0;
+    const grossWeight = bags * filling + loose;
+    const netWeight = Math.max(grossWeight - less - bardana, 0);
+    const moundQtyFloat = netWeight / 40;
+    const moundQty = Math.floor(moundQtyFloat);
+    const moundRemainderKg = Math.max(netWeight - moundQty * 40, 0);
+    let billingQty = netWeight;
+    if (item.rateUnit === "mound") billingQty = netWeight / 40;
+    if (item.rateUnit === "bag") billingQty = bags;
+    if (item.rateUnit === "quintal") billingQty = netWeight / 100;
+    if (item.rateUnit === "ton") billingQty = netWeight / 1000;
+    const amount = rate * billingQty;
+    return {
+      grossWeight,
+      netWeight,
+      moundQty,
+      moundRemainderKg,
+      amount,
+    };
+  });
+
+  const subtotal = computedItems.reduce((sum, i) => sum + i.amount, 0);
   const commissionAmount = (subtotal * (parseFloat(watchCommission) || 0)) / 100;
-  const totalAmount = subtotal + commissionAmount;
+  const lineSubtotal = subtotal + commissionAmount;
+  const { chargesAdd, chargesLess } = watchCharges.reduce(
+    (acc, c) => {
+      const amt = parseFloat(c.amount || "0") || 0;
+      if (c.mode === "less") acc.chargesLess += amt;
+      else acc.chargesAdd += amt;
+      return acc;
+    },
+    { chargesAdd: 0, chargesLess: 0 }
+  );
+  const grandAmount = lineSubtotal + chargesAdd - chargesLess;
+  const balanceDue = grandAmount - (parseFloat(watchPaidAmount || "0") || 0);
+  const totalBags = watchItems.reduce((sum, i) => sum + (parseFloat(i.bags) || 0), 0);
+  const totalGross = computedItems.reduce((sum, i) => sum + i.grossWeight, 0);
+  const totalNet = computedItems.reduce((sum, i) => sum + i.netWeight, 0);
+  const totalMound = Math.floor(totalNet / 40);
+  const totalMoundRemainder = Math.max(totalNet - totalMound * 40, 0);
+  const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
 
   const columns: Column<Purchase & { supplier?: Account }>[] = [
     {
@@ -276,7 +477,7 @@ export default function PurchasesPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("supplier")}</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value || undefined}>
                         <FormControl>
                           <SelectTrigger data-testid="select-supplier">
                             <SelectValue placeholder={language === "ur" ? "سپلائر منتخب کریں" : "Select supplier"} />
@@ -323,7 +524,7 @@ export default function PurchasesPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="">None</SelectItem>
+                          <SelectItem value="none">None</SelectItem>
                           {suppliers.map((s) => (
                             <SelectItem key={s.id} value={s.id.toString()}>
                               {s.name}
@@ -368,11 +569,19 @@ export default function PurchasesPage() {
                 <div className="space-y-3">
                   {fields.map((field, index) => (
                     <div key={field.id} className="grid grid-cols-12 gap-2 items-end">
-                      <div className="col-span-5">
-                        <FormField
-                          control={form.control}
-                          name={`items.${index}.productId`}
-                          render={({ field }) => (
+                      {(() => {
+                        const selectedProductId = form.watch(`items.${index}.productId`);
+                        const unit =
+                          selectedProductId === "__custom__"
+                            ? customProductDrafts[index]?.unit || "unit"
+                            : getUnitForProduct(selectedProductId) || "unit";
+                        return (
+                          <>
+                          <div className="col-span-5">
+                            <FormField
+                              control={form.control}
+                              name={`items.${index}.productId`}
+                              render={({ field }) => (
                             <FormItem>
                               {index === 0 && <FormLabel>{language === "ur" ? "مصنوعات" : "Product"}</FormLabel>}
                               <Select onValueChange={field.onChange} value={field.value}>
@@ -384,7 +593,8 @@ export default function PurchasesPage() {
                                 <SelectContent>
                                   {products.map((p) => (
                                     <SelectItem key={p.id} value={p.id.toString()}>
-                                      {p.name} {p.nameUrdu && `(${p.nameUrdu})`}
+                                      {p.name}
+                                      {p.nameUrdu && ` (${p.nameUrdu})`} · {p.unit}
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
@@ -393,50 +603,53 @@ export default function PurchasesPage() {
                             </FormItem>
                           )}
                         />
-                      </div>
-                      <div className="col-span-3">
-                        <FormField
-                          control={form.control}
-                          name={`items.${index}.quantity`}
-                          render={({ field }) => (
-                            <FormItem>
-                              {index === 0 && <FormLabel>{t("quantity")} (kg)</FormLabel>}
-                              <FormControl>
-                                <Input {...field} type="number" step="0.01" data-testid={`input-quantity-${index}`} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
+                          </div>
+                          <div className="col-span-3">
+                            <FormField
+                              control={form.control}
+                              name={`items.${index}.quantity`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {index === 0 && <FormLabel>{`${t("quantity")} (${unit})`}</FormLabel>}
+                                  <FormControl>
+                                    <Input {...field} type="number" step="0.01" data-testid={`input-quantity-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
                           )}
                         />
                       </div>
-                      <div className="col-span-3">
-                        <FormField
-                          control={form.control}
-                          name={`items.${index}.pricePerUnit`}
-                          render={({ field }) => (
-                            <FormItem>
-                              {index === 0 && <FormLabel>{t("pricePerUnit")}</FormLabel>}
-                              <FormControl>
-                                <Input {...field} type="number" step="0.01" data-testid={`input-price-${index}`} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
+                          <div className="col-span-3">
+                            <FormField
+                              control={form.control}
+                              name={`items.${index}.pricePerUnit`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {index === 0 && <FormLabel>{`${t("pricePerUnit")} (${unit})`}</FormLabel>}
+                                  <FormControl>
+                                    <Input {...field} type="number" step="0.01" data-testid={`input-price-${index}`} />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
                           )}
                         />
                       </div>
-                      <div className="col-span-1">
-                        {fields.length > 1 && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => remove(index)}
-                            data-testid={`button-remove-item-${index}`}
-                          >
-                            &times;
-                          </Button>
-                        )}
-                      </div>
+                          <div className="col-span-1">
+                            {fields.length > 1 && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => remove(index)}
+                                data-testid={`button-remove-item-${index}`}
+                              >
+                                &times;
+                              </Button>
+                            )}
+                          </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>

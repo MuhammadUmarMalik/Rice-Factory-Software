@@ -59,12 +59,7 @@ export default function CustomersPage() {
   });
 
   const { data: customers = [], isLoading } = useQuery<Account[]>({
-    queryKey: ["/api/accounts", "customer"],
-    queryFn: async () => {
-      const res = await fetch("/api/accounts?type=customer");
-      if (!res.ok) throw new Error("Failed to fetch customers");
-      return res.json();
-    },
+    queryKey: ["/api/accounts?type=customer"],
   });
 
   const createMutation = useMutation({
@@ -72,6 +67,7 @@ export default function CustomersPage() {
       apiRequest("POST", "/api/accounts", { ...data, type: "customer" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=customer"] });
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -83,6 +79,7 @@ export default function CustomersPage() {
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=customer"] });
       setIsDialogOpen(false);
       setEditingCustomer(null);
       form.reset();

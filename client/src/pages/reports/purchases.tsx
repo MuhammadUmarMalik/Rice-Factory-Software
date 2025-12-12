@@ -17,7 +17,7 @@ export default function PurchaseReportPage() {
   const [dateTo, setDateTo] = useState<string>("");
 
   const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
-    queryKey: ["/api/purchases"],
+    queryKey: ["/api/reports/purchases"],
   });
 
   const filteredPurchases = purchases.filter(purchase => {

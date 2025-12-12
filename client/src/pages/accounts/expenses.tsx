@@ -49,12 +49,7 @@ export default function ExpensesPage() {
   });
 
   const { data: expenses = [], isLoading } = useQuery<Account[]>({
-    queryKey: ["/api/accounts", "expense"],
-    queryFn: async () => {
-      const res = await fetch("/api/accounts?type=expense");
-      if (!res.ok) throw new Error("Failed to fetch expenses");
-      return res.json();
-    },
+    queryKey: ["/api/accounts?type=expense"],
   });
 
   const createMutation = useMutation({
@@ -62,6 +57,7 @@ export default function ExpensesPage() {
       apiRequest("POST", "/api/accounts", { ...data, type: "expense" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -73,6 +69,7 @@ export default function ExpensesPage() {
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
       setIsDialogOpen(false);
       setEditingExpense(null);
       form.reset();
