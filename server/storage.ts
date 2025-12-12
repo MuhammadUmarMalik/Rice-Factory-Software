@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, isNull } from "drizzle-orm";
 import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
   processing, sales, saleItems, ledgerEntries,
@@ -8,13 +8,17 @@ import {
   type PurchaseItem, type InsertPurchaseItem, type PurchaseCharge, type InsertPurchaseCharge,
   type Processing, type InsertProcessing,
   type Sale, type InsertSale, type SaleItem, type InsertSaleItem,
-  type LedgerEntry, type InsertLedgerEntry
+  type LedgerEntry, type InsertLedgerEntry,
+  receiptVouchers, receiptVoucherLines,
+  type ReceiptVoucher, type InsertReceiptVoucher,
+  type ReceiptVoucherLine, type InsertReceiptVoucherLine,
 } from "@shared/schema";
 
 type DbClient = typeof db;
 type PurchaseItemInput = Omit<InsertPurchaseItem, "id" | "purchaseId">;
 type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
 type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
+type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
 
 export interface IStorage {
   // Users
@@ -81,6 +85,14 @@ export interface IStorage {
     purchaseCount: number;
     saleCount: number;
   }>;
+
+  // Cash Receipts
+  getReceiptVouchers(): Promise<ReceiptVoucher[]>;
+  getReceiptVoucher(id: number): Promise<(ReceiptVoucher & { lines: ReceiptVoucherLine[] }) | undefined>;
+  createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher>;
+  updateReceiptVoucher(id: number, data: Partial<InsertReceiptVoucher>, lines: ReceiptLineInput[]): Promise<ReceiptVoucher | undefined>;
+  deleteReceiptVoucher(id: number): Promise<boolean>;
+  getNextReceiptVoucherNumber(voucherType?: string): Promise<string>;
 }
 
 function parseAmount(value: string | number | null | undefined): number {
@@ -185,13 +197,13 @@ export class DatabaseStorage implements IStorage {
     return this.updateAccountBalanceInternal(db, id, amount, type);
   }
 
-  private async updateAccountBalanceInternal(client: DbClient, id: number, amount: string, type: "add" | "subtract") {
+  private updateAccountBalanceInternal(client: DbClient, id: number, amount: string, type: "add" | "subtract") {
     const [account] = client.select().from(accounts).where(eq(accounts.id, id)).all();
     const current = parseAmount(account?.currentBalance || "0");
     const amt = parseAmount(amount || "0");
     const newBalance = type === "add" ? current + amt : current - amt;
 
-    await client.update(accounts)
+    client.update(accounts)
       .set({ currentBalance: newBalance.toString() })
       .where(eq(accounts.id, id));
   }
@@ -743,18 +755,223 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(ledgerEntries).orderBy(desc(ledgerEntries.entryDate)).all();
   }
 
-  private async createLedgerEntryInternal(client: DbClient, entry: InsertLedgerEntry): Promise<LedgerEntry> {
+  private createLedgerEntryInternal(client: DbClient, entry: InsertLedgerEntry): Promise<LedgerEntry> {
     const [account] = client.select().from(accounts).where(eq(accounts.id, entry.accountId)).all();
     const balance = account?.currentBalance || "0";
-    const [newEntry] = await client.insert(ledgerEntries).values({
+    const newEntry = client.insert(ledgerEntries).values({
       ...entry,
       balance,
-    }).returning();
-    return newEntry;
+    }).returning().get();
+    return Promise.resolve(newEntry);
   }
 
   async createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry> {
     return this.createLedgerEntryInternal(db, entry);
+  }
+
+  // Cash Receipt Vouchers
+  async getReceiptVouchers(): Promise<(ReceiptVoucher & { lines?: ReceiptVoucherLine[]; primaryAccountName?: string })[]> {
+    const vouchers = db.select().from(receiptVouchers).where(isNull(receiptVouchers.deletedAt)).orderBy(desc(receiptVouchers.id)).all();
+    const lines = db.select().from(receiptVoucherLines).all();
+    const accountsList = await this.getAccounts();
+    const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
+
+    const linesByVoucher = lines.reduce<Record<number, ReceiptVoucherLine[]>>((acc, line) => {
+      acc[line.voucherId] = acc[line.voucherId] || [];
+      acc[line.voucherId].push(line);
+      return acc;
+    }, {});
+
+    return vouchers.map((v) => {
+      const voucherLines = linesByVoucher[v.id] || [];
+      const primaryAccountName = voucherLines.length ? accountMap.get(voucherLines[0].accountId) || "" : "";
+      return { ...v, lines: voucherLines, primaryAccountName };
+    });
+  }
+
+  async getReceiptVoucher(id: number): Promise<(ReceiptVoucher & { lines: ReceiptVoucherLine[] }) | undefined> {
+    const [voucher] = db.select().from(receiptVouchers).where(and(eq(receiptVouchers.id, id), isNull(receiptVouchers.deletedAt))).all();
+    if (!voucher) return undefined;
+    const lines = db.select().from(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).all();
+    return { ...voucher, lines };
+  }
+
+  async getNextReceiptVoucherNumber(voucherType = "CR"): Promise<string> {
+    const year = new Date().getFullYear();
+    const [last] = db.select().from(receiptVouchers)
+      .where(eq(receiptVouchers.voucherType, voucherType))
+      .orderBy(desc(receiptVouchers.id))
+      .limit(1)
+      .all();
+    const nextNum = last ? parseInt(last.voucherNumber.split("-").pop() || "0") + 1 : 1;
+    return `${voucherType}-${year}-${String(nextNum).padStart(5, "0")}`;
+  }
+
+  private validateBalanced(lines: ReceiptLineInput[]) {
+    let totalDebit = 0;
+    let totalCredit = 0;
+    for (const line of lines) {
+      totalDebit += parseAmount(line.debit || "0");
+      totalCredit += parseAmount(line.credit || "0");
+    }
+    if (Math.abs(totalDebit - totalCredit) > 0.0001) {
+      throw new Error("Debit and Credit must be equal");
+    }
+    return { totalDebit, totalCredit };
+  }
+
+  async createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher> {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+
+      const year = new Date().getFullYear();
+      const [last] = tx.select().from(receiptVouchers)
+        .where(eq(receiptVouchers.voucherType, data.voucherType || "CR"))
+        .orderBy(desc(receiptVouchers.id))
+        .limit(1)
+        .all();
+      const nextNum = last ? parseInt(last.voucherNumber.split("-").pop() || "0") + 1 : 1;
+      const voucherNumber = `${data.voucherType || "CR"}-${year}-${String(nextNum).padStart(5, "0")}`;
+
+      const { totalDebit, totalCredit } = this.validateBalanced(lines);
+      const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
+
+      const voucher = tx.insert(receiptVouchers).values({
+        ...data,
+        voucherNumber,
+        totalDebit: totalDebit.toString(),
+        totalCredit: totalCredit.toString(),
+        amountInWords,
+        updatedAt: new Date(),
+      }).returning().get();
+
+      for (const line of lines) {
+        const debit = parseAmount(line.debit || "0");
+        const credit = parseAmount(line.credit || "0");
+        if (debit <= 0 && credit <= 0) continue;
+        tx.insert(receiptVoucherLines).values({
+          ...line,
+          voucherId: voucher.id,
+          debit: debit.toString(),
+          credit: credit.toString(),
+        }).run();
+
+        if (debit > 0) {
+          this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "add");
+          this.createLedgerEntryInternal(client, {
+            accountId: line.accountId,
+            transactionType: "debit",
+            amount: debit.toString(),
+            balance: "0",
+            description: `Receipt ${voucher.voucherNumber}`,
+            referenceType: "receipt",
+            referenceId: voucher.id,
+            entryDate: data.voucherDate || new Date(),
+          });
+        }
+        if (credit > 0) {
+          this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "subtract");
+          this.createLedgerEntryInternal(client, {
+            accountId: line.accountId,
+            transactionType: "credit",
+            amount: credit.toString(),
+            balance: "0",
+            description: `Receipt ${voucher.voucherNumber}`,
+            referenceType: "receipt",
+            referenceId: voucher.id,
+            entryDate: data.voucherDate || new Date(),
+          });
+        }
+      }
+
+      return voucher;
+    });
+  }
+
+  async updateReceiptVoucher(id: number, data: Partial<InsertReceiptVoucher>, lines: ReceiptLineInput[]): Promise<ReceiptVoucher | undefined> {
+    const existing = await this.getReceiptVoucher(id);
+    if (!existing) return undefined;
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+
+      // reverse ledger/account impacts
+      for (const line of existing.lines) {
+        const debit = parseAmount(line.debit);
+        const credit = parseAmount(line.credit);
+        if (debit > 0) this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "subtract");
+        if (credit > 0) this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "add");
+      }
+      tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
+
+      const { totalDebit, totalCredit } = this.validateBalanced(lines);
+      const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
+
+      const updated = tx.update(receiptVouchers).set({
+        ...data,
+        totalDebit: totalDebit.toString(),
+        totalCredit: totalCredit.toString(),
+        amountInWords,
+        updatedAt: new Date(),
+      }).where(eq(receiptVouchers.id, id)).returning().get();
+
+      for (const line of lines) {
+        const debit = parseAmount(line.debit || "0");
+        const credit = parseAmount(line.credit || "0");
+        if (debit <= 0 && credit <= 0) continue;
+        tx.insert(receiptVoucherLines).values({
+          ...line,
+          voucherId: id,
+          debit: debit.toString(),
+          credit: credit.toString(),
+        }).run();
+        if (debit > 0) {
+          this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "add");
+          this.createLedgerEntryInternal(client, {
+            accountId: line.accountId,
+            transactionType: "debit",
+            amount: debit.toString(),
+            balance: "0",
+            description: `Receipt ${updated.voucherNumber}`,
+            referenceType: "receipt",
+            referenceId: id,
+            entryDate: data.voucherDate || new Date(),
+          });
+        }
+        if (credit > 0) {
+          this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "subtract");
+          this.createLedgerEntryInternal(client, {
+            accountId: line.accountId,
+            transactionType: "credit",
+            amount: credit.toString(),
+            balance: "0",
+            description: `Receipt ${updated.voucherNumber}`,
+            referenceType: "receipt",
+            referenceId: id,
+            entryDate: data.voucherDate || new Date(),
+          });
+        }
+      }
+
+      return updated;
+    });
+  }
+
+  async deleteReceiptVoucher(id: number): Promise<boolean> {
+    const existing = await this.getReceiptVoucher(id);
+    if (!existing) return false;
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      for (const line of existing.lines) {
+        const debit = parseAmount(line.debit);
+        const credit = parseAmount(line.credit);
+        if (debit > 0) this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "subtract");
+        if (credit > 0) this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "add");
+      }
+      tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
+      tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
+      return true;
+    });
   }
 
   // Reports

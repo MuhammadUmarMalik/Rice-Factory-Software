@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema } from "@shared/schema";
+import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema } from "@shared/schema";
 import { z } from "zod";
 import { format } from "date-fns";
 import { promises as fs } from "fs";
@@ -57,6 +57,18 @@ const saleItemsSchema = z.array(z.object({
   quantity: numericString,
   pricePerUnit: numericString,
 })).min(1);
+
+// Receipt lines should be supplied without a voucherId; it gets attached inside the transaction
+const receiptLinesSchema = z.array(
+  insertReceiptVoucherLineSchema
+    .omit({ voucherId: true })
+    .extend({
+      debit: numericString.default("0"),
+      credit: numericString.default("0"),
+      narration: z.string().optional(),
+      accountId: z.number().int().positive(),
+    })
+).min(1);
 
 const productSchema = insertProductSchema.extend({
   currentStock: numericString.optional(),
@@ -413,6 +425,112 @@ export async function registerRoutes(
       }
       console.error(error);
       res.status(500).json({ error: "Failed to create purchase" });
+    }
+  });
+
+  // Receipt Vouchers
+  app.get("/api/receipts", async (_req, res) => {
+    try {
+      const [vouchers, accountsList] = await Promise.all([
+        storage.getReceiptVouchers(),
+        storage.getAccounts(),
+      ]);
+      const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
+
+      const detailed = await Promise.all(
+        vouchers.map(async (v) => {
+          const withLines = await storage.getReceiptVoucher(v.id);
+          const lines = withLines?.lines || [];
+          const primaryAccountName =
+            lines.length > 0 ? accountMap.get(lines[0].accountId) || "" : "";
+          return { ...v, lines, primaryAccountName };
+        })
+      );
+
+      res.json(detailed);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch vouchers" });
+    }
+  });
+
+  app.get("/api/receipts/next-number", async (req, res) => {
+    try {
+      const type = (req.query.type as string) || "CR";
+      const next = await storage.getNextReceiptVoucherNumber(type);
+      res.json({ voucherNumber: next });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher number" });
+    }
+  });
+
+  app.get("/api/receipts/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const voucher = await storage.getReceiptVoucher(id);
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher" });
+    }
+  });
+
+const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
+  voucherDate: z.union([z.string(), z.date(), z.number()]).transform((val) => new Date(val)),
+});
+  const receiptHeaderSchemaPartial = receiptHeaderSchema.partial();
+
+  app.post("/api/receipts", async (req, res) => {
+    try {
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchema.parse(payload);
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.createReceiptVoucher(header, parsedLines);
+      res.status(201).json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to create voucher" });
+    }
+  });
+
+  app.patch("/api/receipts/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchemaPartial.parse(payload);
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.updateReceiptVoucher(id, header, parsedLines);
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to update voucher" });
+    }
+  });
+
+  app.delete("/api/receipts/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const ok = await storage.deleteReceiptVoucher(id);
+      if (!ok) return res.status(404).json({ error: "Voucher not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete voucher" });
     }
   });
 

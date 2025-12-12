@@ -10,7 +10,8 @@ import {
   TrendingUp,
   ChevronDown,
   LogOut,
-  Wheat
+  Wheat,
+  Receipt,
 } from "lucide-react";
 import {
   Sidebar,
@@ -35,6 +36,7 @@ const mainMenuItems = [
   { title: "dashboard", url: "/", icon: LayoutDashboard },
   { title: "products", url: "/products", icon: Package },
   { title: "purchases", url: "/purchases", icon: ShoppingCart },
+  { title: "cashReceipts", url: "/receipts", icon: Receipt },
   { title: "processing", url: "/processing", icon: Factory },
   { title: "sales", url: "/sales", icon: TrendingUp },
 ];
