@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Urdu-friendly fonts */
+@import url("https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;600&family=Noto+Sans+Arabic:wght@400;600&display=swap");
+
 /* LIGHT MODE */
 :root {
   --button-outline: rgba(0,0,0, .10);
@@ -172,6 +175,28 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
+  }
+
+  /* Improved Urdu defaults */
+  html[dir="rtl"] {
+    font-family: "Noto Nastaliq Urdu", "Noto Sans Arabic", "Segoe UI", serif;
+    letter-spacing: 0;
+  }
+
+  html[dir="rtl"] body {
+    direction: rtl;
+  }
+
+  html[dir="rtl"] .font-urdu {
+    font-family: "Noto Nastaliq Urdu", "Noto Sans Arabic", "Segoe UI", serif;
+  }
+
+  html[dir="rtl"] input,
+  html[dir="rtl"] textarea,
+  html[dir="rtl"] select,
+  html[dir="rtl"] button {
+    font-family: inherit;
+    text-align: right;
   }
 }
 

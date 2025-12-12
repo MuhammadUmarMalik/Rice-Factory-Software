@@ -31,7 +31,14 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   };
 
   const t = (key: TranslationKey): string => {
-    return translations[language][key];
+    const val = translations[language][key];
+    // If Urdu string is missing or not actually Urdu, fall back to English for a clean UI
+    if (language === "ur") {
+      if (!val || !/[\u0600-\u06FF]/.test(val)) {
+        return translations.en[key];
+      }
+    }
+    return val ?? translations.en[key];
   };
 
   return (

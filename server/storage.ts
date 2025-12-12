@@ -237,7 +237,7 @@ export class DatabaseStorage implements IStorage {
     return this.updateProductStockInternal(db, id, quantity, type);
   }
 
-  private async updateProductStockInternal(client: DbClient, id: number, quantity: string, type: "add" | "subtract") {
+  private updateProductStockInternal(client: DbClient, id: number, quantity: string, type: "add" | "subtract") {
     const [product] = client.select().from(products).where(eq(products.id, id)).all();
     const current = parseAmount(product?.currentStock || "0");
     const qty = parseAmount(quantity || "0");
@@ -247,9 +247,10 @@ export class DatabaseStorage implements IStorage {
       throw new Error(`Insufficient stock for product ${product?.name || id}`);
     }
 
-    await client.update(products)
+    client.update(products)
       .set({ currentStock: newStock.toString() })
-      .where(eq(products.id, id));
+      .where(eq(products.id, id))
+      .run();
   }
 
   // Purchases
@@ -335,7 +336,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase> {
-    return db.transaction(async (tx) => {
+    return db.transaction((tx) => {
       const year = new Date().getFullYear();
       const [last] = tx.select().from(purchases).orderBy(desc(purchases.id)).limit(1).all();
       const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
@@ -374,7 +375,7 @@ export class DatabaseStorage implements IStorage {
 
       const client = tx as unknown as DbClient;
 
-      const [newPurchase] = await tx.insert(purchases).values({
+      const newPurchase = tx.insert(purchases).values({
         ...purchase,
         invoiceNumber,
         subtotal: lineSubtotal.toString(),
@@ -391,13 +392,13 @@ export class DatabaseStorage implements IStorage {
         brokerCommissionAmount: brokerCommission.toString(),
         paidAmount: paidAmount.toString(),
         amountInWords,
-      }).returning();
+      }).returning().get();
 
       for (const item of normalizedItems) {
-        await tx.insert(purchaseItems).values({
+        tx.insert(purchaseItems).values({
           ...item,
           purchaseId: newPurchase.id,
-        });
+        }).run();
 
         const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
         const currentStock = parseAmount(product?.currentStock || "0");
@@ -409,25 +410,26 @@ export class DatabaseStorage implements IStorage {
         const totalValue = (currentStock * currentAvg) + (qtyKg * pricePerKg);
         const newAvg = newStock > 0 ? totalValue / newStock : 0;
 
-        await tx.update(products)
+        tx.update(products)
           .set({
             currentStock: newStock.toString(),
             avgPurchasePrice: newAvg.toString(),
           })
-          .where(eq(products.id, item.productId));
+          .where(eq(products.id, item.productId))
+          .run();
       }
 
       for (const charge of charges) {
-        await tx.insert(purchaseCharges).values({
+        tx.insert(purchaseCharges).values({
           ...charge,
           purchaseId: newPurchase.id,
           amount: parseAmount(charge.amount).toString(),
-        });
+        }).run();
       }
 
-      await this.updateAccountBalanceInternal(client, purchase.supplierId, grandAmount.toString(), "add");
+      this.updateAccountBalanceInternal(client, purchase.supplierId, grandAmount.toString(), "add");
 
-      await this.createLedgerEntryInternal(client, {
+      this.createLedgerEntryInternal(client, {
         accountId: purchase.supplierId,
         transactionType: "credit",
         amount: grandAmount.toString(),
@@ -454,17 +456,17 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getPurchaseWithDetails(id);
     if (!existing) return undefined;
 
-    return db.transaction(async (tx) => {
+    return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
 
       // Rollback previous stock impact
       for (const item of existing.items) {
-        await this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
+        this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
       }
 
       // Rollback supplier balance by old total
       const oldTotal = parseAmount(existing.totalAmount);
-      await this.updateAccountBalanceInternal(client, existing.supplierId, oldTotal.toString(), "subtract");
+      this.updateAccountBalanceInternal(client, existing.supplierId, oldTotal.toString(), "subtract");
 
       // Rebuild new items/totals
       let subtotal = 0;
@@ -498,7 +500,7 @@ export class DatabaseStorage implements IStorage {
       const balanceDue = grandAmount - paidAmount;
       const amountInWords = `${toWords(Math.round(grandAmount))} only`;
 
-      const [updatedPurchase] = await tx.update(purchases).set({
+      const updatedPurchase = tx.update(purchases).set({
         ...purchase,
         subtotal: lineSubtotal.toString(),
         totalAmount: grandAmount.toString(),
@@ -514,35 +516,35 @@ export class DatabaseStorage implements IStorage {
         brokerCommissionAmount: brokerCommission.toString(),
         paidAmount: paidAmount.toString(),
         amountInWords,
-      }).where(eq(purchases.id, id)).returning();
+      }).where(eq(purchases.id, id)).returning().get();
 
       // Replace items
-      await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id)).run();
+      tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id)).run();
       for (const item of normalizedItems) {
-        await tx.insert(purchaseItems).values({ ...item, purchaseId: id });
-        await this.updateProductStockInternal(client, item.productId, item.netWeightKg, "add");
+        tx.insert(purchaseItems).values({ ...item, purchaseId: id }).run();
+        this.updateProductStockInternal(client, item.productId, item.netWeightKg, "add");
       }
 
       // Replace charges
-      await tx.delete(purchaseCharges).where(eq(purchaseCharges.purchaseId, id)).run();
+      tx.delete(purchaseCharges).where(eq(purchaseCharges.purchaseId, id)).run();
       for (const charge of charges) {
-        await tx.insert(purchaseCharges).values({
+        tx.insert(purchaseCharges).values({
           ...charge,
           purchaseId: id,
           amount: parseAmount(charge.amount).toString(),
-        });
+        }).run();
       }
 
       // Adjust supplier balance with delta
       const delta = grandAmount - oldTotal;
       if (delta !== 0) {
-        await this.updateAccountBalanceInternal(
+        this.updateAccountBalanceInternal(
           client,
           purchase.supplierId ?? existing.supplierId,
           Math.abs(delta).toString(),
           delta > 0 ? "add" : "subtract"
         );
-        await this.createLedgerEntryInternal(client, {
+        this.createLedgerEntryInternal(client, {
           accountId: purchase.supplierId ?? existing.supplierId,
           transactionType: delta > 0 ? "credit" : "debit",
           amount: Math.abs(delta).toString(),
@@ -580,7 +582,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProcessing(batch: InsertProcessing): Promise<Processing> {
-    return db.transaction(async (tx) => {
+    return db.transaction((tx) => {
       const year = new Date().getFullYear();
       const [last] = tx.select().from(processing).orderBy(desc(processing.id)).limit(1).all();
       const nextNum = last ? parseInt(last.batchNumber.split("-").pop() || "0") + 1 : 1;
@@ -589,12 +591,14 @@ export class DatabaseStorage implements IStorage {
       const client = tx as unknown as DbClient;
 
       // Reduce stock for source product
-      await this.updateProductStockInternal(client, batch.sourceProductId, batch.sourceQuantity, "subtract");
+      this.updateProductStockInternal(client, batch.sourceProductId, batch.sourceQuantity, "subtract");
 
-      const [newBatch] = await tx.insert(processing).values({
+      const insertResult = tx.insert(processing).values({
         ...batch,
         batchNumber,
-      }).returning();
+      }).run();
+      const newId = Number(insertResult.lastInsertRowid);
+      const [newBatch] = tx.select().from(processing).where(eq(processing.id, newId)).all();
 
       return newBatch;
     });
@@ -604,7 +608,7 @@ export class DatabaseStorage implements IStorage {
     const existingBatch = await this.getProcessingBatch(id);
     if (!existingBatch) return undefined;
 
-    return db.transaction(async (tx) => {
+    return db.transaction((tx) => {
       const updatePayload: Partial<InsertProcessing> = { ...batch };
       const client = tx as unknown as DbClient;
 
@@ -617,7 +621,7 @@ export class DatabaseStorage implements IStorage {
         const outputQuantity = batch.outputQuantity || existingBatch.outputQuantity;
 
         if (outputProductId && outputQuantity) {
-          await this.updateProductStockInternal(
+          this.updateProductStockInternal(
             client,
             outputProductId,
             outputQuantity,
@@ -627,7 +631,8 @@ export class DatabaseStorage implements IStorage {
         updatePayload.completedDate = new Date();
       }
 
-      const [updated] = await tx.update(processing).set(updatePayload).where(eq(processing.id, id)).returning();
+      tx.update(processing).set(updatePayload).where(eq(processing.id, id)).run();
+      const [updated] = tx.select().from(processing).where(eq(processing.id, id)).all();
       return updated;
     });
   }
@@ -665,7 +670,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createSale(sale: InsertSale, items: SaleItemInput[]): Promise<Sale> {
-    return db.transaction(async (tx) => {
+    return db.transaction((tx) => {
       const year = new Date().getFullYear();
       const [lastSale] = tx.select().from(sales).orderBy(desc(sales.id)).limit(1).all();
       const nextInvoice = lastSale ? parseInt(lastSale.invoiceNumber.split("-").pop() || "0") + 1 : 1;
@@ -706,25 +711,25 @@ export class DatabaseStorage implements IStorage {
                      parseAmount(sale.otherCharges || "0");
       const totalAmount = subtotal + charges;
 
-      const [newSale] = await tx.insert(sales).values({
+      const newSale = tx.insert(sales).values({
         ...sale,
         invoiceNumber,
         gatePassNumber,
         subtotal: subtotal.toString(),
         totalAmount: totalAmount.toString(),
-      }).returning();
+      }).returning().get();
 
       for (const item of normalizedItems) {
-        await tx.insert(saleItems).values({
+        tx.insert(saleItems).values({
           ...item,
           saleId: newSale.id,
-        });
-        await this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
+        }).run();
+        this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
       }
 
-      await this.updateAccountBalanceInternal(client, sale.customerId, totalAmount.toString(), "add");
+      this.updateAccountBalanceInternal(client, sale.customerId, totalAmount.toString(), "add");
 
-      await this.createLedgerEntryInternal(client, {
+      this.createLedgerEntryInternal(client, {
         accountId: sale.customerId,
         transactionType: "debit",
         amount: totalAmount.toString(),

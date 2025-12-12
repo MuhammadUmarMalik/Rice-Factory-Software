@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { Plus, Play, CheckCircle, Package, ArrowRight, Scale, Factory } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -87,6 +87,13 @@ export default function ProcessingPage() {
     queryKey: ["/api/products"],
   });
 
+  const formatError = (err: any) => {
+    if (!err) return "Something went wrong";
+    if (typeof err === "string") return err;
+    if (err?.message) return err.message;
+    return "Something went wrong";
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: ProcessingFormData) =>
       apiRequest("POST", "/api/processing", {
@@ -110,6 +117,9 @@ export default function ProcessingPage() {
       });
       toast({ title: t("savedSuccessfully") });
     },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: formatError(err), variant: "destructive" });
+    },
   });
 
   const startMutation = useMutation({
@@ -118,6 +128,9 @@ export default function ProcessingPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/processing"] });
       toast({ title: language === "ur" ? "پروسیسنگ شروع ہو گئی" : "Processing started" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Start failed", description: formatError(err), variant: "destructive" });
     },
   });
 
@@ -134,7 +147,10 @@ export default function ProcessingPage() {
       setIsCompleteDialogOpen(false);
       setSelectedProcessing(null);
       completeForm.reset();
-      toast({ title: language === "ur" ? "پروسیسنگ مکمل ہو گئی" : "Processing completed" });
+      toast({ title: language == "ur" ? "پروسیسنگ مکمل ہو گئی" : "Processing completed" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Complete failed", description: formatError(err), variant: "destructive" });
     },
   });
 
