@@ -15,6 +15,9 @@ type TrialBalanceRow = {
 
 export default function TrialBalancePage() {
   const { t, isRTL, language } = useLanguage();
+  const handlePrint = () => {
+    if (typeof window !== "undefined") window.print();
+  };
 
   const { data: rows = [], isLoading } = useQuery<TrialBalanceRow[]>({
     queryKey: ["/api/reports/trial-balance"],
@@ -138,7 +141,7 @@ export default function TrialBalancePage() {
             <Download className="h-4 w-4" />
             {t("export")}
           </Button>
-          <Button variant="outline" data-testid="button-print">
+          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
             <Printer className="h-4 w-4" />
             {t("print")}
           </Button>

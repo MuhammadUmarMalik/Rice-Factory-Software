@@ -16,6 +16,9 @@ type StockReportRow = {
 
 export default function StockReportPage() {
   const { t, isRTL, language } = useLanguage();
+  const handlePrint = () => {
+    if (typeof window !== "undefined") window.print();
+  };
 
   const { data: products = [], isLoading } = useQuery<StockReportRow[]>({
     queryKey: ["/api/reports/stock"],
@@ -130,7 +133,7 @@ export default function StockReportPage() {
             <Download className="h-4 w-4" />
             {t("export")}
           </Button>
-          <Button variant="outline" data-testid="button-print">
+          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
             <Printer className="h-4 w-4" />
             {t("print")}
           </Button>

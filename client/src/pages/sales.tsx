@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Eye, Printer, Truck, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,7 +79,7 @@ export default function SalesPage() {
   });
 
   const { data: sales = [], isLoading } = useQuery<(Sale & { customer?: Account })[]>({
-    queryKey: ["/api/reports/sales"],
+    queryKey: ["/api/sales"],
   });
 
   const { data: customers = [] } = useQuery<Account[]>({
@@ -89,6 +89,18 @@ export default function SalesPage() {
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+
+  const salesWithCustomer = useMemo(() => {
+    const customerMap = new Map(customers.map((c) => [c.id, c]));
+    return sales.map((s) => ({
+      ...s,
+      customer: customerMap.get(typeof s.customerId === "string" ? parseInt(s.customerId) : s.customerId),
+    }));
+  }, [sales, customers]);
+
+  const handlePrint = () => {
+    if (typeof window !== "undefined") window.print();
+  };
 
   const getUnitForProduct = (productId?: string) =>
     products.find((p) => p.id.toString() === productId)?.unit;
@@ -269,7 +281,7 @@ export default function SalesPage() {
           <Button size="icon" variant="ghost" data-testid={`button-view-${item.id}`}>
             <Eye className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" data-testid={`button-print-${item.id}`}>
+          <Button size="icon" variant="ghost" onClick={handlePrint} data-testid={`button-print-${item.id}`}>
             <Printer className="h-4 w-4" />
           </Button>
         </div>
@@ -296,7 +308,7 @@ export default function SalesPage() {
         <CardContent className="pt-6">
           <DataTable
             columns={columns}
-            data={sales}
+            data={salesWithCustomer}
             isLoading={isLoading}
             testIdPrefix="sales"
           />

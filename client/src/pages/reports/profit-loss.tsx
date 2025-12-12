@@ -21,6 +21,9 @@ export default function ProfitLossPage() {
   const { t, isRTL, language } = useLanguage();
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const handlePrint = () => {
+    if (typeof window !== "undefined") window.print();
+  };
 
   const { data: profitLoss } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", dateFrom, dateTo],
@@ -56,7 +59,7 @@ export default function ProfitLossPage() {
             <Download className="h-4 w-4" />
             {t("export")}
           </Button>
-          <Button variant="outline" data-testid="button-print">
+          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
             <Printer className="h-4 w-4" />
             {t("print")}
           </Button>

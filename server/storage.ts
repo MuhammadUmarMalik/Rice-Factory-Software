@@ -47,6 +47,7 @@ export interface IStorage {
   createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase>;
   updatePurchase(id: number, purchase: Partial<InsertPurchase>, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase | undefined>;
   getNextPurchaseInvoiceNumber(): Promise<string>;
+  getNextPurchaseBillNumber(): Promise<string>;
 
   // Purchase Items
   getPurchaseItems(purchaseId: number): Promise<PurchaseItem[]>;
@@ -284,6 +285,23 @@ export class DatabaseStorage implements IStorage {
     return `PUR-${year}-${String(nextNum).padStart(4, "0")}`;
   }
 
+  private computeNextBillNumber(client: DbClient, year: number): string {
+    const [last] = client.select().from(purchases)
+      .where(sql`bill_no IS NOT NULL AND bill_no != ''`)
+      .orderBy(desc(purchases.id))
+      .limit(1)
+      .all();
+
+    const lastSeq = last?.billNo ? parseInt((last.billNo as string).split("-").pop() || "0") : 0;
+    const nextNum = Number.isFinite(lastSeq) ? lastSeq + 1 : 1;
+    return `BILL-${year}-${String(nextNum).padStart(5, "0")}`;
+  }
+
+  async getNextPurchaseBillNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    return this.computeNextBillNumber(db, year);
+  }
+
   private normalizePurchaseItem(item: PurchaseItemInput) {
     const serialNo = item.serialNo ?? null;
     const bags = parseAmount(item.bags);
@@ -341,6 +359,8 @@ export class DatabaseStorage implements IStorage {
       const [last] = tx.select().from(purchases).orderBy(desc(purchases.id)).limit(1).all();
       const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
       const invoiceNumber = `PUR-${year}-${String(nextNum).padStart(4, "0")}`;
+      const billYear = purchase.purchaseDate ? new Date(purchase.purchaseDate).getFullYear() : year;
+      const billNo = purchase.billNo && purchase.billNo.trim() !== "" ? purchase.billNo : this.computeNextBillNumber(tx as unknown as DbClient, billYear);
 
       let subtotal = 0;
       let totalBags = 0;
@@ -378,6 +398,7 @@ export class DatabaseStorage implements IStorage {
       const newPurchase = tx.insert(purchases).values({
         ...purchase,
         invoiceNumber,
+        billNo,
         subtotal: lineSubtotal.toString(),
         totalAmount: grandAmount.toString(),
         totalBags: totalBags.toString(),

@@ -52,6 +52,20 @@ const purchaseChargesSchema = z.array(z.object({
   accountId: z.number().int().positive().optional(),
 })).optional().default([]);
 
+// Coerce date-like payloads (string/number/Date) into Date for purchases
+const purchaseInputSchema = insertPurchaseSchema
+  .omit({ purchaseDate: true, dueDate: true })
+  .extend({
+    purchaseDate: z.preprocess((val) => {
+      if (val === null || val === undefined || val === "") return undefined;
+      return new Date(val as any);
+    }, z.date().optional()),
+    dueDate: z.preprocess((val) => {
+      if (val === null || val === undefined || val === "") return undefined;
+      return new Date(val as any);
+    }, z.date().optional()),
+  });
+
 const saleItemsSchema = z.array(z.object({
   productId: z.number().int().positive(),
   quantity: numericString,
@@ -387,6 +401,16 @@ export async function registerRoutes(
   });
 
   // Purchases CRUD
+  app.get("/api/purchases/next-bill-number", async (_req, res) => {
+    try {
+      const billNo = await storage.getNextPurchaseBillNumber();
+      res.json({ billNo });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to get next bill number" });
+    }
+  });
+
   app.get("/api/purchases", async (req, res) => {
     try {
       const purchases = await storage.getPurchases();
@@ -413,8 +437,8 @@ export async function registerRoutes(
 
   app.post("/api/purchases", async (req, res) => {
     try {
-      const { items, charges, ...purchaseData } = req.body;
-      const data = insertPurchaseSchema.parse(purchaseData);
+      const { items, charges, ...purchaseBody } = req.body;
+      const data = purchaseInputSchema.parse(purchaseBody);
       const parsedItems = purchaseItemsSchema.parse(items || []);
       const parsedCharges = purchaseChargesSchema.parse(charges || []);
       const purchase = await storage.createPurchase(data, parsedItems, parsedCharges);
@@ -537,10 +561,10 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   app.patch("/api/purchases/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { items, charges, ...purchaseData } = req.body;
-      const data = insertPurchaseSchema.partial().parse(purchaseData);
-      const parsedItems = purchaseItemsSchema.parse(items || []);
-      const parsedCharges = purchaseChargesSchema.parse(charges || []);
+      const { items, charges, ...purchaseBody } = req.body;
+      const data = purchaseInputSchema.partial().parse(purchaseBody);
+      const parsedItems = items ? purchaseItemsSchema.parse(items) : [];
+      const parsedCharges = charges ? purchaseChargesSchema.parse(charges) : [];
       const purchase = await storage.updatePurchase(id, data, parsedItems, parsedCharges);
       if (!purchase) {
         return res.status(404).json({ error: "Purchase not found" });

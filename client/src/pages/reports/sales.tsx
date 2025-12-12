@@ -13,6 +13,9 @@ import { format } from "date-fns";
 
 export default function SalesReportPage() {
   const { t, isRTL, language } = useLanguage();
+  const handlePrint = () => {
+    if (typeof window !== "undefined") window.print();
+  };
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
 
@@ -134,7 +137,7 @@ export default function SalesReportPage() {
             <Download className="h-4 w-4" />
             {t("export")}
           </Button>
-          <Button variant="outline" data-testid="button-print">
+          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
             <Printer className="h-4 w-4" />
             {t("print")}
           </Button>

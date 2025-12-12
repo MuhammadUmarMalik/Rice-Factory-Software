@@ -15,6 +15,9 @@ export default function PurchaseReportPage() {
   const { t, isRTL, language } = useLanguage();
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const handlePrint = () => {
+    if (typeof window !== "undefined") window.print();
+  };
 
   const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
     queryKey: ["/api/reports/purchases"],
@@ -134,7 +137,7 @@ export default function PurchaseReportPage() {
             <Download className="h-4 w-4" />
             {t("export")}
           </Button>
-          <Button variant="outline" data-testid="button-print">
+          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
             <Printer className="h-4 w-4" />
             {t("print")}
           </Button>
