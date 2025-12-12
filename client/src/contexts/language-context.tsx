@@ -13,7 +13,12 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => {
     if (typeof window !== "undefined") {
-      return (localStorage.getItem("language") as Language) || "en";
+      try {
+        return (localStorage.getItem("language") as Language) || "en";
+      } catch (err) {
+        console.warn("Language storage unavailable, falling back to en", err);
+        return "en";
+      }
     }
     return "en";
   });
@@ -21,7 +26,11 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const isRTL = language === "ur";
 
   useEffect(() => {
-    localStorage.setItem("language", language);
+    try {
+      localStorage.setItem("language", language);
+    } catch (err) {
+      console.warn("Language storage write failed", err);
+    }
     document.documentElement.dir = isRTL ? "rtl" : "ltr";
     document.documentElement.lang = language;
   }, [language, isRTL]);

@@ -33,7 +33,7 @@ export default function StockReportPage() {
     {
       key: "name",
       title: "Product",
-      titleUrdu: "U.OæU+U^O1OO¦",
+      titleUrdu: "مصنوعات",
       render: (item) => (
         <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
@@ -51,7 +51,7 @@ export default function StockReportPage() {
     {
       key: "unit",
       title: "Unit",
-      titleUrdu: "UOU^U+U1",
+      titleUrdu: "یونٹ",
       align: "center",
       render: (item) => (
         <Badge variant="secondary" className="font-mono">
@@ -62,7 +62,7 @@ export default function StockReportPage() {
     {
       key: "currentStock",
       title: "Current Stock",
-      titleUrdu: "U.U^OªU^O_U? O3U1OUc",
+      titleUrdu: "موجودہ اسٹاک",
       align: "right",
       render: (item) => {
         const stock = parseFloat(item.currentStock || "0");
@@ -79,7 +79,7 @@ export default function StockReportPage() {
     {
       key: "avgPurchasePrice",
       title: "Avg. Cost",
-      titleUrdu: "OU^O3Oú U,OU_O¦",
+      titleUrdu: "اوسط لاگت",
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm">
@@ -90,7 +90,7 @@ export default function StockReportPage() {
     {
       key: "salePrice",
       title: "Sale Price",
-      titleUrdu: "U?OñU^OrO¦ U,UOU.O¦",
+      titleUrdu: "فروخت قیمت",
       align: "right",
       render: (item) => (
         <span className="font-mono font-medium text-primary">
@@ -101,7 +101,7 @@ export default function StockReportPage() {
     {
       key: "value",
       title: "Stock Value",
-      titleUrdu: "O3U1OUc U^UOU,UOU^",
+      titleUrdu: "اسٹاک ویلیو",
       align: "right",
       render: (item) => {
         const stock = parseFloat(item.currentStock || "0");
@@ -122,7 +122,7 @@ export default function StockReportPage() {
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("stockReport")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "U.U^OªU^O_U? O3U1OUc UcUO O¦U?OæUOU,OO¦" : "Current inventory details"}
+            {language === "ur" ? "موجودہ انوینٹری کی تفصیلات" : "Current inventory details"}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -141,7 +141,7 @@ export default function StockReportPage() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "UcU, O›OÝU1U.Oý" : "Total Products"}
+              {language === "ur" ? "کل مصنوعات" : "Total Products"}
             </CardTitle>
             <Package className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
@@ -155,7 +155,7 @@ export default function StockReportPage() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "UcU, U.U,O_OOñ" : "Total Quantity"}
+              {language === "ur" ? "کل مقدار" : "Total Quantity"}
             </CardTitle>
             <Scale className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
