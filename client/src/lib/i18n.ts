@@ -126,7 +126,7 @@ export const translations = {
   ur: {
     // Navigation
     dashboard: "ڈیش بورڈ",
-    accounts: "اکاؤنٹس",
+    accounts: "کھاتے",
     products: "مصنوعات",
     purchases: "خریداری",
     processing: "پروسیسنگ",
@@ -134,24 +134,24 @@ export const translations = {
     reports: "رپورٹس",
     settings: "ترتیبات",
     logout: "لاگ آؤٹ",
-    
+
     // Account types
     customers: "گاہک",
     suppliers: "سپلائرز",
     banks: "بینک",
     expenses: "اخراجات",
-    
+
     // Common actions
     add: "شامل کریں",
-    edit: "ترمیم",
+    edit: "ترمیم کریں",
     delete: "حذف کریں",
     save: "محفوظ کریں",
-    cancel: "منسوخ",
+    cancel: "منسوخ کریں",
     search: "تلاش",
     filter: "فلٹر",
     print: "پرنٹ",
-    export: "برآمد",
-    
+    export: "ایکسپورٹ",
+
     // Form labels
     name: "نام",
     nameUrdu: "نام (اردو)",
@@ -160,32 +160,32 @@ export const translations = {
     balance: "بیلنس",
     openingBalance: "ابتدائی بیلنس",
     currentBalance: "موجودہ بیلنس",
-    
+
     // Purchase related
     purchaseDate: "خریداری کی تاریخ",
     vehicleNumber: "گاڑی نمبر",
     supplier: "سپلائر",
-    broker: "دلال",
-    brokerCommission: "دلالی",
+    broker: "بروکر",
+    brokerCommission: "بروکر کمیشن",
     invoiceNumber: "انوائس نمبر",
     quantity: "مقدار",
-    pricePerUnit: "فی یونٹ قیمت",
+    pricePerUnit: "قیمت فی یونٹ",
     total: "کل",
     subtotal: "ذیلی کل",
     paidAmount: "ادا شدہ رقم",
-    
+
     // Processing related
     batchNumber: "بیچ نمبر",
-    sourceProduct: "اصل مصنوعات",
-    outputProduct: "تیار مصنوعات",
-    inputQuantity: "داخلی مقدار",
-    outputQuantity: "پیداوار مقدار",
+    sourceProduct: "سورس پروڈکٹ",
+    outputProduct: "آؤٹ پٹ پروڈکٹ",
+    inputQuantity: "ان پٹ مقدار",
+    outputQuantity: "آؤٹ پٹ مقدار",
     wastage: "ضائع",
-    status: "حیثیت",
+    status: "حالت",
     pending: "زیر التواء",
-    inProgress: "جاری ہے",
+    inProgress: "جاری",
     completed: "مکمل",
-    
+
     // Sales related
     saleDate: "فروخت کی تاریخ",
     customer: "گاہک",
@@ -193,11 +193,12 @@ export const translations = {
     weighingCharges: "وزن چارجز",
     otherCharges: "دیگر چارجز",
     gatePass: "گیٹ پاس",
-    
+
     // Reports
-    stockReport: "سٹاک رپورٹ",
+    stockReport: "اسٹاک رپورٹ",
     purchaseReport: "خریداری رپورٹ",
-    cashReceipts: "کیس رسید",
+    cashReceipts: "نقد وصولیاں",
+    cashPayments: "نقد ادائیگیاں",
     voucherNumber: "واؤچر نمبر",
     voucherDate: "واؤچر تاریخ",
     voucherType: "واؤچر قسم",
@@ -207,43 +208,43 @@ export const translations = {
     credit: "کریڈٹ",
     amountInWords: "رقم الفاظ میں",
     salesReport: "فروخت رپورٹ",
-    ledger: "کھاتہ",
+    ledger: "لیجر",
     trialBalance: "ٹرائل بیلنس",
     profitLoss: "نفع و نقصان",
-    
+
     // Dashboard
     totalPurchases: "کل خریداری",
     totalSales: "کل فروخت",
-    stockValue: "سٹاک ویلیو",
+    stockValue: "اسٹاک ویلیو",
     totalProfit: "کل منافع",
-    recentActivity: "حالیہ سرگرمی",
-    quickActions: "فوری ایکشنز",
+    recentActivity: "حالیہ سرگرمیاں",
+    quickActions: "فوری اقدامات",
     newPurchase: "نئی خریداری",
     newSale: "نئی فروخت",
-    processStock: "سٹاک پروسیسنگ",
-    
+    processStock: "اسٹاک پروسیس کریں",
+
     // Units
     kg: "کلو",
     rs: "روپے",
-    
+
     // Messages
     noRecords: "کوئی ریکارڈ نہیں ملا",
     loading: "لوڈ ہو رہا ہے...",
-    confirmDelete: "کیا آپ واقعی اس آئٹم کو حذف کرنا چاہتے ہیں؟",
+    confirmDelete: "کیا آپ واقعی یہ آئٹم حذف کرنا چاہتے ہیں؟",
     savedSuccessfully: "کامیابی سے محفوظ ہو گیا",
     deletedSuccessfully: "کامیابی سے حذف ہو گیا",
-    
+
     // Auth
     login: "لاگ ان",
-    username: "صارف نام",
+    username: "یوزر نیم",
     password: "پاس ورڈ",
     welcomeBack: "خوش آمدید",
-    signInToContinue: "اپنے اکاؤنٹ میں سائن ان کریں",
-    
+    signInToContinue: "جاری رکھنے کے لیے سائن ان کریں",
+
     // Additional
     saveSettings: "ترتیبات محفوظ کریں",
-    actions: "ایکشنز",
-  },
+    actions: "اعمال",
+  }
 } as const;
 
 export type TranslationKey = keyof typeof translations.en;
