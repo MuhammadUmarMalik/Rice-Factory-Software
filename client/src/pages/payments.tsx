@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil } from "lucide-react";
+import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil, Minus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,16 +43,16 @@ const lineSchema = z.object({
   amount: z.string().default("0"),
 });
 
-const receiptFormSchema = z.object({
-  voucherType: z.enum(["CR", "DR"]).default("CR"),
+const paymentFormSchema = z.object({
+  voucherType: z.literal("DR").default("DR"),
   voucherNumber: z.string().optional(),
   voucherDate: z.string().default(new Date().toISOString().slice(0, 10)),
   narration: z.string().optional(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
 });
 
-type ReceiptFormData = z.infer<typeof receiptFormSchema>;
-type Receipt = {
+type PaymentFormData = z.infer<typeof paymentFormSchema>;
+type Payment = {
   id: number;
   voucherNumber: string;
   voucherType: string;
@@ -103,55 +103,59 @@ function numberToWords(num: number) {
   return parts.join(" ");
 }
 
-export default function ReceiptsPage() {
+export default function PaymentsPage() {
   const { t, isRTL } = useLanguage();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [viewId, setViewId] = useState<number | null>(null);
-  const [listFilter] = useState<"ALL" | "CR" | "DR">("CR");
   const isReadOnly = viewId !== null;
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const buildDefaults = (): ReceiptFormData => ({
-    voucherType: "CR",
+  const buildDefaults = (): PaymentFormData => ({
+    voucherType: "DR",
     voucherDate: new Date().toISOString().slice(0, 10),
     voucherNumber: "",
     narration: "",
     lines: [{ accountId: "", narration: "", amount: "0" }],
   });
 
-  const form = useForm<ReceiptFormData>({
-    resolver: zodResolver(receiptFormSchema),
+  const form = useForm<PaymentFormData>({
+    resolver: zodResolver(paymentFormSchema),
     defaultValues: buildDefaults(),
   });
 
-  const { fields } = useFieldArray({ control: form.control, name: "lines" });
+  const { fields, append, remove } = useFieldArray({ control: form.control, name: "lines" });
   const lines = useWatch({ control: form.control, name: "lines" }) || [];
-  const voucherType = useWatch({ control: form.control, name: "voucherType" }) || "CR";
 
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
-  const { data: receipts = [], isLoading } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
-  const filteredReceipts = useMemo(
-    () => receipts.filter((r) => (listFilter === "ALL" || r.voucherType === listFilter) && r.voucherType === "CR"),
-    [receipts, listFilter]
+  const { data: payments = [], isLoading } = useQuery<Payment[]>({ queryKey: ["/api/payments"] });
+  const filteredPayments = useMemo(
+    () => payments.filter((p) => p.voucherType === "DR"),
+    [payments]
   );
 
-  const fetchNextNumber = async (type?: string) => {
+  const fetchNextNumber = async () => {
+    // Skip sequence calls while viewing or editing to avoid bumping numbers
+    if (editingId || viewId) {
+      return form.getValues("voucherNumber") || "";
+    }
     try {
-      const res = await apiRequest("GET", `/api/receipts/next-number?type=${type || form.getValues("voucherType") || "CR"}`);
+      const res = await apiRequest("GET", `/api/payments/next-number`);
       const json = await res.json();
       form.setValue("voucherNumber", json.voucherNumber, { shouldDirty: true });
+      return json.voucherNumber as string;
     } catch (err) {
       console.error(err);
+      return "";
     }
   };
 
   useEffect(() => {
-    if (isDialogOpen && !editingId) {
-      fetchNextNumber(form.getValues("voucherType"));
+    if (isDialogOpen && !editingId && !viewId) {
+      fetchNextNumber();
     }
-  }, [isDialogOpen, editingId]);
+  }, [isDialogOpen, editingId, viewId]);
 
   useEffect(() => {
     if (!isDialogOpen) {
@@ -173,7 +177,7 @@ export default function ReceiptsPage() {
     };
   }, [isDialogOpen]);
 
-  const normalizeLines = (data: ReceiptFormData) =>
+  const normalizeLines = (data: PaymentFormData) =>
     (data.lines || [])
       .filter((l) => l.accountId && parseFloat(l.amount || "0") > 0)
       .map((l) => {
@@ -181,19 +185,19 @@ export default function ReceiptsPage() {
         return {
           accountId: parseInt(l.accountId ?? "0"),
           narration: l.narration,
-          debit: "0",
-          credit: amt,
+          debit: amt,
+          credit: "0",
         };
       });
 
   const createMutation = useMutation({
-    mutationFn: (data: ReceiptFormData) => apiRequest("POST", "/api/receipts", {
+    mutationFn: (data: PaymentFormData) => apiRequest("POST", "/api/payments", {
       ...data,
       voucherDate: data.voucherDate || undefined,
       lines: normalizeLines(data),
     }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       setIsDialogOpen(false);
       setEditingId(null);
@@ -207,13 +211,13 @@ export default function ReceiptsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: ReceiptFormData }) => apiRequest("PATCH", `/api/receipts/${id}`, {
+    mutationFn: ({ id, data }: { id: number; data: PaymentFormData }) => apiRequest("PATCH", `/api/payments/${id}`, {
       ...data,
       voucherDate: data.voucherDate || undefined,
       lines: normalizeLines(data),
     }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       setIsDialogOpen(false);
       setEditingId(null);
@@ -227,26 +231,31 @@ export default function ReceiptsPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => apiRequest("DELETE", `/api/receipts/${id}`),
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/payments/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       toast({ title: "Deleted" });
     },
   });
 
   const loadVoucher = async (id: number) => {
-    const res = await apiRequest("GET", `/api/receipts/${id}`);
-    const voucher: Receipt = await res.json();
+    const res = await apiRequest("GET", `/api/payments/${id}`);
+    const voucher: Payment = await res.json();
+    const lineAmount = (l: { debit?: string; credit?: string }) => {
+      const debit = parseFloat(l.debit || "0");
+      const credit = parseFloat(l.credit || "0");
+      return debit > 0 ? l.debit : credit > 0 ? l.credit : "0";
+    };
     form.reset({
-      voucherType: "CR",
+      voucherType: "DR",
       voucherNumber: voucher.voucherNumber,
       voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
       narration: voucher.narration || "",
       lines: (voucher.lines || []).map((l) => ({
         accountId: l.accountId.toString(),
         narration: l.narration || "",
-        amount: l.credit || l.debit || "0",
+        amount: lineAmount(l),
       })),
     });
     setIsDialogOpen(true);
@@ -272,7 +281,7 @@ export default function ReceiptsPage() {
     }
   };
 
-  const handleSubmit = async (data: ReceiptFormData) => {
+  const handleSubmit = async (data: PaymentFormData) => {
     if (isReadOnly) {
       setIsDialogOpen(false);
       setViewId(null);
@@ -286,18 +295,18 @@ export default function ReceiptsPage() {
       toast({ title: "Amount must be greater than 0", variant: "destructive" });
       return;
     }
-    const payload: ReceiptFormData = {
+    if (!data.voucherNumber) {
+      await fetchNextNumber();
+    }
+
+    const payload: PaymentFormData = {
       ...data,
-      voucherType: "CR",
+      voucherType: "DR",
       lines: activeLines.map((l) => ({
         ...l,
         accountId: l.accountId as string,
       })),
     };
-    // ensure voucher number exists (defensive, in case fetch failed)
-    if (!data.voucherNumber) {
-      await fetchNextNumber(data.voucherType);
-    }
 
     if (editingId) {
       updateMutation.mutate({ id: editingId, data: payload });
@@ -319,9 +328,7 @@ export default function ReceiptsPage() {
     () => activeLines.reduce((sum, l) => sum + (parseFloat(l.amount || "0") || 0), 0),
     [activeLines]
   );
-  const displayCredit = voucherType === "CR" ? totalAmount : 0;
-  const totalDebit = totalAmount; // kept for list and backend alignment
-  const totalCredit = totalAmount;
+  const displayDebit = totalAmount;
   const amountWords = useMemo(
     () => numberToWords(Math.round(totalAmount)) + " only",
     [totalAmount]
@@ -332,40 +339,33 @@ export default function ReceiptsPage() {
     setViewId(null);
     form.reset(buildDefaults());
     setIsDialogOpen(true);
-    fetchNextNumber("CR");
+    fetchNextNumber();
   };
 
-  const accountTitleForRow = (r: Receipt) => {
-    if (r.primaryAccountName) return r.primaryAccountName;
-    const firstLineAccId = r.lines?.[0]?.accountId;
+  const accountTitleForRow = (p: Payment) => {
+    if (p.primaryAccountName) return p.primaryAccountName;
+    const firstLineAccId = p.lines?.[0]?.accountId;
     return accounts.find((a) => a.id === firstLineAccId)?.name || "";
   };
 
   const amountTitle = t("total") || "Amount";
-  const dialogTitle = viewId ? "View Cash Receipt" : editingId ? "Edit Cash Receipt" : "New Cash Receipt";
+  const dialogTitle = viewId ? "View Cash Payment" : editingId ? "Edit Cash Payment" : "New Cash Payment";
 
-  const getAccountForReceipt = (r: Receipt) => {
-    const id = r.lines?.[0]?.accountId;
-    if (!id) return undefined;
-    return accounts.find((a) => a.id === id);
-  };
-
-  const columns: Column<Receipt>[] = [
-    { key: "voucherNumber", title: t("voucherNumber"), render: (r) => <span className="font-mono text-sm">{r.voucherNumber}</span> },
-    { key: "voucherDate", title: t("voucherDate"), render: (r) => format(new Date(r.voucherDate), "dd MMM yyyy") },
-    { key: "account", title: t("account"), render: (r) => <span>{accountTitleForRow(r) || "-"}</span> },
-    { key: "amount", title: amountTitle, align: "right", render: (r) => {
-      const credit = parseFloat(r.totalCredit || "0");
-      const debit = parseFloat(r.totalDebit || "0");
-      const fallback = (r.lines || []).reduce((sum, l) => sum + parseFloat(l.credit || l.debit || "0"), 0);
-      const amt = credit || debit || fallback;
+  const columns: Column<Payment>[] = [
+    { key: "voucherNumber", title: t("voucherNumber"), render: (p) => <span className="font-mono text-sm">{p.voucherNumber}</span> },
+    { key: "voucherDate", title: t("voucherDate"), render: (p) => format(new Date(p.voucherDate), "dd MMM yyyy") },
+    { key: "account", title: t("account"), render: (p) => <span>{accountTitleForRow(p) || "-"}</span> },
+    { key: "amount", title: amountTitle, align: "right", render: (p) => {
+      const debit = parseFloat(p.totalDebit || "0");
+      const fallback = (p.lines || []).reduce((sum, l) => sum + parseFloat(l.debit || l.credit || "0"), 0);
+      const amt = debit || fallback;
       return <span className="font-mono">{amt.toLocaleString()}</span>;
     } },
-    { key: "actions", title: t("actions"), render: (r) => (
+    { key: "actions", title: t("actions"), render: (p) => (
       <div className="flex gap-2">
-        <Button size="icon" variant="ghost" onClick={() => handleView(r.id)}><Eye className="h-4 w-4" /></Button>
-        <Button size="icon" variant="ghost" onClick={() => handleEdit(r.id)}><Pencil className="h-4 w-4" /></Button>
-        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(r.id)}><Trash2 className="h-4 w-4" /></Button>
+        <Button size="icon" variant="ghost" onClick={() => handleView(p.id)}><Eye className="h-4 w-4" /></Button>
+        <Button size="icon" variant="ghost" onClick={() => handleEdit(p.id)}><Pencil className="h-4 w-4" /></Button>
+        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(p.id)}><Trash2 className="h-4 w-4" /></Button>
       </div>
     ) },
   ];
@@ -375,8 +375,8 @@ export default function ReceiptsPage() {
       <div className={`flex items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
         <div className="flex items-center gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">{t("cashReceipts")}</h1>
-            <p className="text-sm text-muted-foreground">Cash Receipt (credit only)</p>
+            <h1 className="text-2xl font-semibold">{t("cashPayments")}</h1>
+            <p className="text-sm text-muted-foreground">Cash Payment (debit only)</p>
           </div>
         </div>
         <Button onClick={startNew}>
@@ -386,7 +386,7 @@ export default function ReceiptsPage() {
 
       <Card>
         <CardContent className="pt-4">
-          <DataTable columns={columns} data={filteredReceipts} isLoading={isLoading} testIdPrefix="receipts" />
+          <DataTable columns={columns} data={filteredPayments} isLoading={isLoading} testIdPrefix="payments" />
         </CardContent>
       </Card>
 
@@ -409,7 +409,7 @@ export default function ReceiptsPage() {
               {!isReadOnly && <Button variant="ghost" onClick={startNew}>Clear</Button>}
             </div>
             <DialogDescription className="sr-only">
-              Cash receipt voucher details
+              Cash payment voucher details
             </DialogDescription>
           </DialogHeader>
           {isReadOnly ? (
@@ -421,22 +421,22 @@ export default function ReceiptsPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">{t("voucherNumber")}</p>
-                  <p className="font-mono">{form.watch("voucherNumber") || "�"}</p>
+                  <p className="font-mono">{form.watch("voucherNumber") || "Лил"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">{t("voucherType")}</p>
-                  <p className="font-medium">CR</p>
+                  <p className="font-medium">DR</p>
                 </div>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Description</p>
+                <p className="text-xs text-muted-foreground">Detail</p>
                 <p className="rounded-md border bg-muted/40 p-3 min-h-[72px] whitespace-pre-wrap">
-                  {form.watch("narration") || "�"}
+                  {form.watch("narration") || "Лил"}
                 </p>
               </div>
               <div className="space-y-3">
-                <h3 className="font-semibold">Line</h3>
-                {fields.slice(0, 1).map((field, idx) => {
+                <h3 className="font-semibold">Lines</h3>
+                {fields.map((field, idx) => {
                   const accountId = form.watch(`lines.${idx}.accountId`);
                   const accountSelected = accounts.find(a => a.id.toString() === accountId);
                   const accountTitle = accountSelected ? `${accountSelected.name} (${accountSelected.type})` : "";
@@ -445,15 +445,15 @@ export default function ReceiptsPage() {
                   return (
                     <div key={field.id} className="rounded-md border bg-muted/30 p-3 space-y-1">
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">{t("account")}</span>
-                        <span className="font-medium">{accountTitle || "�"}</span>
+                        <span className="text-muted-foreground">Paid To</span>
+                        <span className="font-medium">{accountTitle || "Лил"}</span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">{t("narration")}</span>
-                        <span>{narration || "�"}</span>
+                        <span>{narration || "Лил"}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Amount</span>
+                        <span className="text-muted-foreground">{t("debit")}</span>
                         <span className="font-mono">{parseFloat(amount || "0").toLocaleString()}</span>
                       </div>
                     </div>
@@ -462,8 +462,8 @@ export default function ReceiptsPage() {
               </div>
               <div className="rounded-md border bg-muted/40 p-4 space-y-1 text-sm">
                 <div className="flex items-center gap-2">
-                  <span>{t("credit")}:</span>
-                  <span className="font-mono">{displayCredit.toLocaleString()}</span>
+                  <span>{t("debit")}:</span>
+                  <span className="font-mono">{displayDebit.toLocaleString()}</span>
                 </div>
                 <div className="text-xs text-muted-foreground">{t("amountInWords")}: {amountWords}</div>
               </div>
@@ -499,7 +499,7 @@ export default function ReceiptsPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("voucherType")}</FormLabel>
-                        <Input readOnly value="CR" />
+                        <Input readOnly value="DR" />
                         <input type="hidden" {...field} />
                       </FormItem>
                     )}
@@ -510,7 +510,7 @@ export default function ReceiptsPage() {
                   name="narration"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Description</FormLabel>
+                      <FormLabel>Detail</FormLabel>
                       <FormControl>
                         <Textarea rows={2} placeholder="Add details" {...field} />
                       </FormControl>
@@ -520,10 +520,15 @@ export default function ReceiptsPage() {
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h3 className="font-medium">Line</h3>
+                    <h3 className="font-medium">Lines</h3>
+                    <div className="flex gap-2">
+                      <Button type="button" size="sm" variant="outline" onClick={() => append({ accountId: "", narration: "", amount: "0" })}>
+                        <Plus className="h-4 w-4" /> Add line
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-2">
-                    {fields.slice(0, 1).map((field, idx) => {
+                    {fields.map((field, idx) => {
                       const accountId = form.watch(`lines.${idx}.accountId`);
                       const accountSelected = accounts.find(a => a.id.toString() === accountId);
                       const accountTitle = accountSelected ? `${accountSelected.name} (${accountSelected.type})` : "";
@@ -535,7 +540,7 @@ export default function ReceiptsPage() {
                               name={`lines.${idx}.accountId`}
                               render={({ field }) => (
                                 <FormItem>
-                                  {idx === 0 && <FormLabel>{t("account")}</FormLabel>}
+                                  {idx === 0 && <FormLabel>Paid To</FormLabel>}
                                   <Select value={field.value} onValueChange={field.onChange}>
                                     <FormControl>
                                       <SelectTrigger>
@@ -577,13 +582,20 @@ export default function ReceiptsPage() {
                               name={`lines.${idx}.amount`}
                               render={({ field }) => (
                                 <FormItem>
-                                  {idx === 0 && <FormLabel>Amount</FormLabel>}
+                                  {idx === 0 && <FormLabel>{t("debit")}</FormLabel>}
                                   <FormControl>
                                     <Input type="number" step="0.01" {...field} />
                                   </FormControl>
                                 </FormItem>
                               )}
                             />
+                          </div>
+                          <div className="col-span-2 flex items-end justify-end">
+                            {fields.length > 1 && (
+                              <Button type="button" size="icon" variant="ghost" onClick={() => remove(idx)} aria-label="Remove line">
+                                <Minus className="h-4 w-4" />
+                              </Button>
+                            )}
                           </div>
                         </div>
                       );
@@ -594,7 +606,7 @@ export default function ReceiptsPage() {
                 <Card className="bg-muted/40">
                   <CardContent className="pt-4 grid grid-cols-2 gap-4">
                     <div className="space-y-1 text-sm">
-                      <div className="flex justify-between"><span>{t("credit")}</span><span className="font-mono">{displayCredit.toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span>{t("debit")}</span><span className="font-mono">{displayDebit.toLocaleString()}</span></div>
                       <div className="text-xs text-muted-foreground">{t("amountInWords")}: {amountWords}</div>
                     </div>
                     <div className="flex items-center justify-end gap-2">
