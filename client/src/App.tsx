@@ -26,8 +26,9 @@ import Ledger from "@/pages/reports/ledger";
 import TrialBalance from "@/pages/reports/trial-balance";
 import ProfitLoss from "@/pages/reports/profit-loss";
 import Receipts from "@/pages/receipts";
-
+import Payments from "@/pages/payments";
 import { useLanguage } from "@/contexts/language-context";
+import Journal from "@/pages/journal";
 
 import Payments from "@/pages/payments";
 
@@ -40,6 +41,7 @@ function Router() {
       <Route path="/purchases" component={Purchases} />
       <Route path="/receipts" component={Receipts} />
       <Route path="/payments" component={Payments} />
+      <Route path="/journal" component={Journal} />
       <Route path="/processing" component={Processing} />
       <Route path="/sales" component={Sales} />
       <Route path="/settings" component={Settings} />
