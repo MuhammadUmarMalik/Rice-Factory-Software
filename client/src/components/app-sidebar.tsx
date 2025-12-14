@@ -37,6 +37,7 @@ const mainMenuItems = [
   { title: "products", url: "/products", icon: Package },
   { title: "purchases", url: "/purchases", icon: ShoppingCart },
   { title: "cashReceipts", url: "/receipts", icon: Receipt },
+  { title: "cashPayments", url: "/payments", icon: Receipt },
   { title: "processing", url: "/processing", icon: Factory },
   { title: "sales", url: "/sales", icon: TrendingUp },
 ];
