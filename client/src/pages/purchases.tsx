@@ -1,6 +1,6 @@
-
-import { useMemo, useState } from "react";
-import { Plus, Eye, Printer, Truck, Calculator, ArrowLeft } from "lucide-react";
+
+import { useEffect, useMemo, useState } from "react";
+import { Plus, Eye, Truck, Calculator, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +37,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import type { Purchase, Account, Product } from "@shared/schema";
 import { format } from "date-fns";
+import { useQuery as useRQQuery } from "@tanstack/react-query";
 
 const purchaseFormSchema = z.object({
   purchaseDate: z.string().optional(),
@@ -134,6 +135,7 @@ export default function PurchasesPage() {
   });
 
   const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
+    // Use report endpoint to include supplier/charges details for display
     queryKey: ["/api/reports/purchases"],
   });
 
@@ -152,6 +154,39 @@ export default function PurchasesPage() {
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+
+  const { data: settings } = useRQQuery<{ businessName?: string; businessNameUrdu?: string }>({
+    queryKey: ["/api/settings"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/settings");
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const { data: nextBill, refetch: refetchBillNo } = useQuery<{ billNo: string }>({
+    queryKey: ["/api/purchases/next-bill-number"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/purchases/next-bill-number");
+      return res.json();
+    },
+    enabled: isDialogOpen,
+    refetchOnWindowFocus: false,
+  });
+
+  useEffect(() => {
+    if (isDialogOpen && nextBill?.billNo) {
+      form.setValue("billNo", nextBill.billNo, { shouldDirty: false, shouldValidate: true });
+    }
+  }, [form, isDialogOpen, nextBill]);
+
+  const purchasesWithSupplier = useMemo(() => {
+    const supplierMap = new Map(suppliers.map((s) => [s.id, s]));
+    return purchases.map((p) => ({
+      ...p,
+      supplier: supplierMap.get(typeof p.supplierId === "string" ? parseInt(p.supplierId) : p.supplierId),
+    }));
+  }, [purchases, suppliers]);
 
   const getUnitForProduct = (productId?: string) =>
     products.find((p) => p.id.toString() === productId)?.unit;
@@ -190,6 +225,7 @@ export default function PurchasesPage() {
     mutationFn: (data: PurchaseFormData) =>
       apiRequest("POST", "/api/purchases", {
         ...data,
+        billNo: data.billNo || undefined,
         supplierId: parseInt(data.supplierId),
         expenseAccountId: parseInt(data.expenseAccountId),
         purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
@@ -214,6 +250,7 @@ export default function PurchasesPage() {
         })),
       }),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
@@ -230,7 +267,7 @@ export default function PurchasesPage() {
     form.reset({
       purchaseDate: new Date().toISOString().slice(0, 10),
       dueDate: new Date().toISOString().slice(0, 10),
-      billNo: "",
+      billNo: nextBill?.billNo || "",
       bookNo: "",
       supplierId: "",
       expenseAccountId: "",
@@ -243,6 +280,7 @@ export default function PurchasesPage() {
       charges: defaultCharges,
     });
     setIsDialogOpen(true);
+    refetchBillNo();
     setCustomProductDrafts({});
     setCreatingProductIndex(null);
   };
@@ -335,7 +373,7 @@ export default function PurchasesPage() {
   const totalNet = computedItems.reduce((sum, i) => sum + i.netWeight, 0);
   const totalMound = Math.floor(totalNet / 40);
   const totalMoundRemainder = Math.max(totalNet - totalMound * 40, 0);
-  const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
+  const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
   const columns: Column<Purchase & { supplier?: Account }>[] = [
     {
       key: "invoiceNumber",
@@ -416,59 +454,59 @@ export default function PurchasesPage() {
           <Button size="icon" variant="ghost" data-testid={`button-view-${item.id}`}>
             <Eye className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" data-testid={`button-print-${item.id}`}>
-            <Printer className="h-4 w-4" />
-          </Button>
         </div>
       ),
     },
   ];
 
   return (
-    <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
-      <div className={`flex items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
-        <div className={isRTL ? "text-right" : ""}>
-          <h1 className="text-2xl font-semibold">{t("purchases")}</h1>
-          <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "Manage purchase orders" : "Manage purchase orders"}
-          </p>
+    <>
+      <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""} screen-only`}>
+        <div className={`flex items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
+          <div className={isRTL ? "text-right" : ""}>
+            <h1 className="text-2xl font-semibold">{t("purchases")}</h1>
+            <p className="text-sm text-muted-foreground">
+              {language === "ur" ? "Manage purchase orders" : "Manage purchase orders"}
+            </p>
+          </div>
+          <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+            <Button onClick={handleAddNew} data-testid="button-add-purchase">
+              <Plus className="h-4 w-4" />
+              {t("newPurchase")}
+            </Button>
+          </div>
         </div>
-        <Button onClick={handleAddNew} data-testid="button-add-purchase">
-          <Plus className="h-4 w-4" />
-          {t("newPurchase")}
-        </Button>
-      </div>
 
-      <Card>
-        <CardContent className="pt-6">
-          <DataTable
-            columns={columns}
-            data={purchases}
-            isLoading={isLoading}
-            testIdPrefix="purchases"
-          />
-        </CardContent>
-      </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <DataTable
+              columns={columns}
+              data={purchasesWithSupplier}
+              isLoading={isLoading}
+              testIdPrefix="purchases"
+            />
+          </CardContent>
+        </Card>
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh] overflow-y-auto">
-          <DialogHeader>
-            <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
-                  <ArrowLeft className="h-4 w-4" />
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogContent className="sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh] overflow-y-auto">
+            <DialogHeader>
+              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                  <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
+                    {language === "ur" ? "New Purchase" : "New Purchase"}
+                  </DialogTitle>
+                </div>
+                <Button variant="ghost" onClick={() => setIsDialogOpen(false)}>
+                  {language === "ur" ? "Close" : "Close"}
                 </Button>
-                <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-                  {language === "ur" ? "New Purchase" : "New Purchase"}
-                </DialogTitle>
               </div>
-              <Button variant="ghost" onClick={() => setIsDialogOpen(false)}>
-                {language === "ur" ? "Close" : "Close"}
-              </Button>
-            </div>
-          </DialogHeader>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+            </DialogHeader>
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
@@ -518,7 +556,7 @@ export default function PurchasesPage() {
                     </FormItem>
                   )}
                 />
-              </div>
+              </div>
               <div className="grid grid-cols-3 gap-4">
                 <FormField
                   control={form.control}
@@ -655,7 +693,7 @@ export default function PurchasesPage() {
                     </FormItem>
                   )}
                 />
-              </div>
+              </div>
               <div className="space-y-4">
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
                   <h3 className="font-medium">Items</h3>
@@ -697,7 +735,7 @@ export default function PurchasesPage() {
                                   <SelectContent>
                                     {products.map((p) => (
                                       <SelectItem key={p.id} value={p.id.toString()}>
-                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""} • {p.unit}
+                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""} ï¿½ {p.unit}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
@@ -929,7 +967,7 @@ export default function PurchasesPage() {
                                       </SelectTrigger>
                                     </FormControl>
                                     <SelectContent>
-                                      <SelectItem value="none">—</SelectItem>
+                                      <SelectItem value="none">ï¿½</SelectItem>
                                       {accounts.map((acc) => (
                                         <SelectItem key={acc.id} value={acc.id.toString()}>
                                           {acc.name}
@@ -984,5 +1022,7 @@ export default function PurchasesPage() {
         </DialogContent>
       </Dialog>
     </div>
+
+    </>
   );
 }

@@ -31,7 +31,7 @@ type SettingsPayload = {
 
 const defaultSettings: SettingsPayload = {
   businessName: "Rice Mill Enterprise",
-  businessNameUrdu: "OñOOÝO3 U.U, OU+U1OñU_OñOOÝOý",
+  businessNameUrdu: "چاول مل ادارہ",
   phone: "+92 300 1234567",
   address: "Industrial Area, Lahore",
   language: "en",
@@ -58,10 +58,9 @@ export default function SettingsPage() {
       setBusinessNameUrdu(settingsData.businessNameUrdu || "");
       setPhone(settingsData.phone || "");
       setAddress(settingsData.address || "");
-      setLanguage(settingsData.language || "en");
       setTheme(settingsData.theme || "light");
     }
-  }, [settingsData, setLanguage, setTheme]);
+  }, [settingsData, setTheme]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -94,7 +93,7 @@ export default function SettingsPage() {
       <div className={isRTL ? "text-right" : ""}>
         <h1 className="text-2xl font-semibold">{t("settings")}</h1>
         <p className="text-sm text-muted-foreground">
-          {language === "ur" ? "OUOU_U,UOUcUOO'U+ UcUO O¦OñO¦UOO\"OO¦" : "Application settings and preferences"}
+          {language === "ur" ? "ایپ کی ترتیب اور ترجیحات" : "Application settings and preferences"}
         </p>
       </div>
 
@@ -103,17 +102,17 @@ export default function SettingsPage() {
           <CardHeader className={isRTL ? "text-right" : ""}>
             <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
               <Building className="h-4 w-4" />
-              {language === "ur" ? "UcOOñU^O\"OOñ UcUO U.O1U,U^U.OO¦" : "Business Information"}
+              {language === "ur" ? "کاروباری معلومات" : "Business Information"}
             </CardTitle>
             <CardDescription>
-              {language === "ur" ? "OU_U+U' UcOOñU^O\"OOñ UcUO O¦U?OæUOU,OO¦" : "Your business details for documents"}
+              {language === "ur" ? "دستاویزات کے لیے کاروباری تفصیل" : "Your business details for documents"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <Label className={isRTL ? "font-urdu" : ""}>
-                  {language === "ur" ? "UcOOñU^O\"OOñ UcO U+OU. (OU+U_OñUOOýUO)" : "Business Name (English)"}
+                  {language === "ur" ? "کاروبار کا نام (انگریزی)" : "Business Name (English)"}
                 </Label>
                 <Input 
                   value={businessName} 
@@ -123,7 +122,7 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <Label className="font-urdu">UcOOñU^O\"OOñ UcO U+OU. (OOñO_U^)</Label>
+                <Label className="font-urdu">کاروبار کا نام (اردو)</Label>
                 <Input 
                   value={businessNameUrdu} 
                   onChange={(e) => setBusinessNameUrdu(e.target.value)}
@@ -136,7 +135,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "U?U^U+ U+U.O\"Oñ" : "Phone Number"}
+                {language === "ur" ? "فون نمبر" : "Phone Number"}
               </Label>
               <Input 
                 value={phone} 
@@ -147,7 +146,7 @@ export default function SettingsPage() {
             </div>
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "U_O¦U?" : "Address"}
+                {language === "ur" ? "پتہ" : "Address"}
               </Label>
               <Input 
                 value={address} 
@@ -163,36 +162,39 @@ export default function SettingsPage() {
           <CardHeader className={isRTL ? "text-right" : ""}>
             <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
               <Globe className="h-4 w-4" />
-              {language === "ur" ? "OýO\"OU+ UcUO O¦OñO¦UOO\"OO¦" : "Language Settings"}
+              {language === "ur" ? "زبان کی ترتیب" : "Language Settings"}
             </CardTitle>
             <CardDescription>
-              {language === "ur" ? "OUOU_U,UOUcUOO'U+ UcUO OýO\"OU+ O¦O\"O_UOU, UcOñUOU§" : "Change application language"}
+              {language === "ur" ? "ایپ کی زبان تبدیل کریں" : "Change application language"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className={`flex items-center justify-between p-4 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}>
               <div className={isRTL ? "text-right" : ""}>
-                <p className="font-medium">{language === "ur" ? "U.U^OªU^O_U? OýO\"OU+" : "Current Language"}</p>
+                <p className="font-medium">{language === "ur" ? "موجودہ زبان" : "Current Language"}</p>
                 <p className="text-sm text-muted-foreground">
-                  {language === "ur" ? "OOñO_U^ (O_OOÝUOU§ O3U' O\"OOÝUOU§)" : "English (Left to Right)"}
+                  {language === "ur" ? "انگریزی (بائیں سے دائیں)" : "English (Left to Right)"}
                 </p>
               </div>
               <Badge variant="default">
-                {language === "en" ? "English" : "OOñO_U^"}
+                {language === "en" ? "English" : "اردو"}
               </Badge>
             </div>
             
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "OýO\"OU+ U.U+O¦OrO\" UcOñUOU§" : "Select Language"}
+                {language === "ur" ? "زبان منتخب کریں" : "Select Language"}
               </Label>
-              <Select value={language} onValueChange={(val: "en" | "ur") => setLanguage(val)}>
+              <Select
+                value={language}
+                onValueChange={(val: "en" | "ur") => setLanguage(val)}
+              >
                 <SelectTrigger data-testid="select-language" disabled={isLoading || saveMutation.isPending}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="en">English</SelectItem>
-                  <SelectItem value="ur">OOñO_U^ (Urdu)</SelectItem>
+                  <SelectItem value="ur">اردو (RTL)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -203,18 +205,18 @@ export default function SettingsPage() {
           <CardHeader className={isRTL ? "text-right" : ""}>
             <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
               <Palette className="h-4 w-4" />
-              {language === "ur" ? "O,OU?OñUO O'UcU," : "Appearance"}
+              {language === "ur" ? "ظاہری شکل" : "Appearance"}
             </CardTitle>
             <CardDescription>
-              {language === "ur" ? "U^OOñUc UOO U,OOÝU1 U.U^U^" : "Dark or light mode"}
+              {language === "ur" ? "ڈارک یا لائٹ موڈ" : "Dark or light mode"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className={`flex items-center justify-between p-4 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}>
               <div className={isRTL ? "text-right" : ""}>
-                <p className="font-medium">{language === "ur" ? "U^OOñUc U.U^U^" : "Dark Mode"}</p>
+                <p className="font-medium">{language === "ur" ? "ڈارک موڈ" : "Dark Mode"}</p>
                 <p className="text-sm text-muted-foreground">
-                  {language === "ur" ? "O›U+UcU_U^U§ UcU' U,UOU' O›OñOU. O_U?" : "Easier on the eyes"}
+                  {language === "ur" ? "آنکھوں کے لیے آرام دہ" : "Easier on the eyes"}
                 </p>
               </div>
               <Switch 
@@ -227,15 +229,15 @@ export default function SettingsPage() {
             
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "O¦U_UOU. U.U+O¦OrO\" UcOñUOU§" : "Select Theme"}
+                {language === "ur" ? "تھیم منتخب کریں" : "Select Theme"}
               </Label>
               <Select value={theme} onValueChange={(val: "light" | "dark") => setTheme(val)}>
                 <SelectTrigger data-testid="select-theme" disabled={isLoading || saveMutation.isPending}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="light">{language === "ur" ? "U,OOÝU1" : "Light"}</SelectItem>
-                  <SelectItem value="dark">{language === "ur" ? "U^OOñUc" : "Dark"}</SelectItem>
+                  <SelectItem value="light">{language === "ur" ? "لائٹ" : "Light"}</SelectItem>
+                  <SelectItem value="dark">{language === "ur" ? "ڈارک" : "Dark"}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -246,37 +248,37 @@ export default function SettingsPage() {
           <CardHeader className={isRTL ? "text-right" : ""}>
             <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
               <Shield className="h-4 w-4" />
-              {language === "ur" ? "O3UOUcUOU^OñU1UO" : "Security"}
+              {language === "ur" ? "سیکورٹی" : "Security"}
             </CardTitle>
             <CardDescription>
-              {language === "ur" ? "OæOOñU? OU^Oñ OñO3OOÝUO UcUO O¦OñO¦UOO\"OO¦" : "User and access settings"}
+              {language === "ur" ? "صارف اور رسائی کی ترتیبات" : "User and access settings"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className={`p-4 rounded-lg bg-muted/30 ${isRTL ? "text-right" : ""}`}>
-              <p className="font-medium">{language === "ur" ? "U.U^OªU^O_U? OæOOñU?" : "Current User"}</p>
+              <p className="font-medium">{language === "ur" ? "موجودہ صارف" : "Current User"}</p>
               <p className="text-sm text-muted-foreground mt-1">admin@ricemillerp.com</p>
               <Badge variant="secondary" className="mt-2">
-                {language === "ur" ? "OUOU^U.U+" : "Admin"}
+                {language === "ur" ? "ایڈمن" : "Admin"}
               </Badge>
             </div>
 
             <Separator />
 
             <div className={`space-y-3 ${isRTL ? "text-right" : ""}`}>
-              <p className="text-sm font-medium">{language === "ur" ? "OñO3OOÝUO UcUO O3OúO-UOU§" : "Access Levels"}</p>
+              <p className="text-sm font-medium">{language === "ur" ? "رسائی درجات" : "Access Levels"}</p>
               <div className="flex flex-wrap gap-2">
-                <Badge variant="default">{language === "ur" ? "OUOU^U.U+" : "Admin"}</Badge>
-                <Badge variant="secondary">{language === "ur" ? "U.UOU+UOOªOñ" : "Manager"}</Badge>
-                <Badge variant="outline">{language === "ur" ? "OUcOOU+U1U+U1" : "Accountant"}</Badge>
-                <Badge variant="outline">{language === "ur" ? "O›U_OñUOU1Oñ" : "Operator"}</Badge>
+                <Badge variant="default">{language === "ur" ? "ایڈمن" : "Admin"}</Badge>
+                <Badge variant="secondary">{language === "ur" ? "مینجر" : "Manager"}</Badge>
+                <Badge variant="outline">{language === "ur" ? "اکاؤنٹنٹ" : "Accountant"}</Badge>
+                <Badge variant="outline">{language === "ur" ? "آپریٹر" : "Operator"}</Badge>
               </div>
             </div>
 
             <Button variant="outline" className="w-full" disabled>
-              {language === "ur" ? "OæOOñU?UOU+ UcO OU+O¦O,OU." : "Manage Users"}
+              {language === "ur" ? "صارفین کا انتظام" : "Manage Users"}
               <Badge variant="secondary" className="ml-2 text-xs">
-                {language === "ur" ? "OªU,O_ O› OñU?O U?U'" : "Coming Soon"}
+                {language === "ur" ? "جلد آ رہا ہے" : "Coming Soon"}
               </Badge>
             </Button>
           </CardContent>
