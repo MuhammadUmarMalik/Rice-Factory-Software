@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Printer, ArrowUpRight, ArrowDownRight, Wallet, Calendar } from "lucide-react";
+import { Download, ArrowUpRight, ArrowDownRight, Wallet, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,9 +23,6 @@ export default function LedgerPage() {
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
-  const handlePrint = () => {
-    if (typeof window !== "undefined") window.print();
-  };
 
   const { data: accounts = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts"],
@@ -152,10 +149,6 @@ export default function LedgerPage() {
           <Button variant="outline" disabled={!selectedAccountId} data-testid="button-export">
             <Download className="h-4 w-4" />
             {t("export")}
-          </Button>
-          <Button variant="outline" onClick={handlePrint} disabled={!selectedAccountId} data-testid="button-print">
-            <Printer className="h-4 w-4" />
-            {t("print")}
           </Button>
         </div>
       </div>

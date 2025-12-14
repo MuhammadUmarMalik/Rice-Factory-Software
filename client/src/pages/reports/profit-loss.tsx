@@ -1,4 +1,4 @@
-import { Download, Printer, TrendingUp, TrendingDown, DollarSign, Package } from "lucide-react";
+import { Download, TrendingUp, TrendingDown, DollarSign, Package } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/language-context";
@@ -21,9 +21,6 @@ export default function ProfitLossPage() {
   const { t, isRTL, language } = useLanguage();
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
-  const handlePrint = () => {
-    if (typeof window !== "undefined") window.print();
-  };
 
   const { data: profitLoss } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", dateFrom, dateTo],
@@ -58,10 +55,6 @@ export default function ProfitLossPage() {
           <Button variant="outline" data-testid="button-export">
             <Download className="h-4 w-4" />
             {t("export")}
-          </Button>
-          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
-            <Printer className="h-4 w-4" />
-            {t("print")}
           </Button>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { Download, Printer, Users, Wallet, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Download, Users, Wallet, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,9 +15,6 @@ type TrialBalanceRow = {
 
 export default function TrialBalancePage() {
   const { t, isRTL, language } = useLanguage();
-  const handlePrint = () => {
-    if (typeof window !== "undefined") window.print();
-  };
 
   const { data: rows = [], isLoading } = useQuery<TrialBalanceRow[]>({
     queryKey: ["/api/reports/trial-balance"],
@@ -140,10 +137,6 @@ export default function TrialBalancePage() {
           <Button variant="outline" data-testid="button-export">
             <Download className="h-4 w-4" />
             {t("export")}
-          </Button>
-          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
-            <Printer className="h-4 w-4" />
-            {t("print")}
           </Button>
         </div>
       </div>

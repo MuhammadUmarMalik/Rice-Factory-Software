@@ -1,4 +1,4 @@
-import { Package, Scale, TrendingUp, Download, Printer } from "lucide-react";
+import { Package, Scale, TrendingUp, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,9 +16,6 @@ type StockReportRow = {
 
 export default function StockReportPage() {
   const { t, isRTL, language } = useLanguage();
-  const handlePrint = () => {
-    if (typeof window !== "undefined") window.print();
-  };
 
   const { data: products = [], isLoading } = useQuery<StockReportRow[]>({
     queryKey: ["/api/reports/stock"],
@@ -132,10 +129,6 @@ export default function StockReportPage() {
           <Button variant="outline" data-testid="button-export">
             <Download className="h-4 w-4" />
             {t("export")}
-          </Button>
-          <Button variant="outline" onClick={handlePrint} data-testid="button-print">
-            <Printer className="h-4 w-4" />
-            {t("print")}
           </Button>
         </div>
       </div>

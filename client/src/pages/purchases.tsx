@@ -1,6 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Eye, Printer, Truck, Calculator, ArrowLeft, Download } from "lucide-react";
+import { Plus, Eye, Truck, Calculator, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +38,6 @@ import { z } from "zod";
 import type { Purchase, Account, Product } from "@shared/schema";
 import { format } from "date-fns";
 import { useQuery as useRQQuery } from "@tanstack/react-query";
-import { downloadPurchasesPdf } from "@/lib/pdf";
 
 const purchaseFormSchema = z.object({
   purchaseDate: z.string().optional(),
@@ -91,7 +90,6 @@ export default function PurchasesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [customProductDrafts, setCustomProductDrafts] = useState<Record<number, { name: string; unit: string }>>({});
   const [creatingProductIndex, setCreatingProductIndex] = useState<number | null>(null);
-  const [isExportingPdf, setIsExportingPdf] = useState(false);
 
   const defaultCharges = useMemo(() => ([
     "weight",
@@ -137,7 +135,7 @@ export default function PurchasesPage() {
   });
 
   const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
-    // Use report endpoint to include supplier/charges details for display/print
+    // Use report endpoint to include supplier/charges details for display
     queryKey: ["/api/reports/purchases"],
   });
 
@@ -189,48 +187,6 @@ export default function PurchasesPage() {
       supplier: supplierMap.get(typeof p.supplierId === "string" ? parseInt(p.supplierId) : p.supplierId),
     }));
   }, [purchases, suppliers]);
-
-  const printGeneratedAt = useMemo(() => new Date(), []);
-  const purchaseTotals = useMemo(() => {
-    const totals = purchasesWithSupplier.reduce(
-      (acc, p) => {
-        const total = parseFloat(p.totalAmount || "0") || 0;
-        const paid = parseFloat(p.paidAmount || "0") || 0;
-        acc.total += total;
-        acc.paid += paid;
-        acc.due += Math.max(total - paid, 0);
-        return acc;
-      },
-      { total: 0, paid: 0, due: 0 }
-    );
-    return totals;
-  }, [purchasesWithSupplier]);
-
-  const handlePrint = () => {
-    if (typeof window !== "undefined") window.print();
-  };
-
-  const handleExportPdf = async () => {
-    if (isExportingPdf) return;
-    try {
-      setIsExportingPdf(true);
-      await downloadPurchasesPdf({
-        purchases: purchasesWithSupplier,
-        businessName: settings?.businessName,
-        businessNameUrdu: settings?.businessNameUrdu,
-        generatedAt: new Date(),
-      });
-      toast({ title: "PDF ready", description: "Purchases report downloaded" });
-    } catch (err: any) {
-      toast({
-        title: "PDF export failed",
-        description: err?.message || "Unable to create PDF",
-        variant: "destructive",
-      });
-    } finally {
-      setIsExportingPdf(false);
-    }
-  };
 
   const getUnitForProduct = (productId?: string) =>
     products.find((p) => p.id.toString() === productId)?.unit;
@@ -498,9 +454,6 @@ export default function PurchasesPage() {
           <Button size="icon" variant="ghost" data-testid={`button-view-${item.id}`}>
             <Eye className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" onClick={handlePrint} data-testid={`button-print-${item.id}`}>
-            <Printer className="h-4 w-4" />
-          </Button>
         </div>
       ),
     },
@@ -517,15 +470,6 @@ export default function PurchasesPage() {
             </p>
           </div>
           <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <Button
-              variant="outline"
-              onClick={handleExportPdf}
-              disabled={isLoading || isExportingPdf || purchasesWithSupplier.length === 0}
-              data-testid="button-export-purchase-pdf"
-            >
-              <Download className="h-4 w-4" />
-              {isExportingPdf ? "Preparing..." : "Export PDF"}
-            </Button>
             <Button onClick={handleAddNew} data-testid="button-add-purchase">
               <Plus className="h-4 w-4" />
               {t("newPurchase")}
@@ -1079,83 +1023,6 @@ export default function PurchasesPage() {
       </Dialog>
     </div>
 
-      <div className={`print-only hidden print-page ${isRTL ? "font-urdu" : ""}`}>
-        <div className={`print-header flex items-start justify-between gap-4 ${isRTL ? "flex-row-reverse text-right" : ""}`}>
-          <div>
-            <p className="text-xs text-muted-foreground">{format(printGeneratedAt, "dd/MM/yyyy, HH:mm")}</p>
-            <p className="text-xs text-muted-foreground">Purchase register</p>
-          </div>
-          <div className="text-right">
-            <h1 className="text-xl font-semibold">{settings?.businessName || "Rice Mill Management System"}</h1>
-            {settings?.businessNameUrdu && (
-              <p className="font-urdu text-base">{settings.businessNameUrdu}</p>
-            )}
-            <p className="print-subtitle">Purchases</p>
-          </div>
-        </div>
-
-        <div className="print-summary grid grid-cols-3 gap-3 mb-4">
-          <div className="print-summary-card">
-            <p className="text-xs text-muted-foreground">Total Amount</p>
-            <p className="text-lg font-semibold font-mono">Rs. {purchaseTotals.total.toLocaleString()}</p>
-          </div>
-          <div className="print-summary-card">
-            <p className="text-xs text-muted-foreground">Paid</p>
-            <p className="text-lg font-semibold font-mono">Rs. {purchaseTotals.paid.toLocaleString()}</p>
-          </div>
-          <div className="print-summary-card">
-            <p className="text-xs text-muted-foreground">Due</p>
-            <p className="text-lg font-semibold font-mono">Rs. {purchaseTotals.due.toLocaleString()}</p>
-          </div>
-        </div>
-
-        <div className="print-area">
-          <table className="print-table">
-            <thead>
-              <tr>
-                <th>Invoice #</th>
-                <th>Date</th>
-                <th>Supplier</th>
-                <th>Vehicle</th>
-                <th>Total</th>
-                <th>Paid</th>
-                <th>Balance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {purchasesWithSupplier.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center text-muted-foreground py-6">
-                    No purchases to print
-                  </td>
-                </tr>
-              ) : (
-                purchasesWithSupplier.map((item) => {
-                  const total = parseFloat(item.totalAmount || "0") || 0;
-                  const paid = parseFloat(item.paidAmount || "0") || 0;
-                  const due = Math.max(total - paid, 0);
-                  return (
-                    <tr key={item.id}>
-                      <td className="font-mono">{item.invoiceNumber}</td>
-                      <td>{format(new Date(item.purchaseDate), "dd MMM yyyy")}</td>
-                      <td>
-                        <div className="flex flex-col gap-0.5">
-                          <span className="font-medium">{item.supplier?.name || "-"}</span>
-                          {item.supplier?.nameUrdu && <span className="text-sm font-urdu">{item.supplier.nameUrdu}</span>}
-                        </div>
-                      </td>
-                      <td className="font-mono">{item.vehicleNumber || "-"}</td>
-                      <td className="text-right font-mono">Rs. {total.toLocaleString()}</td>
-                      <td className="text-right font-mono">Rs. {paid.toLocaleString()}</td>
-                      <td className="text-right font-mono">{due > 0 ? `Rs. ${due.toLocaleString()}` : "Paid"}</td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </>
   );
 }

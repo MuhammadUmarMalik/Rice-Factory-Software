@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { Plus, Play, CheckCircle, Package, ArrowRight, Scale, Factory } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DataTable, type Column } from "@/components/data-table";
 import {
   Dialog,
   DialogContent,
@@ -48,10 +49,19 @@ const completeFormSchema = z.object({
   outputProductId: z.string().min(1, "Output product is required"),
   outputQuantity: z.string().min(1, "Output quantity is required"),
   wastageQuantity: z.string().default("0"),
+  outputCategory: z.enum(["rice_head", "broken_rice", "rice_polish", "kacher_nakoo"]),
 });
 
 type ProcessingFormData = z.infer<typeof processingFormSchema>;
 type CompleteFormData = z.infer<typeof completeFormSchema>;
+
+const outputCategoryOptions: { value: CompleteFormData["outputCategory"]; label: string }[] = [
+  { value: "rice_head", label: "Rice Head" },
+  { value: "broken_rice", label: "Broken Rice" },
+  { value: "rice_polish", label: "Rice Polish" },
+  { value: "kacher_nakoo", label: "Kacher (Nakoo)" },
+];
+type ProcessingWithProducts = Processing & { sourceProduct?: Product; outputProduct?: Product };
 
 export default function ProcessingPage() {
   const { t, isRTL, language } = useLanguage();
@@ -59,6 +69,8 @@ export default function ProcessingPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
   const [selectedProcessing, setSelectedProcessing] = useState<Processing | null>(null);
+  const [detailProcessing, setDetailProcessing] = useState<(Processing & { sourceProduct?: Product; outputProduct?: Product }) | null>(null);
+  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
 
   const form = useForm<ProcessingFormData>({
     resolver: zodResolver(processingFormSchema),
@@ -76,6 +88,7 @@ export default function ProcessingPage() {
       outputProductId: "",
       outputQuantity: "",
       wastageQuantity: "0",
+      outputCategory: "rice_head",
     },
   });
 
@@ -127,7 +140,7 @@ export default function ProcessingPage() {
       apiRequest("PATCH", `/api/processing/${id}/start`, {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/processing"] });
-      toast({ title: language === "ur" ? "پروسیسنگ شروع ہو گئی" : "Processing started" });
+      toast({ title: language === "ur" ? "???????? ???? ?? ???" : "Processing started" });
     },
     onError: (err: any) => {
       toast({ title: "Start failed", description: formatError(err), variant: "destructive" });
@@ -140,6 +153,7 @@ export default function ProcessingPage() {
         outputProductId: parseInt(data.outputProductId),
         outputQuantity: data.outputQuantity,
         wastageQuantity: data.wastageQuantity,
+        outputCategory: data.outputCategory,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/processing"] });
@@ -147,7 +161,7 @@ export default function ProcessingPage() {
       setIsCompleteDialogOpen(false);
       setSelectedProcessing(null);
       completeForm.reset();
-      toast({ title: language == "ur" ? "پروسیسنگ مکمل ہو گئی" : "Processing completed" });
+      toast({ title: language == "ur" ? "???????? ???? ?? ???" : "Processing completed" });
     },
     onError: (err: any) => {
       toast({ title: "Complete failed", description: formatError(err), variant: "destructive" });
@@ -169,6 +183,7 @@ export default function ProcessingPage() {
       outputProductId: (processing.outputProductId ?? processing.sourceProductId).toString(),
       outputQuantity: "",
       wastageQuantity: "0",
+      outputCategory: processing.outputCategory ?? "rice_head",
     });
     setIsCompleteDialogOpen(true);
   };
@@ -177,8 +192,109 @@ export default function ProcessingPage() {
   const inProgressItems = processingList.filter(p => p.status === "in_progress");
   const completedItems = processingList.filter(p => p.status === "completed");
 
+  const formatDateSafe = (value?: any) => (value ? format(new Date(value), "dd MMM yyyy") : "—");
+
+  const columns: Column<ProcessingWithProducts>[] = [
+    {
+      key: "batchNumber",
+      title: "Batch",
+      render: (item) => <span className="font-mono text-sm">{item.batchNumber}</span>,
+    },
+    {
+      key: "sourceProduct",
+      title: "Source",
+      render: (item) => (
+        <div className="flex flex-col">
+          <span className="font-medium">{item.sourceProduct?.name || "-"}</span>
+          {item.sourceProduct?.nameUrdu && <span className="text-xs text-muted-foreground font-urdu">{item.sourceProduct.nameUrdu}</span>}
+        </div>
+      ),
+    },
+    {
+      key: "sourceQuantity",
+      title: "Input (kg)",
+      align: "right",
+      render: (item) => <span className="font-mono">{parseFloat(item.sourceQuantity).toLocaleString()}</span>,
+    },
+    {
+      key: "outputProduct",
+      title: "Output",
+      render: (item) => (
+        <div className="flex flex-col">
+          <span>{item.outputProduct?.name || "—"}</span>
+          {item.outputCategory && (
+            <span className="text-xs text-muted-foreground">
+              {outputCategoryOptions.find(opt => opt.value === item.outputCategory)?.label || item.outputCategory}
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "outputQuantity",
+      title: "Output (kg)",
+      align: "right",
+      render: (item) => item.outputQuantity ? <span className="font-mono">{parseFloat(item.outputQuantity).toLocaleString()}</span> : "—",
+    },
+    {
+      key: "wastageQuantity",
+      title: "Wastage",
+      align: "right",
+      render: (item) => item.wastageQuantity ? <span className="font-mono text-muted-foreground">{parseFloat(item.wastageQuantity).toLocaleString()}</span> : "—",
+    },
+    {
+      key: "status",
+      title: "Status",
+      align: "center",
+      render: (item) => (
+        <Badge variant={
+          item.status === "completed" ? "default" :
+          item.status === "in_progress" ? "secondary" : "outline"
+        }>
+          {item.status === "completed" ? t("completed") :
+           item.status === "in_progress" ? t("inProgress") : t("pending")}
+        </Badge>
+      ),
+    },
+    {
+      key: "dates",
+      title: "Dates",
+      render: (item) => (
+        <div className="text-xs text-muted-foreground">
+          <div>Start: {formatDateSafe(item.startDate)}</div>
+          <div>Done: {item.completedDate ? formatDateSafe(item.completedDate) : "—"}</div>
+        </div>
+      ),
+    },
+    {
+      key: "actions",
+      title: "Actions",
+      align: "center",
+      render: (item) => (
+        <div className="flex gap-2 justify-center">
+          {item.status === "pending" && (
+            <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleStart(item); }}>
+              <Play className="h-3 w-3" />
+              {language === "ur" ? "???? ????" : "Start"}
+            </Button>
+          )}
+          {item.status === "in_progress" && (
+            <Button size="sm" onClick={(e) => { e.stopPropagation(); handleComplete(item); }}>
+              <CheckCircle className="h-3 w-3" />
+              {language === "ur" ? "???? ????" : "Complete"}
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ];
+
   const ProcessingCard = ({ item }: { item: Processing & { sourceProduct?: Product; outputProduct?: Product } }) => (
-    <Card className="hover-elevate" data-testid={`processing-card-${item.id}`}>
+    <Card
+      className="hover-elevate cursor-pointer"
+      data-testid={`processing-card-${item.id}`}
+      onClick={() => setDetailProcessing(item)}
+    >
       <CardContent className="p-4">
         <div className={`flex items-start justify-between gap-2 mb-3 ${isRTL ? "flex-row-reverse" : ""}`}>
           <div className={isRTL ? "text-right" : ""}>
@@ -207,6 +323,12 @@ export default function ProcessingPage() {
             </>
           )}
         </div>
+        {item.outputCategory && (
+          <p className={`text-xs mb-3 ${isRTL ? "text-right" : ""}`}>
+            <span className="font-semibold text-muted-foreground">Output:</span>{" "}
+            {outputCategoryOptions.find(opt => opt.value === item.outputCategory)?.label || item.outputCategory}
+          </p>
+        )}
 
         {item.notes && (
           <p className="text-sm text-muted-foreground mb-3 truncate">{item.notes}</p>
@@ -217,22 +339,22 @@ export default function ProcessingPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => handleStart(item)}
+              onClick={(e) => { e.stopPropagation(); handleStart(item); }}
               disabled={startMutation.isPending}
               data-testid={`button-start-${item.id}`}
             >
               <Play className="h-3 w-3" />
-              {language === "ur" ? "شروع کریں" : "Start"}
+              {language === "ur" ? "???? ????" : "Start"}
             </Button>
           )}
           {item.status === "in_progress" && (
             <Button
               size="sm"
-              onClick={() => handleComplete(item)}
+              onClick={(e) => { e.stopPropagation(); handleComplete(item); }}
               data-testid={`button-complete-${item.id}`}
             >
               <CheckCircle className="h-3 w-3" />
-              {language === "ur" ? "مکمل کریں" : "Complete"}
+              {language === "ur" ? "???? ????" : "Complete"}
             </Button>
           )}
         </div>
@@ -246,97 +368,129 @@ export default function ProcessingPage() {
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("processing")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "سٹاک پروسیسنگ کا انتظام" : "Manage stock processing workflow"}
+            {language === "ur" ? "???? ???????? ?? ??????" : "Manage stock processing workflow"}
           </p>
         </div>
-        <Button onClick={handleAddNew} data-testid="button-add-processing">
-          <Plus className="h-4 w-4" />
-          {t("processStock")}
-        </Button>
+        <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+          <div className="flex border rounded-md overflow-hidden">
+            <Button
+              variant={viewMode === "cards" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("cards")}
+            >
+              Cards
+            </Button>
+            <Button
+              variant={viewMode === "table" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("table")}
+            >
+              Table
+            </Button>
+          </div>
+          <Button onClick={handleAddNew} data-testid="button-add-processing">
+            <Plus className="h-4 w-4" />
+            {t("processStock")}
+          </Button>
+        </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card>
-          <CardHeader className={`pb-3 ${isRTL ? "text-right" : ""}`}>
-            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
-                <Package className="h-4 w-4 text-muted-foreground" />
-              </div>
-              {t("pending")}
-              <Badge variant="secondary" className="ml-auto">{pendingItems.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {isLoading ? (
-              Array.from({ length: 2 }).map((_, i) => (
-                <Skeleton key={i} className="h-32 w-full" />
-              ))
-            ) : pendingItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">
-                {language === "ur" ? "کوئی زیر التواء آئٹم نہیں" : "No pending items"}
-              </p>
-            ) : (
-              pendingItems.map((item) => <ProcessingCard key={item.id} item={item} />)
-            )}
-          </CardContent>
-        </Card>
+      {viewMode === "cards" ? (
+        <div className="grid gap-6 lg:grid-cols-3">
+          <Card>
+            <CardHeader className={`pb-3 ${isRTL ? "text-right" : ""}`}>
+              <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
+                  <Package className="h-4 w-4 text-muted-foreground" />
+                </div>
+                {t("pending")}
+                <Badge variant="secondary" className="ml-auto">{pendingItems.length}</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {isLoading ? (
+                Array.from({ length: 2 }).map((_, i) => (
+                  <Skeleton key={i} className="h-32 w-full" />
+                ))
+              ) : pendingItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">
+                  {language === "ur" ? "???? ??? ?????? ???? ????" : "No pending items"}
+                </p>
+              ) : (
+                pendingItems.map((item) => <ProcessingCard key={item.id} item={item} />)
+              )}
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className={`pb-3 ${isRTL ? "text-right" : ""}`}>
-            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-chart-3/10">
-                <Factory className="h-4 w-4 text-chart-3" />
-              </div>
-              {t("inProgress")}
-              <Badge variant="default" className="ml-auto">{inProgressItems.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {isLoading ? (
-              Array.from({ length: 2 }).map((_, i) => (
-                <Skeleton key={i} className="h-32 w-full" />
-              ))
-            ) : inProgressItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">
-                {language === "ur" ? "کوئی جاری پروسیسنگ نہیں" : "No items in progress"}
-              </p>
-            ) : (
-              inProgressItems.map((item) => <ProcessingCard key={item.id} item={item} />)
-            )}
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader className={`pb-3 ${isRTL ? "text-right" : ""}`}>
+              <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-chart-3/10">
+                  <Factory className="h-4 w-4 text-chart-3" />
+                </div>
+                {t("inProgress")}
+                <Badge variant="default" className="ml-auto">{inProgressItems.length}</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {isLoading ? (
+                Array.from({ length: 2 }).map((_, i) => (
+                  <Skeleton key={i} className="h-32 w-full" />
+                ))
+              ) : inProgressItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">
+                  {language === "ur" ? "???? ???? ???????? ????" : "No items in progress"}
+                </p>
+              ) : (
+                inProgressItems.map((item) => <ProcessingCard key={item.id} item={item} />)
+              )}
+            </CardContent>
+          </Card>
 
+          <Card>
+            <CardHeader className={`pb-3 ${isRTL ? "text-right" : ""}`}>
+              <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+                  <CheckCircle className="h-4 w-4 text-primary" />
+                </div>
+                {t("completed")}
+                <Badge variant="outline" className="ml-auto">{completedItems.length}</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {isLoading ? (
+                Array.from({ length: 2 }).map((_, i) => (
+                  <Skeleton key={i} className="h-32 w-full" />
+                ))
+              ) : completedItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">
+                  {language === "ur" ? "???? ???? ???? ????" : "No completed items"}
+                </p>
+              ) : (
+                completedItems.slice(0, 5).map((item) => <ProcessingCard key={item.id} item={item} />)
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      ) : (
         <Card>
-          <CardHeader className={`pb-3 ${isRTL ? "text-right" : ""}`}>
-            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-                <CheckCircle className="h-4 w-4 text-primary" />
-              </div>
-              {t("completed")}
-              <Badge variant="outline" className="ml-auto">{completedItems.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {isLoading ? (
-              Array.from({ length: 2 }).map((_, i) => (
-                <Skeleton key={i} className="h-32 w-full" />
-              ))
-            ) : completedItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">
-                {language === "ur" ? "کوئی مکمل آئٹم نہیں" : "No completed items"}
-              </p>
-            ) : (
-              completedItems.slice(0, 5).map((item) => <ProcessingCard key={item.id} item={item} />)
-            )}
+          <CardContent className="pt-6">
+            <DataTable
+              columns={columns}
+              data={processingList}
+              isLoading={isLoading}
+              onRowClick={(row) => setDetailProcessing(row)}
+              testIdPrefix="processing"
+            />
           </CardContent>
         </Card>
-      </div>
+      )}
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-              {language === "ur" ? "نئی پروسیسنگ" : "New Processing"}
+              {language === "ur" ? "??? ????????" : "New Processing"}
             </DialogTitle>
           </DialogHeader>
           <Form {...form}>
@@ -350,7 +504,7 @@ export default function ProcessingPage() {
                     <Select onValueChange={field.onChange} value={field.value || undefined}>
                       <FormControl>
                         <SelectTrigger data-testid="select-source-product">
-                          <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select product"} />
+                          <SelectValue placeholder={language === "ur" ? "????? ????" : "Select product"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -383,11 +537,11 @@ export default function ProcessingPage() {
                 name="outputProductId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("outputProduct")} ({language === "ur" ? "اختیاری" : "Optional"})</FormLabel>
+                    <FormLabel>{t("outputProduct")} ({language === "ur" ? "???????" : "Optional"})</FormLabel>
                     <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl>
                         <SelectTrigger data-testid="select-output-product">
-                          <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select product"} />
+                          <SelectValue placeholder={language === "ur" ? "????? ????" : "Select product"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -408,7 +562,7 @@ export default function ProcessingPage() {
                 name="notes"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{language === "ur" ? "نوٹس" : "Notes"}</FormLabel>
+                    <FormLabel>{language === "ur" ? "????" : "Notes"}</FormLabel>
                     <FormControl>
                       <Textarea {...field} rows={2} data-testid="input-notes" />
                     </FormControl>
@@ -433,7 +587,7 @@ export default function ProcessingPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-              {language === "ur" ? "پروسیسنگ مکمل کریں" : "Complete Processing"}
+              {language === "ur" ? "???????? ???? ????" : "Complete Processing"}
             </DialogTitle>
           </DialogHeader>
           <Form {...completeForm}>
@@ -449,13 +603,37 @@ export default function ProcessingPage() {
                     <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl>
                         <SelectTrigger data-testid="select-complete-output">
-                          <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select product"} />
+                          <SelectValue placeholder={language === "ur" ? "????? ????" : "Select product"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
                         {products.map((p) => (
                           <SelectItem key={p.id} value={p.id.toString()}>
                             {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                </FormItem>
+              )}
+            />
+              <FormField
+                control={completeForm.control}
+                name="outputCategory"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Output Type</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-output-category">
+                          <SelectValue placeholder="Select output type" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {outputCategoryOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -496,11 +674,76 @@ export default function ProcessingPage() {
                 </Button>
                 <Button type="submit" disabled={completeMutation.isPending}>
                   <CheckCircle className="h-4 w-4" />
-                  {completeMutation.isPending ? t("loading") : (language === "ur" ? "مکمل کریں" : "Complete")}
+                  {completeMutation.isPending ? t("loading") : (language === "ur" ? "???? ????" : "Complete")}
                 </Button>
               </div>
             </form>
           </Form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!detailProcessing} onOpenChange={(open) => !open && setDetailProcessing(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className={isRTL ? "text-right" : ""}>
+              {detailProcessing?.batchNumber || "Processing Details"}
+            </DialogTitle>
+          </DialogHeader>
+          {detailProcessing && (
+            <div className="space-y-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Status</span>
+                <Badge variant={
+                  detailProcessing.status === "completed" ? "default" :
+                  detailProcessing.status === "in_progress" ? "secondary" : "outline"
+                }>
+                  {detailProcessing.status === "completed" ? t("completed") :
+                   detailProcessing.status === "in_progress" ? t("inProgress") : t("pending")}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-muted-foreground">Source</p>
+                  <p className="font-medium">{detailProcessing.sourceProduct?.name || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Output</p>
+                  <p className="font-medium">{detailProcessing.outputProduct?.name || "-"}</p>
+                  {detailProcessing.outputCategory && (
+                    <p className="text-xs text-muted-foreground">
+                      {outputCategoryOptions.find(opt => opt.value === detailProcessing.outputCategory)?.label || detailProcessing.outputCategory}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Input Qty (kg)</p>
+                  <p className="font-mono">{parseFloat(detailProcessing.sourceQuantity).toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Output Qty (kg)</p>
+                  <p className="font-mono">{detailProcessing.outputQuantity ? parseFloat(detailProcessing.outputQuantity).toLocaleString() : "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Wastage (kg)</p>
+                  <p className="font-mono">{detailProcessing.wastageQuantity ? parseFloat(detailProcessing.wastageQuantity).toLocaleString() : "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Start</p>
+                  <p>{formatDateSafe(detailProcessing.startDate)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Completed</p>
+                  <p>{detailProcessing.completedDate ? formatDateSafe(detailProcessing.completedDate) : "—"}</p>
+                </div>
+              </div>
+              {detailProcessing.notes && (
+                <div className="text-sm">
+                  <p className="text-muted-foreground">Notes</p>
+                  <p>{detailProcessing.notes}</p>
+                </div>
+              )}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

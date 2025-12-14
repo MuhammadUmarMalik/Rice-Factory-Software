@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Eye, Printer, Truck, FileText } from "lucide-react";
+import { Plus, Eye, Truck, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -97,10 +97,6 @@ export default function SalesPage() {
       customer: customerMap.get(typeof s.customerId === "string" ? parseInt(s.customerId) : s.customerId),
     }));
   }, [sales, customers]);
-
-  const handlePrint = () => {
-    if (typeof window !== "undefined") window.print();
-  };
 
   const getUnitForProduct = (productId?: string) =>
     products.find((p) => p.id.toString() === productId)?.unit;
@@ -280,9 +276,6 @@ export default function SalesPage() {
         <div className={`flex gap-1 justify-center ${isRTL ? "flex-row-reverse" : ""}`}>
           <Button size="icon" variant="ghost" data-testid={`button-view-${item.id}`}>
             <Eye className="h-4 w-4" />
-          </Button>
-          <Button size="icon" variant="ghost" onClick={handlePrint} data-testid={`button-print-${item.id}`}>
-            <Printer className="h-4 w-4" />
           </Button>
         </div>
       ),

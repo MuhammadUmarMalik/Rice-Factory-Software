@@ -688,6 +688,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
         outputProductId: z.number().int().positive(),
         outputQuantity: numericString,
         wastageQuantity: numericString.optional(),
+        outputCategory: z.enum(["rice_head", "broken_rice", "rice_polish", "kacher_nakoo"]),
       }).parse(req.body);
 
       if (existing.status === "pending") {
@@ -699,6 +700,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
         outputProductId: body.outputProductId,
         outputQuantity: body.outputQuantity,
         wastageQuantity: body.wastageQuantity,
+        outputCategory: body.outputCategory,
       });
 
       res.json(batch);
