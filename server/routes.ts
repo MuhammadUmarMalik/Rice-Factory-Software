@@ -438,12 +438,14 @@ export async function registerRoutes(
       const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
 
       const detailed = await Promise.all(
-        vouchers.map(async (v) => {
-          const withLines = await storage.getReceiptVoucher(v.id);
-          const lines = withLines?.lines || [];
-          const primaryAccountName =
-            lines.length > 0 ? accountMap.get(lines[0].accountId) || "" : "";
-          return { ...v, lines, primaryAccountName };
+        vouchers
+          .filter((v) => v.voucherType === "CR")
+          .map(async (v) => {
+            const withLines = await storage.getReceiptVoucher(v.id);
+            const lines = withLines?.lines || [];
+            const primaryAccountName =
+              lines.length > 0 ? accountMap.get(lines[0].accountId) || "" : "";
+            return { ...v, lines, primaryAccountName };
         })
       );
 
@@ -469,7 +471,7 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id);
       const voucher = await storage.getReceiptVoucher(id);
-      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      if (!voucher || voucher.voucherType !== "CR") return res.status(404).json({ error: "Voucher not found" });
       res.json(voucher);
     } catch (error) {
       console.error(error);
@@ -485,7 +487,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   app.post("/api/receipts", async (req, res) => {
     try {
       const { lines, ...payload } = req.body;
-      const header = receiptHeaderSchema.parse(payload);
+      const header = receiptHeaderSchema.parse({ ...payload, voucherType: "CR" });
       const parsedLines = receiptLinesSchema.parse(lines || []);
       const voucher = await storage.createReceiptVoucher(header, parsedLines);
       res.status(201).json(voucher);
@@ -504,8 +506,12 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   app.patch("/api/receipts/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "CR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
       const { lines, ...payload } = req.body;
-      const header = receiptHeaderSchemaPartial.parse(payload);
+      const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "CR" });
       const parsedLines = receiptLinesSchema.parse(lines || []);
       const voucher = await storage.updateReceiptVoucher(id, header, parsedLines);
       if (!voucher) return res.status(404).json({ error: "Voucher not found" });
@@ -525,6 +531,120 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   app.delete("/api/receipts/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "CR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
+      const ok = await storage.deleteReceiptVoucher(id);
+      if (!ok) return res.status(404).json({ error: "Voucher not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete voucher" });
+    }
+  });
+
+  // Cash Payment Vouchers (Debit)
+  app.get("/api/payments", async (_req, res) => {
+    try {
+      const [vouchers, accountsList] = await Promise.all([
+        storage.getReceiptVouchers(),
+        storage.getAccounts(),
+      ]);
+      const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
+
+      const detailed = await Promise.all(
+        vouchers
+          .filter((v) => v.voucherType === "DR")
+          .map(async (v) => {
+            const withLines = await storage.getReceiptVoucher(v.id);
+            const lines = withLines?.lines || [];
+            const primaryAccountName =
+              lines.length > 0 ? accountMap.get(lines[0].accountId) || "" : "";
+            return { ...v, lines, primaryAccountName };
+          })
+      );
+
+      res.json(detailed);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch vouchers" });
+    }
+  });
+
+  app.get("/api/payments/next-number", async (_req, res) => {
+    try {
+      const next = await storage.getNextReceiptVoucherNumber("DR");
+      res.json({ voucherNumber: next });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher number" });
+    }
+  });
+
+  app.get("/api/payments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const voucher = await storage.getReceiptVoucher(id);
+      if (!voucher || voucher.voucherType !== "DR") return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher" });
+    }
+  });
+
+  app.post("/api/payments", async (req, res) => {
+    try {
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchema.parse({ ...payload, voucherType: "DR" });
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.createReceiptVoucher(header, parsedLines);
+      res.status(201).json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to create voucher" });
+    }
+  });
+
+  app.patch("/api/payments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "DR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "DR" });
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.updateReceiptVoucher(id, header, parsedLines);
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to update voucher" });
+    }
+  });
+
+  app.delete("/api/payments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "DR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
       const ok = await storage.deleteReceiptVoucher(id);
       if (!ok) return res.status(404).json({ error: "Voucher not found" });
       res.status(204).send();
