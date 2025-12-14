@@ -25,6 +25,8 @@ import SalesReport from "@/pages/reports/sales";
 import Ledger from "@/pages/reports/ledger";
 import TrialBalance from "@/pages/reports/trial-balance";
 import ProfitLoss from "@/pages/reports/profit-loss";
+import Receipts from "@/pages/receipts";
+import Payments from "@/pages/payments";
 
 function Router() {
   return (
@@ -32,6 +34,8 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/products" component={Products} />
       <Route path="/purchases" component={Purchases} />
+      <Route path="/receipts" component={Receipts} />
+      <Route path="/payments" component={Payments} />
       <Route path="/processing" component={Processing} />
       <Route path="/sales" component={Sales} />
       <Route path="/settings" component={Settings} />

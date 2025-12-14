@@ -75,6 +75,16 @@ export const translations = {
     // Reports
     stockReport: "Stock Report",
     purchaseReport: "Purchase Report",
+    cashReceipts: "Cash Receipts",
+    cashPayments: "Cash Payments",
+    voucherNumber: "Voucher Number",
+    voucherDate: "Voucher Date",
+    voucherType: "Voucher Type",
+    account: "Account",
+    narration: "Narration",
+    debit: "Debit",
+    credit: "Credit",
+    amountInWords: "Amount in Words",
     salesReport: "Sales Report",
     ledger: "Ledger",
     trialBalance: "Trial Balance",
@@ -112,8 +122,6 @@ export const translations = {
     // Additional
     saveSettings: "Save Settings",
     actions: "Actions",
-    debit: "Debit",
-    credit: "Credit",
   },
   ur: {
     // Navigation
@@ -189,6 +197,15 @@ export const translations = {
     // Reports
     stockReport: "سٹاک رپورٹ",
     purchaseReport: "خریداری رپورٹ",
+    cashReceipts: "کیس رسید",
+    voucherNumber: "واؤچر نمبر",
+    voucherDate: "واؤچر تاریخ",
+    voucherType: "واؤچر قسم",
+    account: "کھاتہ",
+    narration: "تفصیل",
+    debit: "ڈیبٹ",
+    credit: "کریڈٹ",
+    amountInWords: "رقم الفاظ میں",
     salesReport: "فروخت رپورٹ",
     ledger: "کھاتہ",
     trialBalance: "ٹرائل بیلنس",
@@ -226,8 +243,6 @@ export const translations = {
     // Additional
     saveSettings: "ترتیبات محفوظ کریں",
     actions: "ایکشنز",
-    debit: "ڈیبٹ",
-    credit: "کریڈٹ",
   },
 } as const;
 
