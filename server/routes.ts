@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema } from "@shared/schema";
+import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema } from "@shared/schema";
 import { z } from "zod";
 import { format } from "date-fns";
 import { promises as fs } from "fs";
@@ -52,11 +52,37 @@ const purchaseChargesSchema = z.array(z.object({
   accountId: z.number().int().positive().optional(),
 })).optional().default([]);
 
+// Coerce date-like payloads (string/number/Date) into Date for purchases
+const purchaseInputSchema = insertPurchaseSchema
+  .omit({ purchaseDate: true, dueDate: true })
+  .extend({
+    purchaseDate: z.preprocess((val) => {
+      if (val === null || val === undefined || val === "") return undefined;
+      return new Date(val as any);
+    }, z.date().optional()),
+    dueDate: z.preprocess((val) => {
+      if (val === null || val === undefined || val === "") return undefined;
+      return new Date(val as any);
+    }, z.date().optional()),
+  });
+
 const saleItemsSchema = z.array(z.object({
   productId: z.number().int().positive(),
   quantity: numericString,
   pricePerUnit: numericString,
 })).min(1);
+
+// Receipt lines should be supplied without a voucherId; it gets attached inside the transaction
+const receiptLinesSchema = z.array(
+  insertReceiptVoucherLineSchema
+    .omit({ voucherId: true })
+    .extend({
+      debit: numericString.default("0"),
+      credit: numericString.default("0"),
+      narration: z.string().optional(),
+      accountId: z.number().int().positive(),
+    })
+).min(1);
 
 const productSchema = insertProductSchema.extend({
   currentStock: numericString.optional(),
@@ -375,6 +401,16 @@ export async function registerRoutes(
   });
 
   // Purchases CRUD
+  app.get("/api/purchases/next-bill-number", async (_req, res) => {
+    try {
+      const billNo = await storage.getNextPurchaseBillNumber();
+      res.json({ billNo });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to get next bill number" });
+    }
+  });
+
   app.get("/api/purchases", async (req, res) => {
     try {
       const purchases = await storage.getPurchases();
@@ -401,8 +437,8 @@ export async function registerRoutes(
 
   app.post("/api/purchases", async (req, res) => {
     try {
-      const { items, charges, ...purchaseData } = req.body;
-      const data = insertPurchaseSchema.parse(purchaseData);
+      const { items, charges, ...purchaseBody } = req.body;
+      const data = purchaseInputSchema.parse(purchaseBody);
       const parsedItems = purchaseItemsSchema.parse(items || []);
       const parsedCharges = purchaseChargesSchema.parse(charges || []);
       const purchase = await storage.createPurchase(data, parsedItems, parsedCharges);
@@ -416,13 +452,239 @@ export async function registerRoutes(
     }
   });
 
+  // Receipt Vouchers
+  app.get("/api/receipts", async (_req, res) => {
+    try {
+      const [vouchers, accountsList] = await Promise.all([
+        storage.getReceiptVouchers(),
+        storage.getAccounts(),
+      ]);
+      const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
+
+      const detailed = await Promise.all(
+        vouchers
+          .filter((v) => v.voucherType === "CR")
+          .map(async (v) => {
+            const withLines = await storage.getReceiptVoucher(v.id);
+            const lines = withLines?.lines || [];
+            const primaryAccountName =
+              lines.length > 0 ? accountMap.get(lines[0].accountId) || "" : "";
+            return { ...v, lines, primaryAccountName };
+        })
+      );
+
+      res.json(detailed);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch vouchers" });
+    }
+  });
+
+  app.get("/api/receipts/next-number", async (req, res) => {
+    try {
+      const type = (req.query.type as string) || "CR";
+      const next = await storage.getNextReceiptVoucherNumber(type);
+      res.json({ voucherNumber: next });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher number" });
+    }
+  });
+
+  app.get("/api/receipts/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const voucher = await storage.getReceiptVoucher(id);
+      if (!voucher || voucher.voucherType !== "CR") return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher" });
+    }
+  });
+
+const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
+  voucherDate: z.union([z.string(), z.date(), z.number()]).transform((val) => new Date(val)),
+});
+  const receiptHeaderSchemaPartial = receiptHeaderSchema.partial();
+
+  app.post("/api/receipts", async (req, res) => {
+    try {
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchema.parse({ ...payload, voucherType: "CR" });
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.createReceiptVoucher(header, parsedLines);
+      res.status(201).json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to create voucher" });
+    }
+  });
+
+  app.patch("/api/receipts/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "CR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "CR" });
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.updateReceiptVoucher(id, header, parsedLines);
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to update voucher" });
+    }
+  });
+
+  app.delete("/api/receipts/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "CR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
+      const ok = await storage.deleteReceiptVoucher(id);
+      if (!ok) return res.status(404).json({ error: "Voucher not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete voucher" });
+    }
+  });
+
+  // Cash Payment Vouchers (Debit)
+  app.get("/api/payments", async (_req, res) => {
+    try {
+      const [vouchers, accountsList] = await Promise.all([
+        storage.getReceiptVouchers(),
+        storage.getAccounts(),
+      ]);
+      const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
+
+      const detailed = await Promise.all(
+        vouchers
+          .filter((v) => v.voucherType === "DR")
+          .map(async (v) => {
+            const withLines = await storage.getReceiptVoucher(v.id);
+            const lines = withLines?.lines || [];
+            const primaryAccountName =
+              lines.length > 0 ? accountMap.get(lines[0].accountId) || "" : "";
+            return { ...v, lines, primaryAccountName };
+          })
+      );
+
+      res.json(detailed);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch vouchers" });
+    }
+  });
+
+  app.get("/api/payments/next-number", async (_req, res) => {
+    try {
+      const next = await storage.getNextReceiptVoucherNumber("DR");
+      res.json({ voucherNumber: next });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher number" });
+    }
+  });
+
+  app.get("/api/payments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const voucher = await storage.getReceiptVoucher(id);
+      if (!voucher || voucher.voucherType !== "DR") return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher" });
+    }
+  });
+
+  app.post("/api/payments", async (req, res) => {
+    try {
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchema.parse({ ...payload, voucherType: "DR" });
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.createReceiptVoucher(header, parsedLines);
+      res.status(201).json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to create voucher" });
+    }
+  });
+
+  app.patch("/api/payments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "DR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
+      const { lines, ...payload } = req.body;
+      const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "DR" });
+      const parsedLines = receiptLinesSchema.parse(lines || []);
+      const voucher = await storage.updateReceiptVoucher(id, header, parsedLines);
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to update voucher" });
+    }
+  });
+
+  app.delete("/api/payments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const current = await storage.getReceiptVoucher(id);
+      if (!current || current.voucherType !== "DR") {
+        return res.status(404).json({ error: "Voucher not found" });
+      }
+      const ok = await storage.deleteReceiptVoucher(id);
+      if (!ok) return res.status(404).json({ error: "Voucher not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete voucher" });
+    }
+  });
+
   app.patch("/api/purchases/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { items, charges, ...purchaseData } = req.body;
-      const data = insertPurchaseSchema.partial().parse(purchaseData);
-      const parsedItems = purchaseItemsSchema.parse(items || []);
-      const parsedCharges = purchaseChargesSchema.parse(charges || []);
+      const { items, charges, ...purchaseBody } = req.body;
+      const data = purchaseInputSchema.partial().parse(purchaseBody);
+      const parsedItems = items ? purchaseItemsSchema.parse(items) : [];
+      const parsedCharges = charges ? purchaseChargesSchema.parse(charges) : [];
       const purchase = await storage.updatePurchase(id, data, parsedItems, parsedCharges);
       if (!purchase) {
         return res.status(404).json({ error: "Purchase not found" });
@@ -546,6 +808,7 @@ export async function registerRoutes(
         outputProductId: z.number().int().positive(),
         outputQuantity: numericString,
         wastageQuantity: numericString.optional(),
+        outputCategory: z.enum(["rice_head", "broken_rice", "rice_polish", "kacher_nakoo"]),
       }).parse(req.body);
 
       if (existing.status === "pending") {
@@ -557,6 +820,7 @@ export async function registerRoutes(
         outputProductId: body.outputProductId,
         outputQuantity: body.outputQuantity,
         wastageQuantity: body.wastageQuantity,
+        outputCategory: body.outputCategory,
       });
 
       res.json(batch);

@@ -25,6 +25,13 @@ import SalesReport from "@/pages/reports/sales";
 import Ledger from "@/pages/reports/ledger";
 import TrialBalance from "@/pages/reports/trial-balance";
 import ProfitLoss from "@/pages/reports/profit-loss";
+import Receipts from "@/pages/receipts";
+import Payments from "@/pages/payments";
+import { useLanguage } from "@/contexts/language-context";
+import Journal from "@/pages/journal";
+
+import Payments from "@/pages/payments";
+
 
 function Router() {
   return (
@@ -32,6 +39,9 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/products" component={Products} />
       <Route path="/purchases" component={Purchases} />
+      <Route path="/receipts" component={Receipts} />
+      <Route path="/payments" component={Payments} />
+      <Route path="/journal" component={Journal} />
       <Route path="/processing" component={Processing} />
       <Route path="/sales" component={Sales} />
       <Route path="/settings" component={Settings} />
@@ -56,13 +66,22 @@ function App() {
     "--sidebar-width-icon": "3rem",
   };
 
+  const Shell = ({ children }: { children: React.ReactNode }) => {
+    const { isRTL } = useLanguage();
+    return (
+      <div className={`flex h-screen w-full ${isRTL ? "flex-row-reverse" : ""}`}>
+        {children}
+      </div>
+    );
+  };
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <LanguageProvider>
           <TooltipProvider>
             <SidebarProvider style={sidebarStyle as React.CSSProperties}>
-              <div className="flex h-screen w-full">
+              <Shell>
                 <AppSidebar />
                 <div className="flex flex-col flex-1 overflow-hidden">
                   <Header />
@@ -70,7 +89,7 @@ function App() {
                     <Router />
                   </main>
                 </div>
-              </div>
+              </Shell>
             </SidebarProvider>
             <Toaster />
           </TooltipProvider>

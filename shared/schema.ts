@@ -172,6 +172,7 @@ export const processing = sqliteTable("processing", {
   sourceProductId: integer("source_product_id").notNull().references(() => products.id),
   sourceQuantity: text("source_quantity").notNull(),
   outputProductId: integer("output_product_id").references(() => products.id),
+  outputCategory: text("output_category"),
   outputQuantity: text("output_quantity"),
   wastageQuantity: text("wastage_quantity"),
   status: text("status", { enum: ["pending", "in_progress", "completed"] }).notNull().default("pending"),
@@ -257,6 +258,48 @@ export const insertLedgerEntrySchema = createInsertSchema(ledgerEntries).omit({
 });
 export type InsertLedgerEntry = z.infer<typeof insertLedgerEntrySchema>;
 export type LedgerEntry = typeof ledgerEntries.$inferSelect;
+
+// Cash Receipt Vouchers
+export const receiptVouchers = sqliteTable("receipt_vouchers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherNumber: text("voucher_number").notNull().unique(),
+  voucherType: text("voucher_type").notNull().default("CR"),
+  voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  totalDebit: text("total_debit").notNull().default("0"),
+  totalCredit: text("total_credit").notNull().default("0"),
+  amountInWords: text("amount_in_words").notNull().default(""),
+  narration: text("narration"),
+  createdBy: integer("created_by").references(() => users.id),
+  updatedBy: integer("updated_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  deletedAt: integer("deleted_at", { mode: "timestamp" }),
+});
+
+export const receiptVoucherLines = sqliteTable("receipt_voucher_lines", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherId: integer("voucher_id").notNull().references(() => receiptVouchers.id, { onDelete: "cascade" }),
+  accountId: integer("account_id").notNull().references(() => accounts.id),
+  narration: text("narration"),
+  debit: text("debit").notNull().default("0"),
+  credit: text("credit").notNull().default("0"),
+});
+
+export const insertReceiptVoucherSchema = createInsertSchema(receiptVouchers).omit({
+  id: true,
+  voucherNumber: true,
+  createdAt: true,
+  updatedAt: true,
+  deletedAt: true,
+});
+export type InsertReceiptVoucher = z.infer<typeof insertReceiptVoucherSchema>;
+export type ReceiptVoucher = typeof receiptVouchers.$inferSelect;
+
+export const insertReceiptVoucherLineSchema = createInsertSchema(receiptVoucherLines).omit({
+  id: true,
+});
+export type InsertReceiptVoucherLine = z.infer<typeof insertReceiptVoucherLineSchema>;
+export type ReceiptVoucherLine = typeof receiptVoucherLines.$inferSelect;
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
@@ -361,6 +404,29 @@ export const saleItemsRelations = relations(saleItems, ({ one }) => ({
 export const ledgerEntriesRelations = relations(ledgerEntries, ({ one }) => ({
   account: one(accounts, {
     fields: [ledgerEntries.accountId],
+    references: [accounts.id],
+  }),
+}));
+
+export const receiptVouchersRelations = relations(receiptVouchers, ({ one, many }) => ({
+  createdByUser: one(users, {
+    fields: [receiptVouchers.createdBy],
+    references: [users.id],
+  }),
+  updatedByUser: one(users, {
+    fields: [receiptVouchers.updatedBy],
+    references: [users.id],
+  }),
+  lines: many(receiptVoucherLines),
+}));
+
+export const receiptVoucherLinesRelations = relations(receiptVoucherLines, ({ one }) => ({
+  voucher: one(receiptVouchers, {
+    fields: [receiptVoucherLines.voucherId],
+    references: [receiptVouchers.id],
+  }),
+  account: one(accounts, {
+    fields: [receiptVoucherLines.accountId],
     references: [accounts.id],
   }),
 }));
