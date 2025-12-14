@@ -807,22 +807,45 @@ export class DatabaseStorage implements IStorage {
     return `${voucherType}-${year}-${String(nextNum).padStart(5, "0")}`;
   }
 
-  private validateBalanced(lines: ReceiptLineInput[]) {
+  private validateBalanced(lines: ReceiptLineInput[], voucherType?: string) {
+    const type = (voucherType || "CR").toUpperCase();
     let totalDebit = 0;
     let totalCredit = 0;
     for (const line of lines) {
       totalDebit += parseAmount(line.debit || "0");
       totalCredit += parseAmount(line.credit || "0");
     }
+
+    if (type === "CR") {
+      if (totalCredit <= 0) throw new Error("Credit amount must be greater than 0");
+      return { totalDebit: 0, totalCredit };
+    }
+    if (type === "DR") {
+      if (totalDebit <= 0) throw new Error("Debit amount must be greater than 0");
+      return { totalDebit, totalCredit: 0 };
+    }
+
     if (Math.abs(totalDebit - totalCredit) > 0.0001) {
       throw new Error("Debit and Credit must be equal");
     }
     return { totalDebit, totalCredit };
   }
 
+  private normalizeReceiptLines(lines: ReceiptLineInput[], voucherType?: string): ReceiptLineInput[] {
+    const type = (voucherType || "CR").toUpperCase();
+    if (type === "CR") {
+      return lines.map((line) => ({ ...line, debit: "0", credit: parseAmount(line.credit || line.debit || "0").toString() }));
+    }
+    if (type === "DR") {
+      return lines.map((line) => ({ ...line, credit: "0", debit: parseAmount(line.debit || line.credit || "0").toString() }));
+    }
+    return lines;
+  }
+
   async createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher> {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
+      const normalizedLines = this.normalizeReceiptLines(lines, data.voucherType);
 
       const year = new Date().getFullYear();
       const [last] = tx.select().from(receiptVouchers)
@@ -831,9 +854,12 @@ export class DatabaseStorage implements IStorage {
         .limit(1)
         .all();
       const nextNum = last ? parseInt(last.voucherNumber.split("-").pop() || "0") + 1 : 1;
-      const voucherNumber = `${data.voucherType || "CR"}-${year}-${String(nextNum).padStart(5, "0")}`;
+      const generatedNumber = `${data.voucherType || "CR"}-${year}-${String(nextNum).padStart(5, "0")}`;
+      const voucherNumber = (data.voucherNumber && data.voucherNumber.trim() !== "")
+        ? data.voucherNumber
+        : generatedNumber;
 
-      const { totalDebit, totalCredit } = this.validateBalanced(lines);
+      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines, data.voucherType || "CR");
       const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
 
       const voucher = tx.insert(receiptVouchers).values({
@@ -845,7 +871,7 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date(),
       }).returning().get();
 
-      for (const line of lines) {
+      for (const line of normalizedLines) {
         const debit = parseAmount(line.debit || "0");
         const credit = parseAmount(line.credit || "0");
         if (debit <= 0 && credit <= 0) continue;
@@ -891,6 +917,7 @@ export class DatabaseStorage implements IStorage {
   async updateReceiptVoucher(id: number, data: Partial<InsertReceiptVoucher>, lines: ReceiptLineInput[]): Promise<ReceiptVoucher | undefined> {
     const existing = await this.getReceiptVoucher(id);
     if (!existing) return undefined;
+    const normalizedLines = this.normalizeReceiptLines(lines, data.voucherType || existing.voucherType);
 
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
@@ -904,7 +931,7 @@ export class DatabaseStorage implements IStorage {
       }
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
 
-      const { totalDebit, totalCredit } = this.validateBalanced(lines);
+      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines, data.voucherType || existing.voucherType || "CR");
       const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
 
       const updated = tx.update(receiptVouchers).set({
@@ -915,7 +942,7 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date(),
       }).where(eq(receiptVouchers.id, id)).returning().get();
 
-      for (const line of lines) {
+      for (const line of normalizedLines) {
         const debit = parseAmount(line.debit || "0");
         const credit = parseAmount(line.credit || "0");
         if (debit <= 0 && credit <= 0) continue;

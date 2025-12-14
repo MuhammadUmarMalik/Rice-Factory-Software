@@ -1,8 +1,9 @@
-﻿import { useEffect, useMemo, useState } from "react";
-import { Calculator, Eye, Trash2, ArrowLeft, Plus } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -16,6 +17,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Form,
@@ -106,7 +108,10 @@ export default function ReceiptsPage() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [listFilter, setListFilter] = useState<"ALL" | "CR" | "DR">("ALL");
+  const [viewId, setViewId] = useState<number | null>(null);
+  const [listFilter] = useState<"ALL" | "CR" | "DR">("CR");
+  const isReadOnly = viewId !== null;
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const buildDefaults = (): ReceiptFormData => ({
     voucherType: "CR",
@@ -128,7 +133,7 @@ export default function ReceiptsPage() {
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
   const { data: receipts = [], isLoading } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const filteredReceipts = useMemo(
-    () => receipts.filter((r) => listFilter === "ALL" || r.voucherType === listFilter),
+    () => receipts.filter((r) => (listFilter === "ALL" || r.voucherType === listFilter) && r.voucherType === "CR"),
     [receipts, listFilter]
   );
 
@@ -148,6 +153,26 @@ export default function ReceiptsPage() {
     }
   }, [isDialogOpen, editingId]);
 
+  useEffect(() => {
+    if (!isDialogOpen) {
+      if (closeTimer.current) { clearTimeout(closeTimer.current); }
+      closeTimer.current = setTimeout(() => {
+        setEditingId(null);
+        setViewId(null);
+        form.reset(buildDefaults());
+      }, 200);
+    } else if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    return () => {
+      if (closeTimer.current) {
+        clearTimeout(closeTimer.current);
+        closeTimer.current = null;
+      }
+    };
+  }, [isDialogOpen]);
+
   const normalizeLines = (data: ReceiptFormData) =>
     (data.lines || [])
       .filter((l) => l.accountId && parseFloat(l.amount || "0") > 0)
@@ -156,7 +181,7 @@ export default function ReceiptsPage() {
         return {
           accountId: parseInt(l.accountId ?? "0"),
           narration: l.narration,
-          debit: amt,
+          debit: "0",
           credit: amt,
         };
       });
@@ -169,8 +194,10 @@ export default function ReceiptsPage() {
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       setIsDialogOpen(false);
       setEditingId(null);
+      setViewId(null);
       toast({ title: t("savedSuccessfully") });
     },
     onError: async (err: any) => {
@@ -187,8 +214,10 @@ export default function ReceiptsPage() {
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       setIsDialogOpen(false);
       setEditingId(null);
+      setViewId(null);
       toast({ title: t("savedSuccessfully") });
     },
     onError: async (err: any) => {
@@ -201,33 +230,54 @@ export default function ReceiptsPage() {
     mutationFn: (id: number) => apiRequest("DELETE", `/api/receipts/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       toast({ title: "Deleted" });
     },
   });
 
+  const loadVoucher = async (id: number) => {
+    const res = await apiRequest("GET", `/api/receipts/${id}`);
+    const voucher: Receipt = await res.json();
+    form.reset({
+      voucherType: "CR",
+      voucherNumber: voucher.voucherNumber,
+      voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
+      narration: voucher.narration || "",
+      lines: (voucher.lines || []).map((l) => ({
+        accountId: l.accountId.toString(),
+        narration: l.narration || "",
+        amount: l.credit || l.debit || "0",
+      })),
+    });
+    setIsDialogOpen(true);
+  };
+
   const handleEdit = async (id: number) => {
     try {
-      const res = await apiRequest("GET", `/api/receipts/${id}`);
-      const voucher: Receipt = await res.json();
       setEditingId(id);
-      setIsDialogOpen(true);
-      form.reset({
-        voucherType: voucher.voucherType as any,
-        voucherNumber: voucher.voucherNumber,
-        voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
-        narration: voucher.narration || "",
-        lines: (voucher.lines || []).map((l) => ({
-          accountId: l.accountId.toString(),
-          narration: l.narration || "",
-          amount: l.debit || l.credit || "0",
-        })),
-      });
+      setViewId(null);
+      await loadVoucher(id);
+    } catch (err: any) {
+      toast({ title: "Failed to load voucher", description: err?.message, variant: "destructive" });
+    }
+  };
+
+  const handleView = async (id: number) => {
+    try {
+      setEditingId(null);
+      setViewId(id);
+      await loadVoucher(id);
     } catch (err: any) {
       toast({ title: "Failed to load voucher", description: err?.message, variant: "destructive" });
     }
   };
 
   const handleSubmit = async (data: ReceiptFormData) => {
+    if (isReadOnly) {
+      setIsDialogOpen(false);
+      setViewId(null);
+      return;
+    }
     if (activeLines.length === 0) {
       toast({ title: "Add at least one line with an account and amount", variant: "destructive" });
       return;
@@ -238,6 +288,7 @@ export default function ReceiptsPage() {
     }
     const payload: ReceiptFormData = {
       ...data,
+      voucherType: "CR",
       lines: activeLines.map((l) => ({
         ...l,
         accountId: l.accountId as string,
@@ -268,7 +319,6 @@ export default function ReceiptsPage() {
     () => activeLines.reduce((sum, l) => sum + (parseFloat(l.amount || "0") || 0), 0),
     [activeLines]
   );
-  const displayDebit = voucherType === "DR" ? totalAmount : 0;
   const displayCredit = voucherType === "CR" ? totalAmount : 0;
   const totalDebit = totalAmount; // kept for list and backend alignment
   const totalCredit = totalAmount;
@@ -279,6 +329,7 @@ export default function ReceiptsPage() {
 
   const startNew = () => {
     setEditingId(null);
+    setViewId(null);
     form.reset(buildDefaults());
     setIsDialogOpen(true);
     fetchNextNumber("CR");
@@ -291,19 +342,29 @@ export default function ReceiptsPage() {
   };
 
   const amountTitle = t("total") || "Amount";
+  const dialogTitle = viewId ? "View Cash Receipt" : editingId ? "Edit Cash Receipt" : "New Cash Receipt";
+
+  const getAccountForReceipt = (r: Receipt) => {
+    const id = r.lines?.[0]?.accountId;
+    if (!id) return undefined;
+    return accounts.find((a) => a.id === id);
+  };
 
   const columns: Column<Receipt>[] = [
     { key: "voucherNumber", title: t("voucherNumber"), render: (r) => <span className="font-mono text-sm">{r.voucherNumber}</span> },
     { key: "voucherDate", title: t("voucherDate"), render: (r) => format(new Date(r.voucherDate), "dd MMM yyyy") },
-    { key: "voucherType", title: t("voucherType"), render: (r) => <span className="font-mono">{r.voucherType}</span> },
     { key: "account", title: t("account"), render: (r) => <span>{accountTitleForRow(r) || "-"}</span> },
     { key: "amount", title: amountTitle, align: "right", render: (r) => {
-      const amt = parseFloat(r.totalDebit || r.totalCredit || "0");
+      const credit = parseFloat(r.totalCredit || "0");
+      const debit = parseFloat(r.totalDebit || "0");
+      const fallback = (r.lines || []).reduce((sum, l) => sum + parseFloat(l.credit || l.debit || "0"), 0);
+      const amt = credit || debit || fallback;
       return <span className="font-mono">{amt.toLocaleString()}</span>;
     } },
     { key: "actions", title: t("actions"), render: (r) => (
       <div className="flex gap-2">
-        <Button size="icon" variant="ghost" onClick={() => handleEdit(r.id)}><Eye className="h-4 w-4" /></Button>
+        <Button size="icon" variant="ghost" onClick={() => handleView(r.id)}><Eye className="h-4 w-4" /></Button>
+        <Button size="icon" variant="ghost" onClick={() => handleEdit(r.id)}><Pencil className="h-4 w-4" /></Button>
         <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(r.id)}><Trash2 className="h-4 w-4" /></Button>
       </div>
     ) },
@@ -315,18 +376,8 @@ export default function ReceiptsPage() {
         <div className="flex items-center gap-3">
           <div>
             <h1 className="text-2xl font-semibold">{t("cashReceipts")}</h1>
-            <p className="text-sm text-muted-foreground">Cash Receipt & Payment Vouchers</p>
+            <p className="text-sm text-muted-foreground">Cash Receipt (credit only)</p>
           </div>
-          <Select value={listFilter} onValueChange={(v) => setListFilter(v as any)}>
-            <SelectTrigger className="w-32">
-              <SelectValue placeholder="Type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All</SelectItem>
-              <SelectItem value="CR">CR</SelectItem>
-              <SelectItem value="DR">DR</SelectItem>
-            </SelectContent>
-          </Select>
         </div>
         <Button onClick={startNew}>
           <Plus className="h-4 w-4" /> {t("add")}
@@ -339,7 +390,13 @@ export default function ReceiptsPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+      <Dialog open={isDialogOpen} onOpenChange={(open) => {
+        setIsDialogOpen(open);
+        if (!open) {
+          setEditingId(null);
+          setViewId(null);
+        }
+      }}>
         <DialogContent className="sm:max-w-5xl w-[100vw] max-h-[95vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center justify-between">
@@ -347,161 +404,210 @@ export default function ReceiptsPage() {
                 <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
-                <DialogTitle>{editingId ? "Edit Cash Receipt" : "New Cash Receipt"}</DialogTitle>
+                <DialogTitle>{dialogTitle}</DialogTitle>
               </div>
-              <Button variant="ghost" onClick={startNew}>Clear</Button>
+              {!isReadOnly && <Button variant="ghost" onClick={startNew}>Clear</Button>}
             </div>
+            <DialogDescription className="sr-only">
+              Cash receipt voucher details
+            </DialogDescription>
           </DialogHeader>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
-              <div className="grid grid-cols-4 gap-4">
-                <FormField
-                  control={form.control}
-                  name="voucherDate"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("voucherDate")}</FormLabel>
-                      <FormControl><Input type="date" {...field} /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="voucherNumber"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("voucherNumber")}</FormLabel>
-                      <FormControl><Input {...field} readOnly placeholder="Auto" /></FormControl>
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="voucherType"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("voucherType")}</FormLabel>
-                      <Select
-                        value={field.value}
-                        onValueChange={(val) => {
-                          field.onChange(val);
-                          fetchNextNumber(val);
-                        }}
-                      >
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder={t("voucherType")} />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="CR">CR</SelectItem>
-                          <SelectItem value="DR">DR</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </FormItem>
-                  )}
-                />
+          {isReadOnly ? (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">{t("voucherDate")}</p>
+                  <p className="font-medium">{format(new Date(form.watch("voucherDate")), "dd MMM yyyy")}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{t("voucherNumber")}</p>
+                  <p className="font-mono">{form.watch("voucherNumber") || "�"}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{t("voucherType")}</p>
+                  <p className="font-medium">CR</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Description</p>
+                <p className="rounded-md border bg-muted/40 p-3 min-h-[72px] whitespace-pre-wrap">
+                  {form.watch("narration") || "�"}
+                </p>
+              </div>
+              <div className="space-y-3">
+                <h3 className="font-semibold">Line</h3>
+                {fields.slice(0, 1).map((field, idx) => {
+                  const accountId = form.watch(`lines.${idx}.accountId`);
+                  const accountSelected = accounts.find(a => a.id.toString() === accountId);
+                  const accountTitle = accountSelected ? `${accountSelected.name} (${accountSelected.type})` : "";
+                  const narration = form.watch(`lines.${idx}.narration`);
+                  const amount = form.watch(`lines.${idx}.amount`);
+                  return (
+                    <div key={field.id} className="rounded-md border bg-muted/30 p-3 space-y-1">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">{t("account")}</span>
+                        <span className="font-medium">{accountTitle || "�"}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">{t("narration")}</span>
+                        <span>{narration || "�"}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-muted-foreground">Amount</span>
+                        <span className="font-mono">{parseFloat(amount || "0").toLocaleString()}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="rounded-md border bg-muted/40 p-4 space-y-1 text-sm">
+                <div className="flex items-center gap-2">
+                  <span>{t("credit")}:</span>
+                  <span className="font-mono">{displayCredit.toLocaleString()}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">{t("amountInWords")}: {amountWords}</div>
+              </div>
+            </div>
+          ) : (
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="voucherDate"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("voucherDate")}</FormLabel>
+                        <FormControl><Input type="date" {...field} /></FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="voucherNumber"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("voucherNumber")}</FormLabel>
+                        <FormControl><Input {...field} readOnly placeholder="Auto" /></FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="voucherType"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("voucherType")}</FormLabel>
+                        <Input readOnly value="CR" />
+                        <input type="hidden" {...field} />
+                      </FormItem>
+                    )}
+                  />
+                </div>
                 <FormField
                   control={form.control}
                   name="narration"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t("narration")}</FormLabel>
-                      <FormControl><Input {...field} /></FormControl>
+                      <FormLabel>Description</FormLabel>
+                      <FormControl>
+                        <Textarea rows={2} placeholder="Add details" {...field} />
+                      </FormControl>
                     </FormItem>
                   )}
                 />
-              </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-medium">Line</h3>
-                </div>
                 <div className="space-y-2">
-                  {fields.slice(0, 1).map((field, idx) => {
-                    const accountId = form.watch(`lines.${idx}.accountId`);
-                    const accountTitle = accounts.find(a => a.id.toString() === accountId)?.name || "";
-                    return (
-                      <div key={field.id} className="grid grid-cols-12 gap-2 items-center">
-                        <div className="col-span-3">
-                          <FormField
-                            control={form.control}
-                            name={`lines.${idx}.accountId`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {idx === 0 && <FormLabel>{t("account")}</FormLabel>}
-                                <Select value={field.value} onValueChange={field.onChange}>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-medium">Line</h3>
+                  </div>
+                  <div className="space-y-2">
+                    {fields.slice(0, 1).map((field, idx) => {
+                      const accountId = form.watch(`lines.${idx}.accountId`);
+                      const accountSelected = accounts.find(a => a.id.toString() === accountId);
+                      const accountTitle = accountSelected ? `${accountSelected.name} (${accountSelected.type})` : "";
+                      return (
+                        <div key={field.id} className="grid grid-cols-12 gap-2 items-center">
+                          <div className="col-span-3">
+                            <FormField
+                              control={form.control}
+                              name={`lines.${idx}.accountId`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {idx === 0 && <FormLabel>{t("account")}</FormLabel>}
+                                  <Select value={field.value} onValueChange={field.onChange}>
+                                    <FormControl>
+                                      <SelectTrigger>
+                                        <SelectValue placeholder="Select account" />
+                                      </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                      {accounts.map((a) => (
+                                        <SelectItem key={a.id} value={a.id.toString()}>
+                                          {a.name} ({a.type})
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            {idx === 0 && <FormLabel>Title</FormLabel>}
+                            <Input value={accountTitle} readOnly />
+                          </div>
+                          <div className="col-span-3">
+                            <FormField
+                              control={form.control}
+                              name={`lines.${idx}.narration`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {idx === 0 && <FormLabel>{t("narration")}</FormLabel>}
+                                  <FormControl><Input {...field} /></FormControl>
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <FormField
+                              control={form.control}
+                              name={`lines.${idx}.amount`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {idx === 0 && <FormLabel>Amount</FormLabel>}
                                   <FormControl>
-                                    <SelectTrigger>
-                                      <SelectValue placeholder="Select account" />
-                                    </SelectTrigger>
+                                    <Input type="number" step="0.01" {...field} />
                                   </FormControl>
-                                  <SelectContent>
-                                    {accounts.map((a) => (
-                                      <SelectItem key={a.id} value={a.id.toString()}>{a.name}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
                         </div>
-                        <div className="col-span-2">
-                          {idx === 0 && <FormLabel>Title</FormLabel>}
-                          <Input value={accountTitle} readOnly />
-                        </div>
-                        <div className="col-span-3">
-                          <FormField
-                            control={form.control}
-                            name={`lines.${idx}.narration`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {idx === 0 && <FormLabel>{t("narration")}</FormLabel>}
-                                <FormControl><Input {...field} /></FormControl>
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <FormField
-                            control={form.control}
-                            name={`lines.${idx}.amount`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {idx === 0 && <FormLabel>Amount</FormLabel>}
-                                <FormControl>
-                                  <Input type="number" step="0.01" {...field} />
-                                </FormControl>
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
 
-              <Card className="bg-muted/40">
-                <CardContent className="pt-4 grid grid-cols-2 gap-4">
-                  <div className="space-y-1 text-sm">
-                    <div className="flex justify-between"><span>{t("debit")}</span><span className="font-mono">{displayDebit.toLocaleString()}</span></div>
-                    <div className="flex justify-between"><span>{t("credit")}</span><span className="font-mono">{displayCredit.toLocaleString()}</span></div>
-                    <div className="text-xs text-muted-foreground">{t("amountInWords")}: {amountWords}</div>
-                  </div>
-                  <div className="flex items-center justify-end gap-2">
-                    <Button type="button" variant="outline" onClick={() => form.reset(buildDefaults())}>Reset</Button>
-                    <Button type="submit" disabled={totalAmount === 0 || createMutation.isPending || updateMutation.isPending}>
-                      <Calculator className="h-4 w-4" />
-                      {editingId ? "Update" : t("save")}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            </form>
-          </Form>
+                <Card className="bg-muted/40">
+                  <CardContent className="pt-4 grid grid-cols-2 gap-4">
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between"><span>{t("credit")}</span><span className="font-mono">{displayCredit.toLocaleString()}</span></div>
+                      <div className="text-xs text-muted-foreground">{t("amountInWords")}: {amountWords}</div>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <Button type="submit" disabled={totalAmount === 0 || createMutation.isPending || updateMutation.isPending}>
+                        <Calculator className="h-4 w-4" />
+                        {editingId ? "Update" : t("save")}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </form>
+            </Form>
+          )}
         </DialogContent>
       </Dialog>
     </div>
