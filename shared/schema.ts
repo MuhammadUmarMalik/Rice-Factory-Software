@@ -172,6 +172,7 @@ export const processing = sqliteTable("processing", {
   sourceProductId: integer("source_product_id").notNull().references(() => products.id),
   sourceQuantity: text("source_quantity").notNull(),
   outputProductId: integer("output_product_id").references(() => products.id),
+  outputCategory: text("output_category"),
   outputQuantity: text("output_quantity"),
   wastageQuantity: text("wastage_quantity"),
   status: text("status", { enum: ["pending", "in_progress", "completed"] }).notNull().default("pending"),
