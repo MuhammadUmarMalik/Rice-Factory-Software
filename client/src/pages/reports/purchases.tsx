@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Printer, ShoppingCart, Truck, Calendar } from "lucide-react";
+import { Download, ShoppingCart, Truck, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -133,10 +133,6 @@ export default function PurchaseReportPage() {
           <Button variant="outline" data-testid="button-export">
             <Download className="h-4 w-4" />
             {t("export")}
-          </Button>
-          <Button variant="outline" data-testid="button-print">
-            <Printer className="h-4 w-4" />
-            {t("print")}
           </Button>
         </div>
       </div>
