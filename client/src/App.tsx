@@ -30,8 +30,6 @@ import Payments from "@/pages/payments";
 import { useLanguage } from "@/contexts/language-context";
 import Journal from "@/pages/journal";
 
-import Payments from "@/pages/payments";
-
 
 function Router() {
   return (
