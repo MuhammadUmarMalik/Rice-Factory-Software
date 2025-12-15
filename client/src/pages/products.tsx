@@ -39,6 +39,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 const productFormSchema = z.object({
   name: z.string().min(1, "Product name is required"),
   nameUrdu: z.string().optional(),
+  productType: z.enum(["raw", "processed"]).default("processed"),
   unit: z.string().default("kg"),
   salePrice: z.coerce.string().default("0"),
   currentStock: z.coerce.string().default("0"),
@@ -58,6 +59,7 @@ export default function ProductsPage() {
     defaultValues: {
       name: "",
       nameUrdu: "",
+      productType: "processed",
       unit: "kg",
       salePrice: "0",
       currentStock: "0",
@@ -73,6 +75,7 @@ export default function ProductsPage() {
     mutationFn: (data: ProductFormData) => {
       const payload = {
         ...data,
+        productType: data.productType || "processed",
         currentStock: data.currentStock || "0",
         avgPurchasePrice: data.avgPurchasePrice || "0",
         salePrice: data.salePrice || "0",
@@ -82,7 +85,15 @@ export default function ProductsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
-      form.reset();
+      form.reset({
+        name: "",
+        nameUrdu: "",
+        productType: "processed",
+        unit: "kg",
+        salePrice: "0",
+        currentStock: "0",
+        avgPurchasePrice: "0",
+      });
       toast({ title: t("savedSuccessfully") });
     },
   });
@@ -101,7 +112,8 @@ export default function ProductsPage() {
       if (context?.previousProducts) {
         queryClient.setQueryData(["/api/products"], context.previousProducts);
       }
-      toast({ title: "Delete failed", variant: "destructive" });
+      const description = (_err as any)?.error || (_err as any)?.message;
+      toast({ title: "Delete failed", description, variant: "destructive" });
     },
     onSuccess: () => {
       toast({ title: t("deletedSuccessfully") });
@@ -115,6 +127,7 @@ export default function ProductsPage() {
     mutationFn: (data: ProductFormData & { id: number }) => {
       const payload = {
         ...data,
+        productType: data.productType || "processed",
         currentStock: data.currentStock || "0",
         avgPurchasePrice: data.avgPurchasePrice || "0",
         salePrice: data.salePrice || "0",
@@ -125,7 +138,15 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
       setEditingProduct(null);
-      form.reset();
+      form.reset({
+        name: "",
+        nameUrdu: "",
+        productType: "processed",
+        unit: "kg",
+        salePrice: "0",
+        currentStock: "0",
+        avgPurchasePrice: "0",
+      });
       toast({ title: t("savedSuccessfully") });
     },
   });
@@ -143,6 +164,7 @@ export default function ProductsPage() {
     form.reset({
       name: product.name,
       nameUrdu: product.nameUrdu || "",
+      productType: product.productType || "processed",
       unit: product.unit,
       salePrice: product.salePrice || "0",
       currentStock: product.currentStock || "0",
@@ -156,6 +178,7 @@ export default function ProductsPage() {
     form.reset({
       name: "",
       nameUrdu: "",
+      productType: "processed",
       unit: "kg",
       salePrice: "0",
       currentStock: "0",
@@ -181,6 +204,16 @@ export default function ProductsPage() {
             )}
           </div>
         </div>
+      ),
+    },
+    {
+      key: "productType",
+      title: "Type",
+      align: "center",
+      render: (item) => (
+        <Badge variant="outline">
+          {item.productType === "raw" ? "Raw" : "Processed"}
+        </Badge>
       ),
     },
     {
@@ -317,8 +350,9 @@ export default function ProductsPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg" aria-describedby="product-dialog-desc">
           <DialogHeader>
+            <p id="product-dialog-desc" className="sr-only">{editingProduct ? "Update product details" : "Add a new product to inventory"}</p>
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
               {editingProduct
                 ? (language === "ur" ? "مصنوعات میں ترمیم" : "Edit Product")
@@ -356,6 +390,29 @@ export default function ProductsPage() {
                           data-testid="input-name-urdu" 
                         />
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="productType"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{language === "ur" ? "Product type" : "Product type"}</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select type" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="raw">Raw (Paddy)</SelectItem>
+                          <SelectItem value="processed">Processed</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}

@@ -1,12 +1,12 @@
 import { db } from "./db";
-import { eq, and, desc, sql, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, isNull, inArray } from "drizzle-orm";
 import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
-  processing, sales, saleItems, ledgerEntries,
+  processing, processingOutputs, sales, saleItems, ledgerEntries,
   type User, type InsertUser, type Account, type InsertAccount,
   type Product, type InsertProduct, type Purchase, type InsertPurchase,
   type PurchaseItem, type InsertPurchaseItem, type PurchaseCharge, type InsertPurchaseCharge,
-  type Processing, type InsertProcessing,
+  type Processing, type InsertProcessing, type ProcessingOutput, type InsertProcessingOutput,
   type Sale, type InsertSale, type SaleItem, type InsertSaleItem,
   type LedgerEntry, type InsertLedgerEntry,
   receiptVouchers, receiptVoucherLines,
@@ -34,7 +34,8 @@ export interface IStorage {
   updateAccount(id: number, account: Partial<InsertAccount>): Promise<Account | undefined>;
 
   // Products
-  getProducts(): Promise<Product[]>;
+  getProducts(includeInactive?: boolean): Promise<Product[]>;
+  getAllProducts(): Promise<Product[]>;
   getProduct(id: number): Promise<Product | undefined>;
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
@@ -58,6 +59,15 @@ export interface IStorage {
   getProcessingBatch(id: number): Promise<Processing | undefined>;
   createProcessing(batch: InsertProcessing): Promise<Processing>;
   updateProcessing(id: number, batch: Partial<InsertProcessing>): Promise<Processing | undefined>;
+  completeProcessingWithOutputs(
+    id: number,
+    outputs: { productId: number; quantity: string; outputType?: "raw" | "processed"; notes?: string }[],
+    meta?: { wastageQuantity?: string; outputCategory?: string }
+  ): Promise<Processing | undefined>;
+  getProcessingOutputs(processingId?: number): Promise<(ProcessingOutput & { product?: Product })[]>;
+  createProcessingOutput(processingId: number, output: Omit<InsertProcessingOutput, "processingId">): Promise<ProcessingOutput>;
+  updateProcessingOutput(id: number, changes: Partial<Omit<InsertProcessingOutput, "processingId">>): Promise<(ProcessingOutput & { product?: Product }) | undefined>;
+  deleteProcessingOutput(id: number): Promise<boolean>;
   getNextBatchNumber(): Promise<string>;
 
   // Sales
@@ -210,8 +220,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Products
-  async getProducts(): Promise<Product[]> {
-    return db.select().from(products).orderBy(products.name).all();
+  async getProducts(includeInactive = false): Promise<Product[]> {
+    if (includeInactive) {
+      return db.select().from(products).orderBy(products.name).all();
+    }
+    return db.select().from(products).where(eq(products.isActive, true)).orderBy(products.name).all();
+  }
+
+  async getAllProducts(): Promise<Product[]> {
+    return this.getProducts(true);
   }
 
   async getProduct(id: number): Promise<Product | undefined> {
@@ -230,8 +247,28 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteProduct(id: number): Promise<boolean> {
-    const result = await db.delete(products).where(eq(products.id, id)).run();
-    return result.changes > 0;
+    const existing = db.select().from(products).where(eq(products.id, id)).limit(1).all()[0];
+    if (!existing) return false;
+
+    return db.transaction((tx) => {
+      const hasPurchase = tx.select({ id: purchaseItems.id }).from(purchaseItems).where(eq(purchaseItems.productId, id)).limit(1).all().length > 0;
+      const hasSale = tx.select({ id: saleItems.id }).from(saleItems).where(eq(saleItems.productId, id)).limit(1).all().length > 0;
+      const hasProcessing = tx.select({ id: processing.id }).from(processing).where(eq(processing.sourceProductId, id)).limit(1).all().length > 0;
+      const hasProcessingOutput = tx.select({ id: processingOutputs.id }).from(processingOutputs).where(eq(processingOutputs.productId, id)).limit(1).all().length > 0;
+
+      const inUse = hasPurchase || hasSale || hasProcessing || hasProcessingOutput;
+      if (inUse) {
+        tx.update(products).set({ isActive: false }).where(eq(products.id, id)).run();
+        return true; // archived instead of hard delete to preserve references
+      }
+
+      const hard = tx.delete(products).where(eq(products.id, id)).run();
+      if (hard.changes && hard.changes > 0) return true;
+
+      // If delete didn't happen, fall back to soft delete for safety
+      tx.update(products).set({ isActive: false }).where(eq(products.id, id)).run();
+      return true;
+    });
   }
 
   async updateProductStock(id: number, quantity: string, type: 'add' | 'subtract'): Promise<void> {
@@ -252,6 +289,22 @@ export class DatabaseStorage implements IStorage {
       .set({ currentStock: newStock.toString() })
       .where(eq(products.id, id))
       .run();
+  }
+
+  private getProductById(client: DbClient, id: number) {
+    const [product] = client.select().from(products).where(eq(products.id, id)).all();
+    return product;
+  }
+
+  private assertProductType(client: DbClient, productId: number, expected: "raw" | "processed", context: string) {
+    const product = this.getProductById(client, productId);
+    if (!product) {
+      throw new Error(`${context}: product ${productId} not found`);
+    }
+    if (product.productType !== expected) {
+      throw new Error(`${context}: product ${product.name} must be ${expected}`);
+    }
+    return product;
   }
 
   // Purchases
@@ -610,6 +663,14 @@ export class DatabaseStorage implements IStorage {
       const batchNumber = `PRO-${year}-${String(nextNum).padStart(3, "0")}`;
 
       const client = tx as unknown as DbClient;
+      const sourceProduct = this.assertProductType(client, batch.sourceProductId, "raw", "Processing input");
+      if (sourceProduct.name.toLowerCase() !== "paddy") {
+        throw new Error("Processing input must be Paddy");
+      }
+
+      if (batch.outputProductId) {
+        this.assertProductType(client, batch.outputProductId, "processed", "Processing output");
+      }
 
       // Reduce stock for source product
       this.updateProductStockInternal(client, batch.sourceProductId, batch.sourceQuantity, "subtract");
@@ -633,6 +694,13 @@ export class DatabaseStorage implements IStorage {
       const updatePayload: Partial<InsertProcessing> = { ...batch };
       const client = tx as unknown as DbClient;
 
+      if (batch.sourceProductId && batch.sourceProductId !== existingBatch.sourceProductId) {
+        this.assertProductType(client, batch.sourceProductId, "raw", "Processing input update");
+      }
+      if (batch.outputProductId) {
+        this.assertProductType(client, batch.outputProductId, "processed", "Processing output update");
+      }
+
       if (batch.status === "in_progress" && existingBatch.status === "pending") {
         updatePayload.startDate = new Date();
       }
@@ -642,6 +710,7 @@ export class DatabaseStorage implements IStorage {
         const outputQuantity = batch.outputQuantity || existingBatch.outputQuantity;
 
         if (outputProductId && outputQuantity) {
+          this.assertProductType(client, outputProductId, "processed", "Processing output complete");
           this.updateProductStockInternal(
             client,
             outputProductId,
@@ -653,6 +722,142 @@ export class DatabaseStorage implements IStorage {
       }
 
       tx.update(processing).set(updatePayload).where(eq(processing.id, id)).run();
+      const [updated] = tx.select().from(processing).where(eq(processing.id, id)).all();
+      return updated;
+    });
+  }
+
+  private getProcessingOutputRecord(client: DbClient, id: number) {
+    const [output] = client.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+    return output;
+  }
+
+  async getProcessingOutputs(processingId?: number): Promise<(ProcessingOutput & { product?: Product })[]> {
+    const rows = processingId
+      ? db.select().from(processingOutputs).where(eq(processingOutputs.processingId, processingId)).orderBy(processingOutputs.id).all()
+      : db.select().from(processingOutputs).orderBy(processingOutputs.processingId, processingOutputs.id).all();
+
+    const productIds = Array.from(new Set(rows.map(r => r.productId)));
+    const productsLookup = productIds.length
+      ? db.select().from(products).where(inArray(products.id, productIds)).all()
+      : [];
+    const productMap = new Map(productsLookup.map((p) => [p.id, p]));
+
+    return rows.map((row) => ({
+      ...row,
+      product: productMap.get(row.productId),
+    }));
+  }
+
+  async createProcessingOutput(processingId: number, output: Omit<InsertProcessingOutput, "processingId">): Promise<ProcessingOutput> {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      this.assertProductType(client, output.productId, "processed", "Processing output");
+      this.updateProductStockInternal(client, output.productId, output.quantity, "add");
+
+      const now = new Date();
+      const insertResult = tx.insert(processingOutputs).values({
+        ...output,
+        processingId,
+        outputType: output.outputType || "processed",
+        createdAt: now,
+        updatedAt: now,
+      }).run();
+      const newId = Number(insertResult.lastInsertRowid);
+      const [inserted] = tx.select().from(processingOutputs).where(eq(processingOutputs.id, newId)).all();
+      return inserted;
+    });
+  }
+
+  async updateProcessingOutput(id: number, changes: Partial<Omit<InsertProcessingOutput, "processingId">>): Promise<(ProcessingOutput & { product?: Product }) | undefined> {
+    const existing = await this.getProcessingOutputRecord(db as unknown as DbClient, id);
+    if (!existing) return undefined;
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const newProductId = changes.productId ?? existing.productId;
+      const newQuantity = changes.quantity ?? existing.quantity;
+
+      this.assertProductType(client, newProductId, "processed", "Processing output update");
+
+      if (newProductId !== existing.productId) {
+        // Reverse old stock then add to new product
+        this.updateProductStockInternal(client, existing.productId, existing.quantity, "subtract");
+        this.updateProductStockInternal(client, newProductId, newQuantity, "add");
+      } else {
+        const diff = parseAmount(newQuantity) - parseAmount(existing.quantity);
+        if (diff !== 0) {
+          this.updateProductStockInternal(
+            client,
+            newProductId,
+            Math.abs(diff).toString(),
+            diff > 0 ? "add" : "subtract"
+          );
+        }
+      }
+
+      tx.update(processingOutputs)
+        .set({ ...changes, updatedAt: new Date() })
+        .where(eq(processingOutputs.id, id))
+        .run();
+
+      const [updated] = tx.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+      const product = this.getProductById(client, updated.productId);
+      return { ...updated, product: product || undefined };
+    });
+  }
+
+  async deleteProcessingOutput(id: number): Promise<boolean> {
+    const existing = await this.getProcessingOutputRecord(db as unknown as DbClient, id);
+    if (!existing) return false;
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      this.updateProductStockInternal(client, existing.productId, existing.quantity, "subtract");
+      const result = tx.delete(processingOutputs).where(eq(processingOutputs.id, id)).run();
+      return result.changes > 0;
+    });
+  }
+
+  async completeProcessingWithOutputs(
+    id: number,
+    outputs: { productId: number; quantity: string; outputType?: "raw" | "processed"; notes?: string }[],
+    meta?: { wastageQuantity?: string; outputCategory?: string }
+  ): Promise<Processing | undefined> {
+    const existing = await this.getProcessingBatch(id);
+    if (!existing) return undefined;
+    if (existing.status === "completed") {
+      throw new Error("Batch already completed");
+    }
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const now = new Date();
+
+      outputs.forEach((out) => {
+        this.assertProductType(client, out.productId, "processed", "Processing output");
+        this.updateProductStockInternal(client, out.productId, out.quantity, "add");
+        tx.insert(processingOutputs).values({
+          processingId: id,
+          productId: out.productId,
+          quantity: out.quantity,
+          outputType: out.outputType || "processed",
+          notes: out.notes,
+          createdAt: now,
+          updatedAt: now,
+        }).run();
+      });
+
+      tx.update(processing).set({
+        status: "completed",
+        outputProductId: outputs[0]?.productId ?? existing.outputProductId ?? null,
+        outputQuantity: outputs[0]?.quantity ?? existing.outputQuantity ?? null,
+        outputCategory: meta?.outputCategory ?? existing.outputCategory ?? null,
+        wastageQuantity: meta?.wastageQuantity ?? existing.wastageQuantity ?? null,
+        completedDate: now,
+        startDate: existing.status === "pending" ? now : existing.startDate,
+      }).where(eq(processing.id, id)).run();
+
       const [updated] = tx.select().from(processing).where(eq(processing.id, id)).all();
       return updated;
     });

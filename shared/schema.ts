@@ -51,6 +51,7 @@ export const products = sqliteTable("products", {
   name: text("name").notNull(),
   nameUrdu: text("name_urdu"),
   unit: text("unit").notNull().default("kg"),
+  productType: text("product_type", { enum: ["raw", "processed"] }).notNull().default("processed"),
   currentStock: text("current_stock").notNull().default("0"),
   avgPurchasePrice: text("avg_purchase_price").notNull().default("0"),
   salePrice: text("sale_price").notNull().default("0"),
@@ -190,6 +191,26 @@ export const insertProcessingSchema = createInsertSchema(processing).omit({
 });
 export type InsertProcessing = z.infer<typeof insertProcessingSchema>;
 export type Processing = typeof processing.$inferSelect;
+
+// Processing outputs table (per batch, supports edit/delete)
+export const processingOutputs = sqliteTable("processing_outputs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  processingId: integer("processing_id").notNull().references(() => processing.id, { onDelete: "cascade" }),
+  productId: integer("product_id").notNull().references(() => products.id),
+  quantity: text("quantity").notNull(),
+  outputType: text("output_type", { enum: ["raw", "processed"] }).notNull().default("processed"),
+  notes: text("notes"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const insertProcessingOutputSchema = createInsertSchema(processingOutputs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertProcessingOutput = z.infer<typeof insertProcessingOutputSchema>;
+export type ProcessingOutput = typeof processingOutputs.$inferSelect;
 
 // Sales table
 export const sales = sqliteTable("sales", {

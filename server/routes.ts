@@ -1,11 +1,20 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema } from "@shared/schema";
+import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema, type InsertProduct } from "@shared/schema";
 import { z } from "zod";
 import { format } from "date-fns";
 import { promises as fs } from "fs";
 import path from "path";
+
+const defaultOutputProducts = [
+  "Head White Rice",
+  "Head Brown Rice",
+  "White Broken Rice",
+  "Brown Broken Rice",
+  "Husk",
+  "Waste",
+];
 
 const numericString = z.union([z.string(), z.number()]).transform((val) => {
   const num = typeof val === "number" ? val : parseFloat(val);
@@ -85,6 +94,7 @@ const receiptLinesSchema = z.array(
 ).min(1);
 
 const productSchema = insertProductSchema.extend({
+  productType: z.enum(["raw", "processed"]).default("processed"),
   currentStock: numericString.optional(),
   avgPurchasePrice: numericString.optional(),
   salePrice: numericString.optional(),
@@ -117,6 +127,36 @@ async function writeSettings(data: unknown) {
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify(parsed, null, 2), "utf-8");
   return parsed;
+}
+
+async function ensureDefaultProcessingProducts() {
+  const existing = await storage.getProducts(true); // include inactive so we don't respawn soft-deleted defaults
+  const existingNames = new Set(existing.map((p) => p.name.toLowerCase()));
+  const missing = defaultOutputProducts.filter((name) => !existingNames.has(name.toLowerCase()));
+  if (!existingNames.has("paddy")) {
+    const payload: InsertProduct = {
+      name: "Paddy",
+      unit: "kg",
+      productType: "raw",
+      currentStock: "0",
+      avgPurchasePrice: "0",
+      salePrice: "0",
+      isActive: true,
+    };
+    await storage.createProduct(payload);
+  }
+  for (const name of missing) {
+    const payload: InsertProduct = {
+      name,
+      unit: "kg",
+      productType: "processed",
+      currentStock: "0",
+      avgPurchasePrice: "0",
+      salePrice: "0",
+      isActive: true,
+    };
+    await storage.createProduct(payload);
+  }
 }
 
 export async function registerRoutes(
@@ -320,6 +360,7 @@ export async function registerRoutes(
   // Products CRUD
   app.get("/api/products", async (req, res) => {
     try {
+      await ensureDefaultProcessingProducts();
       const products = await storage.getProducts();
       res.json(products);
     } catch (error) {
@@ -347,6 +388,7 @@ export async function registerRoutes(
       const parsed = productSchema.parse(req.body);
       const data = {
         ...parsed,
+        productType: parsed.productType || "processed",
         currentStock: parsed.currentStock ?? "0",
         avgPurchasePrice: parsed.avgPurchasePrice ?? "0",
         salePrice: parsed.salePrice ?? "0",
@@ -368,6 +410,7 @@ export async function registerRoutes(
       const parsed = productUpdateSchema.parse(req.body);
       const data = {
         ...parsed,
+        productType: parsed.productType ?? undefined,
         currentStock: parsed.currentStock ?? undefined,
         avgPurchasePrice: parsed.avgPurchasePrice ?? undefined,
         salePrice: parsed.salePrice ?? undefined,
@@ -395,8 +438,9 @@ export async function registerRoutes(
       }
       res.status(204).send();
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to delete product" });
+      const message = error instanceof Error ? error.message : "Failed to delete product";
+      console.error("Delete product failed", error);
+      res.status(400).json({ error: message });
     }
   });
 
@@ -700,12 +744,28 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   });
 
   // Processing CRUD
-  app.get("/api/processing", async (req, res) => {
+  const processingOutputLineSchema = z.object({
+    productId: z.number().int().positive(),
+    quantity: numericString,
+    outputType: z.enum(["raw", "processed"]).default("processed"),
+    notes: z.string().optional(),
+  });
+
+  app.get("/api/processing", async (_req, res) => {
     try {
-      const [batches, products] = await Promise.all([
+      await ensureDefaultProcessingProducts();
+      const [batches, products, outputs] = await Promise.all([
         storage.getProcessingBatches(),
         storage.getProducts(),
+        storage.getProcessingOutputs(),
       ]);
+
+      const outputsByBatch = outputs.reduce((map, out) => {
+        const list = map.get(out.processingId) || [];
+        list.push(out);
+        map.set(out.processingId, list);
+        return map;
+      }, new Map<number, typeof outputs>());
 
       const enriched = batches.map((batch) => ({
         ...batch,
@@ -713,6 +773,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
         outputProduct: batch.outputProductId
           ? products.find((p) => p.id === batch.outputProductId)
           : undefined,
+        outputs: outputsByBatch.get(batch.id) || [],
       }));
 
       res.json(enriched);
@@ -725,11 +786,14 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   app.get("/api/processing/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const batch = await storage.getProcessingBatch(id);
+      const [batch, outputs] = await Promise.all([
+        storage.getProcessingBatch(id),
+        storage.getProcessingOutputs(id),
+      ]);
       if (!batch) {
         return res.status(404).json({ error: "Processing batch not found" });
       }
-      res.json(batch);
+      res.json({ ...batch, outputs });
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to fetch processing batch" });
@@ -738,6 +802,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
 
   app.post("/api/processing", async (req, res) => {
     try {
+      await ensureDefaultProcessingProducts();
       const parsed = insertProcessingSchema.parse(req.body);
       if (parsed.outputQuantity) {
         parsed.outputQuantity = numericString.parse(parsed.outputQuantity);
@@ -800,36 +865,112 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
         return res.status(404).json({ error: "Processing batch not found" });
       }
 
-      if (existing.status === "completed") {
-        return res.status(400).json({ error: "Batch already completed" });
-      }
-
       const body = z.object({
-        outputProductId: z.number().int().positive(),
-        outputQuantity: numericString,
+        outputs: z.array(processingOutputLineSchema).min(1),
         wastageQuantity: numericString.optional(),
-        outputCategory: z.enum(["rice_head", "broken_rice", "rice_polish", "kacher_nakoo"]),
+        outputCategory: z.string().optional(),
       }).parse(req.body);
 
       if (existing.status === "pending") {
         await storage.updateProcessing(id, { status: "in_progress" });
       }
 
-      const batch = await storage.updateProcessing(id, {
-        status: "completed",
-        outputProductId: body.outputProductId,
-        outputQuantity: body.outputQuantity,
-        wastageQuantity: body.wastageQuantity,
-        outputCategory: body.outputCategory,
-      });
+      const completed = await storage.completeProcessingWithOutputs(
+        id,
+        body.outputs.map((o) => ({
+          ...o,
+          quantity: o.quantity,
+          outputType: o.outputType || "processed",
+        })),
+        { wastageQuantity: body.wastageQuantity, outputCategory: body.outputCategory }
+      );
 
-      res.json(batch);
+      res.json(completed);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
       console.error(error);
       res.status(500).json({ error: "Failed to complete processing batch" });
+    }
+  });
+
+  app.post("/api/processing/:id/outputs", async (req, res) => {
+    try {
+      const processingId = parseInt(req.params.id);
+      const batch = await storage.getProcessingBatch(processingId);
+      if (!batch) return res.status(404).json({ error: "Processing batch not found" });
+      if (batch.status === "pending") {
+        return res.status(400).json({ error: "Start processing before adding outputs" });
+      }
+
+      const payload = processingOutputLineSchema.parse(req.body);
+      const output = await storage.createProcessingOutput(processingId, {
+        ...payload,
+        outputType: "processed",
+      });
+      res.status(201).json(output);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to add output item" });
+    }
+  });
+
+  app.patch("/api/processing/:processingId/outputs/:outputId", async (req, res) => {
+    try {
+      const processingId = parseInt(req.params.processingId);
+      const outputId = parseInt(req.params.outputId);
+      const outputs = await storage.getProcessingOutputs(processingId);
+      const target = outputs.find((o) => o.id === outputId);
+      if (!target) {
+        return res.status(404).json({ error: "Output item not found for this batch" });
+      }
+
+      const payload = processingOutputLineSchema.partial().parse(req.body);
+      const updated = await storage.updateProcessingOutput(outputId, payload);
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to update output item" });
+    }
+  });
+
+  app.delete("/api/processing/:processingId/outputs/:outputId", async (req, res) => {
+    try {
+      const processingId = parseInt(req.params.processingId);
+      const outputId = parseInt(req.params.outputId);
+      const outputs = await storage.getProcessingOutputs(processingId);
+      const target = outputs.find((o) => o.id === outputId);
+      if (!target) {
+        return res.status(404).json({ error: "Output item not found for this batch" });
+      }
+
+      const deleted = await storage.deleteProcessingOutput(outputId);
+      if (!deleted) {
+        return res.status(404).json({ error: "Output item not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete output item" });
     }
   });
 
