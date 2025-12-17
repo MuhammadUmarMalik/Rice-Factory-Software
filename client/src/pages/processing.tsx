@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus, Play, CheckCircle, Package, ArrowRight, Scale, Factory } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Form,
@@ -77,7 +78,7 @@ export default function ProcessingPage() {
     defaultValues: {
       sourceProductId: "",
       sourceQuantity: "",
-      outputProductId: "same",
+      outputProductId: "",
       notes: "",
     },
   });
@@ -100,6 +101,32 @@ export default function ProcessingPage() {
     queryKey: ["/api/products"],
   });
 
+  const bioProductNames = [
+    "Head Rice",
+    "Broken Rice",
+    "Rice Polish",
+    "Kacher(Nakoo)",
+    "Head White Rice",
+    "Head Brown Rice",
+    "White Broken Rice",
+    "Brown Broken Rice",
+    "Waste",
+    "Husk",
+  ].map((n) => n.toLowerCase());
+  const allowedBioName = (name?: string) => bioProductNames.includes((name || "").trim().toLowerCase());
+  const isBioType = (value?: string | null) => (value || "").toLowerCase() === "bio";
+  const bioProducts = products.filter((p) => isBioType(p.productType) || allowedBioName(p.name));
+
+  // Ensure an output product is preselected when available
+  useEffect(() => {
+    if (!form.getValues("outputProductId") && bioProducts[0]) {
+      form.setValue("outputProductId", bioProducts[0].id.toString(), { shouldDirty: false });
+    }
+    if (!completeForm.getValues("outputProductId") && bioProducts[0]) {
+      completeForm.setValue("outputProductId", bioProducts[0].id.toString(), { shouldDirty: false });
+    }
+  }, [bioProducts, form, completeForm]);
+
   const formatError = (err: any) => {
     if (!err) return "Something went wrong";
     if (typeof err === "string") return err;
@@ -112,9 +139,7 @@ export default function ProcessingPage() {
       apiRequest("POST", "/api/processing", {
         ...data,
         sourceProductId: parseInt(data.sourceProductId),
-        outputProductId: data.outputProductId === "same"
-          ? parseInt(data.sourceProductId)
-          : data.outputProductId
+        outputProductId: data.outputProductId
           ? parseInt(data.outputProductId)
           : null,
       }),
@@ -125,7 +150,7 @@ export default function ProcessingPage() {
       form.reset({
         sourceProductId: "",
         sourceQuantity: "",
-        outputProductId: "same",
+        outputProductId: "",
         notes: "",
       });
       toast({ title: t("savedSuccessfully") });
@@ -169,7 +194,13 @@ export default function ProcessingPage() {
   });
 
   const handleAddNew = () => {
-    form.reset();
+    const defaultOutput = bioProducts[0]?.id?.toString() ?? "";
+    form.reset({
+      sourceProductId: "",
+      sourceQuantity: "",
+      outputProductId: defaultOutput,
+      notes: "",
+    });
     setIsDialogOpen(true);
   };
 
@@ -179,8 +210,9 @@ export default function ProcessingPage() {
 
   const handleComplete = (processing: Processing) => {
     setSelectedProcessing(processing);
+    const defaultOutput = bioProducts[0]?.id?.toString() ?? "";
     completeForm.reset({
-      outputProductId: (processing.outputProductId ?? processing.sourceProductId).toString(),
+      outputProductId: (processing.outputProductId ?? defaultOutput),
       outputQuantity: "",
       wastageQuantity: "0",
       outputCategory: processing.outputCategory ?? "rice_head",
@@ -492,6 +524,9 @@ export default function ProcessingPage() {
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
               {language === "ur" ? "??? ????????" : "New Processing"}
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              Create a processing batch by selecting a raw source product and a bio output product.
+            </DialogDescription>
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit((data) => createMutation.mutate(data))} className="space-y-4">
@@ -545,12 +580,15 @@ export default function ProcessingPage() {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="same">Same as source</SelectItem>
-                        {products.map((p) => (
-                          <SelectItem key={p.id} value={p.id.toString()}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
+                        {bioProducts.length === 0 ? (
+                          <SelectItem value="none" disabled>No bio products found. Add Bio products first.</SelectItem>
+                        ) : (
+                          bioProducts.map((p) => (
+                            <SelectItem key={p.id} value={p.id.toString()}>
+                              {p.name}
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -607,11 +645,15 @@ export default function ProcessingPage() {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {products.map((p) => (
-                          <SelectItem key={p.id} value={p.id.toString()}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
+                        {bioProducts.length === 0 ? (
+                          <SelectItem value="none" disabled>No bio products found. Add Bio products first.</SelectItem>
+                        ) : (
+                          bioProducts.map((p) => (
+                            <SelectItem key={p.id} value={p.id.toString()}>
+                              {p.name}
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -705,6 +747,14 @@ export default function ProcessingPage() {
                 <div>
                   <p className="text-muted-foreground">Source</p>
                   <p className="font-medium">{detailProcessing.sourceProduct?.name || "-"}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-muted-foreground">Conversion</p>
+                  <p className="font-medium flex items-center gap-2">
+                    {detailProcessing.sourceProduct?.name || "-"}
+                    <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                    {detailProcessing.outputProduct?.name || "-"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Output</p>
