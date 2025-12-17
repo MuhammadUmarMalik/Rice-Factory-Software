@@ -46,44 +46,36 @@ export default function Dashboard() {
     queryKey: ["/api/processing"],
   });
 
-  const statCards = [
-    {
-      title: t("totalPurchases"),
-      value: stats?.totalPurchases ?? "Rs. 4,250,000",
-      change: "+12.5%",
-      trend: "up",
-      icon: ShoppingCart,
-      color: "text-chart-2",
-      bgColor: "bg-chart-2/10",
-    },
-    {
-      title: t("totalSales"),
-      value: stats?.totalSales ?? "Rs. 5,820,000",
-      change: "+18.2%",
-      trend: "up",
-      icon: TrendingUp,
-      color: "text-primary",
-      bgColor: "bg-primary/10",
-    },
-    {
-      title: t("stockValue"),
-      value: stats?.stockValue ?? "Rs. 2,450,000",
-      change: "-2.4%",
-      trend: "down",
-      icon: Package,
-      color: "text-chart-3",
-      bgColor: "bg-chart-3/10",
-    },
-    {
-      title: t("totalProfit"),
-      value: stats?.totalProfit ?? "Rs. 1,570,000",
-      change: "+8.7%",
-      trend: "up",
-      icon: DollarSign,
-      color: "text-chart-5",
-      bgColor: "bg-chart-5/10",
-    },
-  ];
+const statCards = [
+  {
+    title: t("totalPurchases"),
+    value: stats?.totalPurchases ?? "Rs. 0",
+    icon: ShoppingCart,
+    color: "text-chart-2",
+    bgColor: "bg-chart-2/10",
+  },
+  {
+    title: t("totalSales"),
+    value: stats?.totalSales ?? "Rs. 0",
+    icon: TrendingUp,
+    color: "text-primary",
+    bgColor: "bg-primary/10",
+  },
+  {
+    title: t("stockValue"),
+    value: stats?.stockValue ?? "Rs. 0",
+    icon: Package,
+    color: "text-chart-3",
+    bgColor: "bg-chart-3/10",
+  },
+  {
+    title: t("totalProfit"),
+    value: stats?.totalProfit ?? "Rs. 0",
+    icon: DollarSign,
+    color: "text-chart-5",
+    bgColor: "bg-chart-5/10",
+  },
+];
 
   const quickActions = [
     { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, color: "bg-chart-2 text-white" },
@@ -97,7 +89,7 @@ export default function Dashboard() {
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("dashboard")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "آج کا خلاصہ" : "Today's overview"}
+            {language === "ur" ? "Ø¢Ø¬ Ú©Ø§ Ø®Ù„Ø§ØµÛ" : "Today's overview"}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -115,7 +107,7 @@ export default function Dashboard() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat, index) => (
           <Card key={index} data-testid={`card-stat-${index}`}>
-            <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+            <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 {stat.title}
               </CardTitle>
@@ -127,24 +119,9 @@ export default function Dashboard() {
               {statsLoading ? (
                 <Skeleton className="h-8 w-32" />
               ) : (
-                <>
-                  <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
-                    {stat.value}
-                  </div>
-                  <div className={`flex items-center gap-1 mt-1 ${isRTL ? "flex-row-reverse justify-end" : ""}`}>
-                    {stat.trend === "up" ? (
-                      <ArrowUpRight className="h-4 w-4 text-primary" />
-                    ) : (
-                      <ArrowDownRight className="h-4 w-4 text-destructive" />
-                    )}
-                    <span className={`text-xs font-medium ${stat.trend === "up" ? "text-primary" : "text-destructive"}`}>
-                      {stat.change}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {language === "ur" ? "پچھلے مہینے سے" : "from last month"}
-                    </span>
-                  </div>
-                </>
+                <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
+                  {stat.value}
+                </div>
               )}
             </CardContent>
           </Card>
@@ -156,10 +133,10 @@ export default function Dashboard() {
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <div className={isRTL ? "text-right" : ""}>
               <CardTitle className="text-base font-semibold">
-                {language === "ur" ? "خریداری بمقابلہ فروخت" : "Purchases vs Sales"}
+                {language === "ur" ? "Ø®Ø±ÛŒØ¯Ø§Ø±ÛŒ Ø¨Ù…Ù‚Ø§Ø¨Ù„Û ÙØ±ÙˆØ®Øª" : "Purchases vs Sales"}
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                {language === "ur" ? "ماہانہ موازنہ" : "Monthly comparison"}
+                {language === "ur" ? "Ù…Ø§ÛØ§Ù†Û Ù…ÙˆØ§Ø²Ù†Û" : "Monthly comparison"}
               </p>
             </div>
             <div className={`flex gap-4 text-sm ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -217,10 +194,10 @@ export default function Dashboard() {
         <Card>
           <CardHeader className={isRTL ? "text-right" : ""}>
             <CardTitle className="text-base font-semibold">
-              {language === "ur" ? "مصنوعات کا سٹاک" : "Product Stock"}
+              {language === "ur" ? "Ù…ØµÙ†ÙˆØ¹Ø§Øª Ú©Ø§ Ø³Ù¹Ø§Ú©" : "Product Stock"}
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              {language === "ur" ? "کلوگرام میں" : "in kilograms"}
+              {language === "ur" ? "Ú©Ù„ÙˆÚ¯Ø±Ø§Ù… Ù…ÛŒÚº" : "in kilograms"}
             </p>
           </CardHeader>
           <CardContent>
@@ -260,7 +237,7 @@ export default function Dashboard() {
             </CardTitle>
             <Link href="/reports/ledger">
               <Button variant="ghost" size="sm" data-testid="button-view-all-activity">
-                {language === "ur" ? "سب دیکھیں" : "View all"}
+                {language === "ur" ? "Ø³Ø¨ Ø¯ÛŒÚ©Ú¾ÛŒÚº" : "View all"}
               </Button>
             </Link>
           </CardHeader>
@@ -328,11 +305,11 @@ export default function Dashboard() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-base font-semibold">
-              {language === "ur" ? "زیر التواء آئٹمز" : "Pending Items"}
+              {language === "ur" ? "Ø²ÛŒØ± Ø§Ù„ØªÙˆØ§Ø¡ Ø¢Ø¦Ù¹Ù…Ø²" : "Pending Items"}
             </CardTitle>
             <Link href="/processing">
               <Button variant="ghost" size="sm" data-testid="button-view-all-pending">
-                {language === "ur" ? "سب دیکھیں" : "View all"}
+                {language === "ur" ? "Ø³Ø¨ Ø¯ÛŒÚ©Ú¾ÛŒÚº" : "View all"}
               </Button>
             </Link>
           </CardHeader>

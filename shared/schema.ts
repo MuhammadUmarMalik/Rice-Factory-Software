@@ -50,6 +50,7 @@ export const products = sqliteTable("products", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   nameUrdu: text("name_urdu"),
+  productType: text("product_type", { enum: ["raw", "bio"] }).notNull().default("raw"),
   unit: text("unit").notNull().default("kg"),
   currentStock: text("current_stock").notNull().default("0"),
   avgPurchasePrice: text("avg_purchase_price").notNull().default("0"),
