@@ -11,6 +11,8 @@ export const translations = {
     sales: "Sales",
     reports: "Reports",
     settings: "Settings",
+    journal: "Journal",
+    journalVoucher: "Journal Voucher",
     logout: "Logout",
     
     // Account types
@@ -77,6 +79,9 @@ export const translations = {
     purchaseReport: "Purchase Report",
     cashReceipts: "Cash Receipts",
     cashPayments: "Cash Payments",
+    approve: "Approve",
+    approved: "Approved",
+    draft: "Draft",
     voucherNumber: "Voucher Number",
     voucherDate: "Voucher Date",
     voucherType: "Voucher Type",
@@ -87,6 +92,8 @@ export const translations = {
     amountInWords: "Amount in Words",
     salesReport: "Sales Report",
     ledger: "Ledger",
+    salesLedger: "Sales Ledger",
+    purchaseLedger: "Purchase Ledger",
     trialBalance: "Trial Balance",
     profitLoss: "Profit & Loss",
     
@@ -209,6 +216,8 @@ export const translations = {
     amountInWords: "رقم الفاظ میں",
     salesReport: "فروخت رپورٹ",
     ledger: "لیجر",
+    salesLedger: "Sales Ledger",
+    purchaseLedger: "Purchase Ledger",
     trialBalance: "ٹرائل بیلنس",
     profitLoss: "نفع و نقصان",
 
@@ -244,6 +253,11 @@ export const translations = {
     // Additional
     saveSettings: "ترتیبات محفوظ کریں",
     actions: "اعمال",
+    journal: "جرنل",
+    journalVoucher: "جرنل ووچر",
+    approve: "منظور کریں",
+    approved: "منظور شدہ",
+    draft: "ڈرافٹ",
   }
 } as const;
 

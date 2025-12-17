@@ -12,6 +12,9 @@ import {
   receiptVouchers, receiptVoucherLines,
   type ReceiptVoucher, type InsertReceiptVoucher,
   type ReceiptVoucherLine, type InsertReceiptVoucherLine,
+  journalVouchers, journalVoucherEntries,
+  type JournalVoucher, type InsertJournalVoucher,
+  type JournalVoucherEntry, type InsertJournalVoucherEntry,
 } from "@shared/schema";
 
 type DbClient = typeof db;
@@ -19,6 +22,7 @@ type PurchaseItemInput = Omit<InsertPurchaseItem, "id" | "purchaseId">;
 type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
 type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
 type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
+type JournalEntryInput = Omit<InsertJournalVoucherEntry, "id" | "journalVoucherId">;
 
 export interface IStorage {
   // Users
@@ -71,7 +75,7 @@ export interface IStorage {
   getSaleItems(saleId: number): Promise<SaleItem[]>;
 
   // Ledger
-  getLedgerEntries(accountId?: number): Promise<LedgerEntry[]>;
+  getLedgerEntries(accountId?: number, referenceType?: string): Promise<LedgerEntry[]>;
   createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry>;
 
   // Reports
@@ -94,6 +98,15 @@ export interface IStorage {
   updateReceiptVoucher(id: number, data: Partial<InsertReceiptVoucher>, lines: ReceiptLineInput[]): Promise<ReceiptVoucher | undefined>;
   deleteReceiptVoucher(id: number): Promise<boolean>;
   getNextReceiptVoucherNumber(voucherType?: string): Promise<string>;
+
+  // Journal Vouchers
+  getJournalVouchers(): Promise<(JournalVoucher & { entries: JournalVoucherEntry[] })[]>;
+  getJournalVoucher(id: number): Promise<(JournalVoucher & { entries: JournalVoucherEntry[] }) | undefined>;
+  createJournalVoucher(data: InsertJournalVoucher, entries: JournalEntryInput[]): Promise<JournalVoucher>;
+  updateJournalVoucher(id: number, data: Partial<InsertJournalVoucher>, entries: JournalEntryInput[]): Promise<JournalVoucher | undefined>;
+  approveJournalVoucher(id: number, approverId?: number): Promise<JournalVoucher | undefined>;
+  getNextJournalVoucherNumber(): Promise<string>;
+  deleteJournalVoucher(id: number): Promise<boolean>;
 }
 
 function parseAmount(value: string | number | null | undefined): number {
@@ -771,14 +784,38 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Ledger
-  async getLedgerEntries(accountId?: number): Promise<LedgerEntry[]> {
-    if (accountId) {
-      return db.select().from(ledgerEntries)
-        .where(eq(ledgerEntries.accountId, accountId))
-        .orderBy(desc(ledgerEntries.entryDate))
-        .all();
+  async getLedgerEntries(accountId?: number, referenceType?: string): Promise<(LedgerEntry & { runningBalance?: string; debit?: string; credit?: string })[]> {
+    const whereClauses = [];
+    if (accountId) whereClauses.push(eq(ledgerEntries.accountId, accountId));
+    if (referenceType) whereClauses.push(eq(ledgerEntries.referenceType, referenceType));
+
+    const rowsBase = whereClauses.length
+      ? db.select().from(ledgerEntries).where(and(...whereClauses as any)).orderBy(ledgerEntries.entryDate).all()
+      : db.select().from(ledgerEntries).orderBy(ledgerEntries.entryDate).all();
+
+    if (!accountId) {
+      return rowsBase;
     }
-    return db.select().from(ledgerEntries).orderBy(desc(ledgerEntries.entryDate)).all();
+
+    const [account] = db.select().from(accounts).where(eq(accounts.id, accountId)).all();
+    const opening = parseAmount(account?.openingBalance || "0");
+    const rows = rowsBase;
+
+    let running = opening;
+    return rows.map((row) => {
+      const amount = parseAmount(row.amount);
+      if (row.transactionType === "debit") {
+        running += amount;
+      } else {
+        running -= amount;
+      }
+      return {
+        ...row,
+        debit: row.transactionType === "debit" ? row.amount : "0",
+        credit: row.transactionType === "credit" ? row.amount : "0",
+        runningBalance: running.toString(),
+      };
+    });
   }
 
   private createLedgerEntryInternal(client: DbClient, entry: InsertLedgerEntry): Promise<LedgerEntry> {
@@ -1023,6 +1060,209 @@ export class DatabaseStorage implements IStorage {
       }
       tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
+      return true;
+    });
+  }
+
+  // Journal Vouchers
+  async getJournalVouchers(): Promise<(JournalVoucher & { entries: JournalVoucherEntry[] })[]> {
+    const vouchers = db.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).all();
+    const entries = db.select().from(journalVoucherEntries).all();
+    const grouped = new Map<number, JournalVoucherEntry[]>();
+    for (const entry of entries) {
+      const list = grouped.get(entry.journalVoucherId) || [];
+      list.push(entry);
+      grouped.set(entry.journalVoucherId, list);
+    }
+    return vouchers.map((v) => ({
+      ...v,
+      entries: grouped.get(v.id) || [],
+    }));
+  }
+
+  async getJournalVoucher(id: number): Promise<(JournalVoucher & { entries: JournalVoucherEntry[] }) | undefined> {
+    const [voucher] = db.select().from(journalVouchers).where(eq(journalVouchers.id, id)).all();
+    if (!voucher) return undefined;
+    const entries = db.select().from(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).all();
+    return { ...voucher, entries };
+  }
+
+  async getNextJournalVoucherNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const [last] = db.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
+    const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
+    return `JV-${year}-${String(nextNum).padStart(5, "0")}`;
+  }
+
+  private normalizeJournalEntries(entries: JournalEntryInput[]): { normalized: JournalEntryInput[]; total: number } {
+    if (!entries || entries.length === 0) throw new Error("Journal entries are required");
+    const normalized = entries.map((e) => ({
+      ...e,
+      entryType: (e.entryType || "DEBIT").toUpperCase() as "DEBIT" | "CREDIT",
+      amount: parseAmount(e.amount || "0").toString(),
+    })).filter((e) => parseAmount(e.amount) > 0);
+
+    const debitLines = normalized.filter((e) => e.entryType === "DEBIT");
+    const creditLines = normalized.filter((e) => e.entryType === "CREDIT");
+
+    if (debitLines.length !== 1 || creditLines.length !== 1) {
+      throw new Error("Exactly one Debit and one Credit account are required");
+    }
+
+    const debitTotal = parseAmount(debitLines[0].amount);
+    const creditTotal = parseAmount(creditLines[0].amount);
+
+    if (debitTotal <= 0 || creditTotal <= 0) {
+      throw new Error("Amounts must be greater than 0");
+    }
+    if (Math.abs(debitTotal - creditTotal) > 0.0001) {
+      throw new Error("Debit and Credit must be equal");
+    }
+
+    return { normalized, total: debitTotal };
+  }
+
+  private ensureAccountsExist(entries: JournalEntryInput[]) {
+    for (const entry of entries) {
+      const [account] = db.select().from(accounts).where(eq(accounts.id, entry.accountId)).all();
+      if (!account) {
+        throw new Error(`Invalid account selected (${entry.accountId})`);
+      }
+    }
+  }
+
+  private postJournalToLedger(client: DbClient, voucher: JournalVoucher, entries: JournalEntryInput[]) {
+    for (const entry of entries) {
+      const amount = parseAmount(entry.amount || "0").toString();
+      const direction = entry.entryType === "DEBIT" ? "add" : "subtract";
+      this.updateAccountBalanceInternal(client, entry.accountId, amount, direction);
+      this.createLedgerEntryInternal(client, {
+        accountId: entry.accountId,
+        transactionType: entry.entryType === "DEBIT" ? "debit" : "credit",
+        amount,
+        balance: "0",
+        description: `Journal Voucher ${voucher.voucherNo}`,
+        referenceType: "journal_voucher",
+        referenceId: voucher.id,
+        entryDate: voucher.voucherDate ? new Date(voucher.voucherDate as any) : new Date(),
+      });
+    }
+  }
+
+  async createJournalVoucher(data: InsertJournalVoucher, entries: JournalEntryInput[]): Promise<JournalVoucher> {
+    this.ensureAccountsExist(entries);
+    const { normalized, total } = this.normalizeJournalEntries(entries);
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+
+      const [last] = tx.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
+      const year = new Date().getFullYear();
+      const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
+      const generatedNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
+      const voucherNo = (data as any).voucherNo && (data as any).voucherNo !== "" ? (data as any).voucherNo : generatedNo;
+
+      const amountInWords = `${toWords(Math.round(total))} only`;
+      const status = (data.status || "draft") as "draft" | "approved";
+
+      const voucher = tx.insert(journalVouchers).values({
+        ...data,
+        voucherNo,
+        voucherDate: data.voucherDate || new Date(),
+        totalAmount: total.toString(),
+        amountInWords,
+        status,
+        updatedAt: new Date(),
+      }).returning().get();
+
+      for (const entry of normalized) {
+        tx.insert(journalVoucherEntries).values({
+          ...entry,
+          journalVoucherId: voucher.id,
+          amount: parseAmount(entry.amount).toString(),
+        }).run();
+      }
+
+      if (status === "approved") {
+        this.postJournalToLedger(client, voucher, normalized);
+      }
+
+      return voucher;
+    });
+  }
+
+  async updateJournalVoucher(id: number, data: Partial<InsertJournalVoucher>, entries: JournalEntryInput[]): Promise<JournalVoucher | undefined> {
+    const existing = await this.getJournalVoucher(id);
+    if (!existing) return undefined;
+    if (existing.status === "approved") {
+      throw new Error("Approved vouchers cannot be edited");
+    }
+
+    this.ensureAccountsExist(entries);
+    const { normalized, total } = this.normalizeJournalEntries(entries);
+
+    return db.transaction((tx) => {
+      const amountInWords = `${toWords(Math.round(total))} only`;
+
+      tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
+
+      for (const entry of normalized) {
+        tx.insert(journalVoucherEntries).values({
+          ...entry,
+          journalVoucherId: id,
+          amount: parseAmount(entry.amount).toString(),
+        }).run();
+      }
+
+      const [updated] = tx.update(journalVouchers).set({
+        voucherDate: data.voucherDate ?? existing.voucherDate,
+        narration: data.narration ?? existing.narration,
+        createdBy: data.createdBy ?? existing.createdBy,
+        status: existing.status,
+        totalAmount: total.toString(),
+        amountInWords,
+        updatedAt: new Date(),
+      }).where(eq(journalVouchers.id, id)).returning().all();
+
+      return updated;
+    });
+  }
+
+  async approveJournalVoucher(id: number, approverId?: number): Promise<JournalVoucher | undefined> {
+    const existing = await this.getJournalVoucher(id);
+    if (!existing) return undefined;
+    if (existing.status === "approved") return existing;
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const entries = tx.select().from(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).all();
+      this.ensureAccountsExist(entries);
+      const { total } = this.normalizeJournalEntries(entries);
+      const amountInWords = `${toWords(Math.round(total))} only`;
+
+      const [updated] = tx.update(journalVouchers).set({
+        status: "approved",
+        approvedBy: approverId ?? existing.approvedBy,
+        amountInWords,
+        totalAmount: total.toString(),
+        updatedAt: new Date(),
+      }).where(eq(journalVouchers.id, id)).returning().all();
+
+      this.postJournalToLedger(client, { ...existing, ...updated }, entries);
+
+      return updated;
+    });
+  }
+
+  async deleteJournalVoucher(id: number): Promise<boolean> {
+    const existing = await this.getJournalVoucher(id);
+    if (!existing) return false;
+    if (existing.status === "approved") {
+      throw new Error("Approved vouchers cannot be deleted");
+    }
+    return db.transaction((tx) => {
+      tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
+      tx.delete(journalVouchers).where(eq(journalVouchers.id, id)).run();
       return true;
     });
   }

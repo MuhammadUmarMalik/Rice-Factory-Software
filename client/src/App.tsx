@@ -51,6 +51,8 @@ function Router() {
       <Route path="/reports/purchases" component={PurchaseReport} />
       <Route path="/reports/sales" component={SalesReport} />
       <Route path="/reports/ledger" component={Ledger} />
+      <Route path="/reports/ledger-sales" component={Ledger} />
+      <Route path="/reports/ledger-purchases" component={Ledger} />
       <Route path="/reports/trial-balance" component={TrialBalance} />
       <Route path="/reports/profit-loss" component={ProfitLoss} />
       <Route component={NotFound} />

@@ -3,6 +3,8 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+const now = sql`CURRENT_TIMESTAMP`;
+
 // Users table
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -12,7 +14,7 @@ export const users = sqliteTable("users", {
   fullNameUrdu: text("full_name_urdu"),
   role: text("role", { enum: ["admin", "manager", "accountant", "operator"] }).notNull().default("operator"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -34,7 +36,7 @@ export const accounts = sqliteTable("accounts", {
   openingBalance: text("opening_balance").notNull().default("0"),
   currentBalance: text("current_balance").notNull().default("0"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
 export const insertAccountSchema = createInsertSchema(accounts).omit({
@@ -56,7 +58,7 @@ export const products = sqliteTable("products", {
   avgPurchasePrice: text("avg_purchase_price").notNull().default("0"),
   salePrice: text("sale_price").notNull().default("0"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
 export const insertProductSchema = createInsertSchema(products).omit({
@@ -95,7 +97,7 @@ export const purchases = sqliteTable("purchases", {
   notes: text("notes"),
   purchaseDate: integer("purchase_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
   createdBy: integer("created_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
 export const insertPurchaseSchema = createInsertSchema(purchases).omit({
@@ -181,7 +183,7 @@ export const processing = sqliteTable("processing", {
   startDate: integer("start_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
   completedDate: integer("completed_date", { mode: "timestamp" }),
   createdBy: integer("created_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
 export const insertProcessingSchema = createInsertSchema(processing).omit({
@@ -208,7 +210,7 @@ export const sales = sqliteTable("sales", {
   gatePassNumber: text("gate_pass_number"),
   saleDate: integer("sale_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
   createdBy: integer("created_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
 export const insertSaleSchema = createInsertSchema(sales).omit({
@@ -250,7 +252,7 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
   referenceType: text("reference_type"),
   referenceId: integer("reference_id"),
   entryDate: integer("entry_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
 export const insertLedgerEntrySchema = createInsertSchema(ledgerEntries).omit({
@@ -301,6 +303,47 @@ export const insertReceiptVoucherLineSchema = createInsertSchema(receiptVoucherL
 });
 export type InsertReceiptVoucherLine = z.infer<typeof insertReceiptVoucherLineSchema>;
 export type ReceiptVoucherLine = typeof receiptVoucherLines.$inferSelect;
+
+// Journal Vouchers
+export const journalVouchers = sqliteTable("journal_vouchers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherNo: text("voucher_no").notNull().unique(),
+  voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(now),
+  totalAmount: text("total_amount").notNull().default("0"),
+  amountInWords: text("amount_in_words").notNull().default(""),
+  narration: text("narration"),
+  status: text("status", { enum: ["draft", "approved"] }).notNull().default("draft"),
+  createdBy: integer("created_by").references(() => users.id),
+  approvedBy: integer("approved_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const journalVoucherEntries = sqliteTable("journal_voucher_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  journalVoucherId: integer("journal_voucher_id").notNull().references(() => journalVouchers.id, { onDelete: "cascade" }),
+  accountId: integer("account_id").notNull().references(() => accounts.id),
+  entryType: text("entry_type", { enum: ["DEBIT", "CREDIT"] }).notNull(),
+  amount: text("amount").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertJournalVoucherSchema = createInsertSchema(journalVouchers).omit({
+  id: true,
+  voucherNo: true,
+  amountInWords: true,
+  totalAmount: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertJournalVoucher = z.infer<typeof insertJournalVoucherSchema>;
+export type JournalVoucher = typeof journalVouchers.$inferSelect;
+
+export const insertJournalVoucherEntrySchema = createInsertSchema(journalVoucherEntries).omit({
+  id: true,
+});
+export type InsertJournalVoucherEntry = z.infer<typeof insertJournalVoucherEntrySchema>;
+export type JournalVoucherEntry = typeof journalVoucherEntries.$inferSelect;
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
@@ -428,6 +471,29 @@ export const receiptVoucherLinesRelations = relations(receiptVoucherLines, ({ on
   }),
   account: one(accounts, {
     fields: [receiptVoucherLines.accountId],
+    references: [accounts.id],
+  }),
+}));
+
+export const journalVouchersRelations = relations(journalVouchers, ({ one, many }) => ({
+  createdByUser: one(users, {
+    fields: [journalVouchers.createdBy],
+    references: [users.id],
+  }),
+  approvedByUser: one(users, {
+    fields: [journalVouchers.approvedBy],
+    references: [users.id],
+  }),
+  entries: many(journalVoucherEntries),
+}));
+
+export const journalVoucherEntriesRelations = relations(journalVoucherEntries, ({ one }) => ({
+  voucher: one(journalVouchers, {
+    fields: [journalVoucherEntries.journalVoucherId],
+    references: [journalVouchers.id],
+  }),
+  account: one(accounts, {
+    fields: [journalVoucherEntries.accountId],
     references: [accounts.id],
   }),
 }));

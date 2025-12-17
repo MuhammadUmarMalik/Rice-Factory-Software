@@ -38,6 +38,7 @@ const mainMenuItems = [
   { title: "purchases", url: "/purchases", icon: ShoppingCart },
   { title: "cashReceipts", url: "/receipts", icon: Receipt },
   { title: "cashPayments", url: "/payments", icon: Receipt },
+  { title: "journalVoucher", url: "/journal", icon: FileText },
   { title: "processing", url: "/processing", icon: Factory },
   { title: "sales", url: "/sales", icon: TrendingUp },
 ];
@@ -54,6 +55,8 @@ const reportsSubmenu = [
   { title: "purchaseReport", url: "/reports/purchases" },
   { title: "salesReport", url: "/reports/sales" },
   { title: "ledger", url: "/reports/ledger" },
+  { title: "salesLedger", url: "/reports/ledger-sales" },
+  { title: "purchaseLedger", url: "/reports/ledger-purchases" },
   { title: "trialBalance", url: "/reports/trial-balance" },
   { title: "profitLoss", url: "/reports/profit-loss" },
 ];
@@ -64,7 +67,7 @@ export function AppSidebar() {
 
   const isActive = (url: string) => {
     if (url === "/") return location === "/";
-    return location.startsWith(url);
+    return location === url || location.startsWith(`${url}/`);
   };
 
   return (

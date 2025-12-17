@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema } from "@shared/schema";
+import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema, insertJournalVoucherSchema } from "@shared/schema";
 import { z } from "zod";
 import { format } from "date-fns";
 import { promises as fs } from "fs";
@@ -83,6 +83,18 @@ const receiptLinesSchema = z.array(
       accountId: z.number().int().positive(),
     })
 ).min(1);
+
+const journalVoucherInputSchema = insertJournalVoucherSchema.extend({
+  voucherDate: z.union([z.string(), z.date(), z.number()]).transform((val) => new Date(val)),
+  status: z.enum(["draft", "approved"]).default("draft"),
+  narration: z.string().optional(),
+  createdBy: z.number().int().positive().optional(),
+  approvedBy: z.number().int().positive().optional(),
+  debitAccountId: z.number().int().positive(),
+  debitAmount: numericString,
+  creditAccountId: z.number().int().positive(),
+  creditAmount: numericString,
+});
 
 const productSchema = insertProductSchema.extend({
   currentStock: numericString.optional(),
@@ -678,6 +690,129 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
+  // Journal Vouchers
+  const buildJournalEntries = (body: z.infer<typeof journalVoucherInputSchema>) => ([
+    { accountId: body.debitAccountId, entryType: "DEBIT", amount: body.debitAmount },
+    { accountId: body.creditAccountId, entryType: "CREDIT", amount: body.creditAmount },
+  ]);
+
+  app.get("/api/journal-vouchers", async (_req, res) => {
+    try {
+      const [vouchers, accountsList] = await Promise.all([
+        storage.getJournalVouchers(),
+        storage.getAccounts(),
+      ]);
+      const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
+
+      const detailed = vouchers.map((v) => {
+        const debit = v.entries.find((e) => e.entryType === "DEBIT");
+        const credit = v.entries.find((e) => e.entryType === "CREDIT");
+        return {
+          ...v,
+          debitAccountName: debit ? accountMap.get(debit.accountId) || "" : "",
+          creditAccountName: credit ? accountMap.get(credit.accountId) || "" : "",
+        };
+      });
+
+      res.json(detailed);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch journal vouchers" });
+    }
+  });
+
+  app.get("/api/journal-vouchers/next-number", async (_req, res) => {
+    try {
+      const voucherNo = await storage.getNextJournalVoucherNumber();
+      res.json({ voucherNo });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher number" });
+    }
+  });
+
+  app.get("/api/journal-vouchers/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const voucher = await storage.getJournalVoucher(id);
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch voucher" });
+    }
+  });
+
+  app.post("/api/journal-vouchers", async (req, res) => {
+    try {
+      const parsed = journalVoucherInputSchema.parse(req.body);
+      const { debitAccountId, debitAmount, creditAccountId, creditAmount, ...header } = parsed;
+      const voucher = await storage.createJournalVoucher(header, buildJournalEntries(parsed));
+      res.status(201).json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to create journal voucher" });
+    }
+  });
+
+  app.patch("/api/journal-vouchers/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const parsed = journalVoucherInputSchema.parse(req.body);
+      const { debitAccountId, debitAmount, creditAccountId, creditAmount, ...header } = parsed;
+      const voucher = await storage.updateJournalVoucher(id, header, buildJournalEntries(parsed));
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to update journal voucher" });
+    }
+  });
+
+  app.post("/api/journal-vouchers/:id/approve", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const approverIdRaw = req.body?.approvedBy;
+      const approverId = approverIdRaw ? parseInt(approverIdRaw) : undefined;
+      const voucher = await storage.approveJournalVoucher(id, approverId);
+      if (!voucher) return res.status(404).json({ error: "Voucher not found" });
+      res.json(voucher);
+    } catch (error) {
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to approve journal voucher" });
+    }
+  });
+
+  app.delete("/api/journal-vouchers/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const ok = await storage.deleteJournalVoucher(id);
+      if (!ok) return res.status(404).json({ error: "Voucher not found" });
+      res.status(204).send();
+    } catch (error) {
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete journal voucher" });
+    }
+  });
+
   app.patch("/api/purchases/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -882,7 +1017,9 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   app.get("/api/ledger", async (req, res) => {
     try {
       const accountId = req.query.accountId ? parseInt(req.query.accountId as string) : undefined;
-      const entries = await storage.getLedgerEntries(accountId);
+      const scope = (req.query.scope as string) || "";
+      const referenceType = scope === "sales" ? "sale" : scope === "purchases" ? "purchase" : undefined;
+      const entries = await storage.getLedgerEntries(accountId, referenceType);
       res.json(entries);
     } catch (error) {
       console.error(error);
