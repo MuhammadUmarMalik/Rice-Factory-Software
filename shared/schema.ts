@@ -36,6 +36,7 @@ export const accounts = sqliteTable("accounts", {
   openingBalance: text("opening_balance").notNull().default("0"),
   currentBalance: text("current_balance").notNull().default("0"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  isSystemAccount: integer("is_system_account", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
@@ -345,6 +346,27 @@ export const insertJournalVoucherEntrySchema = createInsertSchema(journalVoucher
 export type InsertJournalVoucherEntry = z.infer<typeof insertJournalVoucherEntrySchema>;
 export type JournalVoucherEntry = typeof journalVoucherEntries.$inferSelect;
 
+// Cash Transactions
+export const cashTransactions = sqliteTable("cash_transactions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull().references(() => accounts.id),
+  transactionDate: integer("transaction_date", { mode: "timestamp" }).notNull().default(now),
+  transactionType: text("transaction_type", { enum: ["DEBIT", "CREDIT"] }).notNull(),
+  referenceType: text("reference_type"),
+  referenceId: integer("reference_id"),
+  amount: text("amount").notNull(),
+  narration: text("narration"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertCashTransactionSchema = createInsertSchema(cashTransactions).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCashTransaction = z.infer<typeof insertCashTransactionSchema>;
+export type CashTransaction = typeof cashTransactions.$inferSelect;
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   purchases: many(purchases),
@@ -494,6 +516,13 @@ export const journalVoucherEntriesRelations = relations(journalVoucherEntries, (
   }),
   account: one(accounts, {
     fields: [journalVoucherEntries.accountId],
+    references: [accounts.id],
+  }),
+}));
+
+export const cashTransactionsRelations = relations(cashTransactions, ({ one }) => ({
+  account: one(accounts, {
+    fields: [cashTransactions.accountId],
     references: [accounts.id],
   }),
 }));
