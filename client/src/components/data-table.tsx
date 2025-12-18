@@ -28,6 +28,7 @@ interface DataTableProps<T> {
   isLoading?: boolean;
   searchable?: boolean;
   searchPlaceholder?: string;
+  searchAlign?: "start" | "end";
   pageSize?: number;
   emptyMessage?: string;
   onRowClick?: (item: T) => void;
@@ -40,6 +41,7 @@ export function DataTable<T extends Record<string, any>>({
   isLoading = false,
   searchable = true,
   searchPlaceholder,
+  searchAlign = "start",
   pageSize = 10,
   emptyMessage,
   onRowClick,
@@ -73,19 +75,27 @@ export function DataTable<T extends Record<string, any>>({
   return (
     <div className="space-y-4">
       {searchable && (
-        <div className={`relative w-full max-w-sm ${isRTL ? "ml-auto" : ""}`}>
-          <Search className={`absolute ${isRTL ? "right-3" : "left-3"} top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground`} />
-          <Input
-            type="search"
-            placeholder={searchPlaceholder || t("search")}
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setCurrentPage(1);
-            }}
-            className={`${isRTL ? "pr-9 pl-4 text-right font-urdu" : "pl-9 pr-4"}`}
-            data-testid={`${testIdPrefix}-search`}
-          />
+        <div
+          className={`flex w-full ${
+            searchAlign === "end" ? "justify-end" : isRTL ? "justify-end" : "justify-start"
+          }`}
+        >
+          <div className="relative w-full max-w-sm">
+            <Search
+              className={`absolute ${isRTL ? "right-3" : "left-3"} top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground`}
+            />
+            <Input
+              type="search"
+              placeholder={searchPlaceholder || t("search")}
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
+              className={`${isRTL ? "pr-9 pl-4 text-right font-urdu" : "pl-9 pr-4"}`}
+              data-testid={`${testIdPrefix}-search`}
+            />
+          </div>
         </div>
       )}
 

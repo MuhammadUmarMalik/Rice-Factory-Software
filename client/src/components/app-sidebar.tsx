@@ -13,6 +13,7 @@ import {
   Wheat,
   Receipt,
   Wallet,
+  UserRound,
 } from "lucide-react";
 import {
   Sidebar,
@@ -56,11 +57,26 @@ const reportsSubmenu = [
   { title: "stockReport", url: "/reports/stock" },
   { title: "purchaseReport", url: "/reports/purchases" },
   { title: "salesReport", url: "/reports/sales" },
+  { title: "periodPurchases", url: "/reports/period-purchases" },
+  { title: "periodSales", url: "/reports/period-sales" },
+  { title: "grossProfit", url: "/reports/gross-profit" },
+  { title: "dayBook", url: "/reports/day-book" },
+  { title: "outstandingCustomers", url: "/reports/outstanding-customers" },
+  { title: "outstandingSuppliers", url: "/reports/outstanding-suppliers" },
   { title: "ledger", url: "/reports/ledger" },
   { title: "salesLedger", url: "/reports/ledger-sales" },
   { title: "purchaseLedger", url: "/reports/ledger-purchases" },
   { title: "trialBalance", url: "/reports/trial-balance" },
   { title: "profitLoss", url: "/reports/profit-loss" },
+  { title: "incomeStatement", url: "/reports/income-statement" },
+  { title: "balanceSheet", url: "/reports/balance-sheet" },
+  { title: "capitalAccount", url: "/reports/capital" },
+  { title: "salaryAccount", url: "/reports/salary" },
+];
+
+const hrSubmenu = [
+  { title: "employees", url: "/hr/employees" },
+  { title: "payroll", url: "/hr/payroll" },
 ];
 
 export function AppSidebar() {
@@ -130,8 +146,12 @@ export function AppSidebar() {
                             isActive={isActive(subItem.url)}
                             data-testid={`nav-${subItem.title}`}
                           >
-                            <Link href={subItem.url} className={isRTL ? "flex-row-reverse font-urdu" : ""}>
-                              {t(subItem.title as any)}
+                            <Link
+                              href={subItem.url}
+                              title={t(subItem.title as any)}
+                              className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
+                            >
+                              <span>{t(subItem.title as any)}</span>
                             </Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
@@ -159,8 +179,45 @@ export function AppSidebar() {
                             isActive={isActive(subItem.url)}
                             data-testid={`nav-${subItem.title}`}
                           >
-                            <Link href={subItem.url} className={isRTL ? "flex-row-reverse font-urdu" : ""}>
-                              {t(subItem.title as any)}
+                            <Link
+                              href={subItem.url}
+                              title={t(subItem.title as any)}
+                              className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
+                            >
+                              <span>{t(subItem.title as any)}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
+
+              <Collapsible className="group/collapsible">
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
+                      <UserRound className="h-4 w-4" />
+                      <span className={isRTL ? "font-urdu" : ""}>{t("hrPayroll")}</span>
+                      <ChevronDown className={`${isRTL ? "mr-auto" : "ml-auto"} h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180`} />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {hrSubmenu.map((subItem) => (
+                        <SidebarMenuSubItem key={subItem.title}>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={isActive(subItem.url)}
+                            data-testid={`nav-${subItem.title}`}
+                          >
+                            <Link
+                              href={subItem.url}
+                              title={t(subItem.title as any)}
+                              className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
+                            >
+                              <span>{t(subItem.title as any)}</span>
                             </Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>

@@ -211,11 +211,15 @@ export default function ProcessingPage() {
   const handleComplete = (processing: Processing) => {
     setSelectedProcessing(processing);
     const defaultOutput = bioProducts[0]?.id?.toString() ?? "";
+    const allowedCategories = ["rice_head", "broken_rice", "rice_polish", "kacher_nakoo"] as const;
+    const category = allowedCategories.includes(processing.outputCategory as any)
+      ? (processing.outputCategory as (typeof allowedCategories)[number])
+      : "rice_head";
     completeForm.reset({
-      outputProductId: (processing.outputProductId ?? defaultOutput),
+      outputProductId: processing.outputProductId ? processing.outputProductId.toString() : defaultOutput,
       outputQuantity: "",
       wastageQuantity: "0",
-      outputCategory: processing.outputCategory ?? "rice_head",
+      outputCategory: category,
     });
     setIsCompleteDialogOpen(true);
   };

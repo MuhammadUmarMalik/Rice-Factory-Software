@@ -12,7 +12,7 @@ export const users = sqliteTable("users", {
   password: text("password").notNull(),
   fullName: text("full_name").notNull(),
   fullNameUrdu: text("full_name_urdu"),
-  role: text("role", { enum: ["admin", "manager", "accountant", "operator"] }).notNull().default("operator"),
+  role: text("role", { enum: ["admin", "manager", "accountant", "hr", "operator"] }).notNull().default("operator"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
@@ -29,7 +29,21 @@ export const accounts = sqliteTable("accounts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   nameUrdu: text("name_urdu"),
-  type: text("type", { enum: ["customer", "supplier", "bank", "expense"] }).notNull(),
+  type: text("type", {
+    enum: [
+      "customer",
+      "supplier",
+      "bank",
+      "expense",
+      "asset",
+      "liability",
+      "equity",
+      "income",
+      "cogs",
+      "salary",
+      "employee",
+    ],
+  }).notNull(),
   phone: text("phone"),
   address: text("address"),
   addressUrdu: text("address_urdu"),
@@ -47,6 +61,117 @@ export const insertAccountSchema = createInsertSchema(accounts).omit({
 });
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
 export type Account = typeof accounts.$inferSelect;
+
+// Employees (HR Master)
+export const employees = sqliteTable("employees", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  employeeCode: text("employee_code").notNull().unique(),
+  name: text("name").notNull(),
+  fatherName: text("father_name"),
+  cnic: text("cnic"),
+  phone: text("phone"),
+  email: text("email"),
+  designation: text("designation"),
+  department: text("department"),
+  joiningDate: integer("joining_date", { mode: "timestamp" }),
+  employmentType: text("employment_type", { enum: ["Permanent", "Contract"] }).notNull().default("Permanent"),
+  basicSalary: text("basic_salary").notNull().default("0"),
+  status: text("status", { enum: ["Active", "Inactive"] }).notNull().default("Active"),
+  accountId: integer("account_id").references(() => accounts.id),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertEmployeeSchema = createInsertSchema(employees).omit({
+  id: true,
+  employeeCode: true,
+  accountId: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertEmployee = z.infer<typeof insertEmployeeSchema>;
+export type Employee = typeof employees.$inferSelect;
+
+// Salary Structure (history by effective date)
+export const employeeSalaryStructures = sqliteTable("employee_salary_structures", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  employeeId: integer("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  basicSalary: text("basic_salary").notNull().default("0"),
+  allowances: text("allowances").notNull().default("0"),
+  deductions: text("deductions").notNull().default("0"),
+  grossSalary: text("gross_salary").notNull().default("0"),
+  netSalary: text("net_salary").notNull().default("0"),
+  allowancesJson: text("allowances_json"),
+  deductionsJson: text("deductions_json"),
+  effectiveFrom: integer("effective_from", { mode: "timestamp" }).notNull(),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertEmployeeSalaryStructureSchema = createInsertSchema(employeeSalaryStructures).omit({
+  id: true,
+  grossSalary: true,
+  netSalary: true,
+  createdAt: true,
+});
+export type InsertEmployeeSalaryStructure = z.infer<typeof insertEmployeeSalaryStructureSchema>;
+export type EmployeeSalaryStructure = typeof employeeSalaryStructures.$inferSelect;
+
+// Payroll Processing
+export const payrolls = sqliteTable("payrolls", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  payrollMonth: text("payroll_month").notNull(), // YYYY-MM
+  employeeId: integer("employee_id").notNull().references(() => employees.id),
+  basicSalary: text("basic_salary").notNull().default("0"),
+  allowances: text("allowances").notNull().default("0"),
+  deductions: text("deductions").notNull().default("0"),
+  netSalary: text("net_salary").notNull().default("0"),
+  paymentStatus: text("payment_status", { enum: ["Paid", "Unpaid"] }).notNull().default("Unpaid"),
+  paymentMethod: text("payment_method", { enum: ["Cash", "Bank"] }),
+  paymentAccountId: integer("payment_account_id").references(() => accounts.id),
+  status: text("status", { enum: ["generated", "approved", "paid"] }).notNull().default("generated"),
+  journalVoucherId: integer("journal_voucher_id").references(() => journalVouchers.id),
+  paymentJournalVoucherId: integer("payment_journal_voucher_id").references(() => journalVouchers.id),
+  approvedBy: integer("approved_by").references(() => users.id),
+  approvedByRole: text("approved_by_role"),
+  approvedAt: integer("approved_at", { mode: "timestamp" }),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
+  paidAt: integer("paid_at", { mode: "timestamp" }),
+});
+
+export const insertPayrollSchema = createInsertSchema(payrolls).omit({
+  id: true,
+  journalVoucherId: true,
+  paymentJournalVoucherId: true,
+  approvedBy: true,
+  approvedByRole: true,
+  approvedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  paidAt: true,
+});
+export type InsertPayroll = z.infer<typeof insertPayrollSchema>;
+export type Payroll = typeof payrolls.$inferSelect;
+
+export const payrollAuditLogs = sqliteTable("payroll_audit_logs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  payrollId: integer("payroll_id").notNull().references(() => payrolls.id, { onDelete: "cascade" }),
+  action: text("action").notNull(), // generated|approved|paid|updated
+  performedBy: integer("performed_by").references(() => users.id),
+  performedByRole: text("performed_by_role"),
+  performedAt: integer("performed_at", { mode: "timestamp" }).notNull().default(now),
+  detailsJson: text("details_json"),
+});
+
+export const insertPayrollAuditLogSchema = createInsertSchema(payrollAuditLogs).omit({
+  id: true,
+  performedAt: true,
+});
+export type InsertPayrollAuditLog = z.infer<typeof insertPayrollAuditLogSchema>;
+export type PayrollAuditLog = typeof payrollAuditLogs.$inferSelect;
 
 // Products table (Rice types)
 export const products = sqliteTable("products", {
@@ -291,7 +416,6 @@ export const receiptVoucherLines = sqliteTable("receipt_voucher_lines", {
 
 export const insertReceiptVoucherSchema = createInsertSchema(receiptVouchers).omit({
   id: true,
-  voucherNumber: true,
   createdAt: true,
   updatedAt: true,
   deletedAt: true,
@@ -367,6 +491,23 @@ export const insertCashTransactionSchema = createInsertSchema(cashTransactions).
 export type InsertCashTransaction = z.infer<typeof insertCashTransactionSchema>;
 export type CashTransaction = typeof cashTransactions.$inferSelect;
 
+// Period Locks (posting restrictions)
+export const periodLocks = sqliteTable("period_locks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fromDate: integer("from_date", { mode: "timestamp" }).notNull(),
+  toDate: integer("to_date", { mode: "timestamp" }).notNull(),
+  reason: text("reason"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertPeriodLockSchema = createInsertSchema(periodLocks).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertPeriodLock = z.infer<typeof insertPeriodLockSchema>;
+export type PeriodLock = typeof periodLocks.$inferSelect;
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   purchases: many(purchases),
@@ -378,6 +519,28 @@ export const accountsRelations = relations(accounts, ({ many }) => ({
   purchases: many(purchases),
   sales: many(sales),
   ledgerEntries: many(ledgerEntries),
+}));
+
+export const employeesRelations = relations(employees, ({ one, many }) => ({
+  account: one(accounts, { fields: [employees.accountId], references: [accounts.id] }),
+  salaryStructures: many(employeeSalaryStructures),
+  payrolls: many(payrolls),
+}));
+
+export const employeeSalaryStructuresRelations = relations(employeeSalaryStructures, ({ one }) => ({
+  employee: one(employees, { fields: [employeeSalaryStructures.employeeId], references: [employees.id] }),
+}));
+
+export const payrollsRelations = relations(payrolls, ({ one, many }) => ({
+  employee: one(employees, { fields: [payrolls.employeeId], references: [employees.id] }),
+  journalVoucher: one(journalVouchers, { fields: [payrolls.journalVoucherId], references: [journalVouchers.id] }),
+  paymentJournalVoucher: one(journalVouchers, { fields: [payrolls.paymentJournalVoucherId], references: [journalVouchers.id] }),
+  paymentAccount: one(accounts, { fields: [payrolls.paymentAccountId], references: [accounts.id] }),
+  auditLogs: many(payrollAuditLogs),
+}));
+
+export const payrollAuditLogsRelations = relations(payrollAuditLogs, ({ one }) => ({
+  payroll: one(payrolls, { fields: [payrollAuditLogs.payrollId], references: [payrolls.id] }),
 }));
 
 export const productsRelations = relations(products, ({ many }) => ({
