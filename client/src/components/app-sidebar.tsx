@@ -14,6 +14,7 @@ import {
   Receipt,
   Wallet,
   UserRound,
+  ReceiptText,
 } from "lucide-react";
 import {
   Sidebar,
@@ -40,6 +41,7 @@ const mainMenuItems = [
   { title: "purchases", url: "/purchases", icon: ShoppingCart },
   { title: "cashReceipts", url: "/receipts", icon: Receipt },
   { title: "cashPayments", url: "/payments", icon: Receipt },
+  { title: "expenses", url: "/expenses", icon: ReceiptText },
   { title: "cashInHand", url: "/cash", icon: Wallet },
   { title: "journalVoucher", url: "/journal", icon: FileText },
   { title: "processing", url: "/processing", icon: Factory },

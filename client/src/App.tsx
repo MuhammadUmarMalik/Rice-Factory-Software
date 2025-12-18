@@ -42,6 +42,7 @@ import Journal from "@/pages/journal";
 import Cash from "@/pages/cash";
 import EmployeesPage from "@/pages/hr/employees";
 import PayrollPage from "@/pages/hr/payroll";
+import ExpensesPage from "@/pages/expenses";
 
 
 function Router() {
@@ -52,6 +53,7 @@ function Router() {
       <Route path="/purchases" component={Purchases} />
       <Route path="/receipts" component={Receipts} />
       <Route path="/payments" component={PaymentsPage} />
+      <Route path="/expenses" component={ExpensesPage} />
       <Route path="/journal" component={Journal} />
       <Route path="/cash" component={Cash} />
       <Route path="/processing" component={Processing} />

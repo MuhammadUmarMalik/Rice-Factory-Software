@@ -62,6 +62,75 @@ export const insertAccountSchema = createInsertSchema(accounts).omit({
 export type InsertAccount = z.infer<typeof insertAccountSchema>;
 export type Account = typeof accounts.$inferSelect;
 
+// Fiscal Calendar (Company-level; single-company assumption)
+export const fiscalYears = sqliteTable("fiscal_years", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(), // e.g., FY-2025
+  startDate: integer("start_date", { mode: "timestamp" }).notNull(),
+  endDate: integer("end_date", { mode: "timestamp" }).notNull(),
+  status: text("status", { enum: ["draft", "open", "closed"] }).notNull().default("draft"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const fiscalPeriods = sqliteTable("fiscal_periods", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fiscalYearId: integer("fiscal_year_id").notNull().references(() => fiscalYears.id, { onDelete: "cascade" }),
+  yearMonth: text("year_month").notNull(), // YYYY-MM
+  periodStart: integer("period_start", { mode: "timestamp" }).notNull(),
+  periodEnd: integer("period_end", { mode: "timestamp" }).notNull(),
+  isClosed: integer("is_closed", { mode: "boolean" }).notNull().default(false),
+  closedBy: integer("closed_by").references(() => users.id),
+  closedAt: integer("closed_at", { mode: "timestamp" }),
+});
+
+export const fiscalOpeningBalances = sqliteTable("fiscal_opening_balances", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fiscalYearId: integer("fiscal_year_id").notNull().references(() => fiscalYears.id, { onDelete: "cascade" }),
+  accountId: integer("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  openingBalance: text("opening_balance").notNull().default("0"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+// Tax Configuration & Compliance
+export const taxTypes = sqliteTable("tax_types", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(), // e.g. GST, WHT
+  direction: text("direction", { enum: ["sales", "purchases", "both"] }).notNull().default("both"),
+  inputAccountId: integer("input_account_id").references(() => accounts.id), // tax receivable
+  outputAccountId: integer("output_account_id").references(() => accounts.id), // tax payable
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const taxRates = sqliteTable("tax_rates", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taxTypeId: integer("tax_type_id").notNull().references(() => taxTypes.id, { onDelete: "cascade" }),
+  ratePercent: text("rate_percent").notNull().default("0"),
+  effectiveFrom: integer("effective_from", { mode: "timestamp" }).notNull().default(now),
+  effectiveTo: integer("effective_to", { mode: "timestamp" }),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+});
+
+export const taxLedgers = sqliteTable("tax_ledgers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taxTypeId: integer("tax_type_id").notNull().references(() => taxTypes.id),
+  sourceType: text("source_type").notNull(), // purchase|sale
+  sourceId: integer("source_id").notNull(),
+  taxBase: text("tax_base").notNull().default("0"),
+  taxAmount: text("tax_amount").notNull().default("0"),
+  postingDate: integer("posting_date", { mode: "timestamp" }).notNull().default(now),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertTaxTypeSchema = createInsertSchema(taxTypes).omit({ id: true, createdAt: true });
+export type InsertTaxType = z.infer<typeof insertTaxTypeSchema>;
+export type TaxType = typeof taxTypes.$inferSelect;
+
+export const insertTaxRateSchema = createInsertSchema(taxRates).omit({ id: true });
+export type InsertTaxRate = z.infer<typeof insertTaxRateSchema>;
+export type TaxRate = typeof taxRates.$inferSelect;
+
 // Employees (HR Master)
 export const employees = sqliteTable("employees", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -216,6 +285,8 @@ export const purchases = sqliteTable("purchases", {
   totalMoundRemainderKg: text("total_mound_remainder_kg").notNull().default("0"),
   chargesAdd: text("charges_add").notNull().default("0"),
   chargesLess: text("charges_less").notNull().default("0"),
+  taxTypeId: integer("tax_type_id").references(() => taxTypes.id),
+  taxAmount: text("tax_amount").notNull().default("0"),
   buyerAmount: text("buyer_amount").notNull().default("0"),
   balanceDue: text("balance_due").notNull().default("0"),
   paidAmount: text("paid_amount").notNull().default("0"),
@@ -329,6 +400,8 @@ export const sales = sqliteTable("sales", {
   loadingCharges: text("loading_charges").default("0"),
   weighingCharges: text("weighing_charges").default("0"),
   otherCharges: text("other_charges").default("0"),
+  taxTypeId: integer("tax_type_id").references(() => taxTypes.id),
+  taxAmount: text("tax_amount").notNull().default("0"),
   subtotal: text("subtotal").notNull().default("0"),
   totalAmount: text("total_amount").notNull().default("0"),
   paidAmount: text("paid_amount").notNull().default("0"),
@@ -394,6 +467,7 @@ export const receiptVouchers = sqliteTable("receipt_vouchers", {
   voucherNumber: text("voucher_number").notNull().unique(),
   voucherType: text("voucher_type").notNull().default("CR"),
   voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  settlementAccountId: integer("settlement_account_id").references(() => accounts.id), // cash/bank account used as counter-entry
   totalDebit: text("total_debit").notNull().default("0"),
   totalCredit: text("total_credit").notNull().default("0"),
   amountInWords: text("amount_in_words").notNull().default(""),
@@ -412,6 +486,8 @@ export const receiptVoucherLines = sqliteTable("receipt_voucher_lines", {
   narration: text("narration"),
   debit: text("debit").notNull().default("0"),
   credit: text("credit").notNull().default("0"),
+  referenceType: text("reference_type"), // sale|purchase|journal_voucher|...
+  referenceId: integer("reference_id"),
 });
 
 export const insertReceiptVoucherSchema = createInsertSchema(receiptVouchers).omit({
@@ -508,6 +584,209 @@ export const insertPeriodLockSchema = createInsertSchema(periodLocks).omit({
 export type InsertPeriodLock = z.infer<typeof insertPeriodLockSchema>;
 export type PeriodLock = typeof periodLocks.$inferSelect;
 
+// Contra Vouchers (cash<->bank, bank<->bank)
+export const contraVouchers = sqliteTable("contra_vouchers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherNo: text("voucher_no").notNull().unique(),
+  voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(now),
+  narration: text("narration"),
+  status: text("status", { enum: ["draft", "approved"] }).notNull().default("draft"),
+  totalAmount: text("total_amount").notNull().default("0"),
+  createdBy: integer("created_by").references(() => users.id),
+  approvedBy: integer("approved_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const contraVoucherLines = sqliteTable("contra_voucher_lines", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  contraVoucherId: integer("contra_voucher_id").notNull().references(() => contraVouchers.id, { onDelete: "cascade" }),
+  accountId: integer("account_id").notNull().references(() => accounts.id),
+  entryType: text("entry_type", { enum: ["DEBIT", "CREDIT"] }).notNull(),
+  amount: text("amount").notNull().default("0"),
+});
+
+export const insertContraVoucherSchema = createInsertSchema(contraVouchers).omit({
+  id: true,
+  voucherNo: true,
+  totalAmount: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertContraVoucher = z.infer<typeof insertContraVoucherSchema>;
+export type ContraVoucher = typeof contraVouchers.$inferSelect;
+
+export const insertContraVoucherLineSchema = createInsertSchema(contraVoucherLines).omit({
+  id: true,
+});
+export type InsertContraVoucherLine = z.infer<typeof insertContraVoucherLineSchema>;
+export type ContraVoucherLine = typeof contraVoucherLines.$inferSelect;
+
+// Fixed Assets
+export const assetCategories = sqliteTable("asset_categories", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  depreciationMethod: text("depreciation_method", { enum: ["SLM", "WDV"] }).notNull().default("SLM"),
+  depreciationRateAnnual: text("depreciation_rate_annual").notNull().default("0"), // percent
+  assetAccountId: integer("asset_account_id").references(() => accounts.id), // optional override
+  accumulatedDepreciationAccountId: integer("accumulated_depreciation_account_id").references(() => accounts.id),
+  depreciationExpenseAccountId: integer("depreciation_expense_account_id").references(() => accounts.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const fixedAssets = sqliteTable("fixed_assets", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  assetCode: text("asset_code").notNull().unique(),
+  name: text("name").notNull(),
+  categoryId: integer("category_id").notNull().references(() => assetCategories.id),
+  acquisitionDate: integer("acquisition_date", { mode: "timestamp" }).notNull(),
+  acquisitionCost: text("acquisition_cost").notNull().default("0"),
+  salvageValue: text("salvage_value").notNull().default("0"),
+  usefulLifeMonths: integer("useful_life_months").notNull().default(0),
+  disposedAt: integer("disposed_at", { mode: "timestamp" }),
+  disposalProceeds: text("disposal_proceeds").notNull().default("0"),
+  disposalNotes: text("disposal_notes"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const assetDepreciationRuns = sqliteTable("asset_depreciation_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fiscalPeriodId: integer("fiscal_period_id").references(() => fiscalPeriods.id),
+  runMonth: text("run_month").notNull(), // YYYY-MM
+  runDate: integer("run_date", { mode: "timestamp" }).notNull().default(now),
+  journalVoucherId: integer("journal_voucher_id").references(() => journalVouchers.id),
+  status: text("status", { enum: ["draft", "posted"] }).notNull().default("draft"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertAssetCategorySchema = createInsertSchema(assetCategories).omit({ id: true, createdAt: true });
+export type InsertAssetCategory = z.infer<typeof insertAssetCategorySchema>;
+export type AssetCategory = typeof assetCategories.$inferSelect;
+
+export const insertFixedAssetSchema = createInsertSchema(fixedAssets).omit({ id: true, assetCode: true, createdAt: true });
+export type InsertFixedAsset = z.infer<typeof insertFixedAssetSchema>;
+export type FixedAsset = typeof fixedAssets.$inferSelect;
+
+export const insertAssetDepreciationRunSchema = createInsertSchema(assetDepreciationRuns).omit({
+  id: true,
+  createdAt: true,
+  journalVoucherId: true,
+});
+export type InsertAssetDepreciationRun = z.infer<typeof insertAssetDepreciationRunSchema>;
+export type AssetDepreciationRun = typeof assetDepreciationRuns.$inferSelect;
+
+// Bank Reconciliation
+export const bankStatements = sqliteTable("bank_statements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  bankAccountId: integer("bank_account_id").notNull().references(() => accounts.id),
+  statementFrom: integer("statement_from", { mode: "timestamp" }).notNull(),
+  statementTo: integer("statement_to", { mode: "timestamp" }).notNull(),
+  reference: text("reference"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const bankStatementLines = sqliteTable("bank_statement_lines", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  statementId: integer("statement_id").notNull().references(() => bankStatements.id, { onDelete: "cascade" }),
+  txDate: integer("tx_date", { mode: "timestamp" }).notNull(),
+  description: text("description").notNull().default(""),
+  debit: text("debit").notNull().default("0"),
+  credit: text("credit").notNull().default("0"),
+  amount: text("amount").notNull().default("0"), // signed convenience (debit - credit) from bank perspective
+  externalRef: text("external_ref"),
+});
+
+export const bankReconciliationItems = sqliteTable("bank_reconciliation_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  bankAccountId: integer("bank_account_id").notNull().references(() => accounts.id),
+  statementLineId: integer("statement_line_id").references(() => bankStatementLines.id, { onDelete: "cascade" }),
+  ledgerEntryId: integer("ledger_entry_id").references(() => ledgerEntries.id, { onDelete: "cascade" }),
+  status: text("status", { enum: ["matched", "unmatched"] }).notNull().default("unmatched"),
+  matchedAt: integer("matched_at", { mode: "timestamp" }),
+  matchedBy: integer("matched_by").references(() => users.id),
+});
+
+// AR/AP Allocations (invoice settlement)
+export const invoiceAllocations = sqliteTable("invoice_allocations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  invoiceType: text("invoice_type", { enum: ["sale", "purchase"] }).notNull(),
+  invoiceId: integer("invoice_id").notNull(),
+  voucherType: text("voucher_type", { enum: ["receipt", "payment"] }).notNull(),
+  voucherId: integer("voucher_id").notNull(),
+  allocationDate: integer("allocation_date", { mode: "timestamp" }).notNull().default(now),
+  amount: text("amount").notNull().default("0"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+// System-wide Audit Trail
+export const auditLogs = sqliteTable("audit_logs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  entity: text("entity").notNull(), // e.g., purchase, sale, journal_voucher
+  entityId: integer("entity_id"),
+  action: text("action").notNull(), // create|update|delete|approve|post|close
+  beforeJson: text("before_json"),
+  afterJson: text("after_json"),
+  performedBy: integer("performed_by").references(() => users.id),
+  performedByRole: text("performed_by_role"),
+  performedAt: integer("performed_at", { mode: "timestamp" }).notNull().default(now),
+  source: text("source").notNull().default("api"),
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, performedAt: true });
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;
+
+// Budgeting (Phase 1)
+export const budgets = sqliteTable("budgets", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  fiscalYearId: integer("fiscal_year_id").references(() => fiscalYears.id),
+  status: text("status", { enum: ["draft", "active", "archived"] }).notNull().default("draft"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const budgetLines = sqliteTable("budget_lines", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  budgetId: integer("budget_id").notNull().references(() => budgets.id, { onDelete: "cascade" }),
+  accountId: integer("account_id").notNull().references(() => accounts.id),
+  yearMonth: text("year_month").notNull(), // YYYY-MM
+  amount: text("amount").notNull().default("0"),
+});
+
+export const insertBudgetSchema = createInsertSchema(budgets).omit({ id: true, createdAt: true });
+export type InsertBudget = z.infer<typeof insertBudgetSchema>;
+export type Budget = typeof budgets.$inferSelect;
+
+export const insertBudgetLineSchema = createInsertSchema(budgetLines).omit({ id: true });
+export type InsertBudgetLine = z.infer<typeof insertBudgetLineSchema>;
+export type BudgetLine = typeof budgetLines.$inferSelect;
+
+// Expense Entries (direct expenses)
+export const expenseEntries = sqliteTable("expense_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherNo: text("voucher_no").notNull().unique(),
+  expenseAccountId: integer("expense_account_id").notNull().references(() => accounts.id),
+  payFromAccountId: integer("pay_from_account_id").notNull().references(() => accounts.id),
+  amount: text("amount").notNull().default("0"),
+  description: text("description"),
+  expenseDate: integer("expense_date", { mode: "timestamp" }).notNull().default(now),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertExpenseEntrySchema = createInsertSchema(expenseEntries).omit({
+  id: true,
+  voucherNo: true,
+  createdAt: true,
+});
+export type InsertExpenseEntry = z.infer<typeof insertExpenseEntrySchema>;
+export type ExpenseEntry = typeof expenseEntries.$inferSelect;
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   purchases: many(purchases),
@@ -519,6 +798,8 @@ export const accountsRelations = relations(accounts, ({ many }) => ({
   purchases: many(purchases),
   sales: many(sales),
   ledgerEntries: many(ledgerEntries),
+  expenseEntriesAsExpense: many(expenseEntries),
+  expenseEntriesAsPayFrom: many(expenseEntries),
 }));
 
 export const employeesRelations = relations(employees, ({ one, many }) => ({

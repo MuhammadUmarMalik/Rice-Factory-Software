@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, desc, sql, gte, lte, lt, isNull, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, lt, isNull, inArray, or } from "drizzle-orm";
 import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
   processing, sales, saleItems, ledgerEntries,
@@ -24,6 +24,16 @@ import {
   type CashTransaction, type InsertCashTransaction,
   periodLocks,
   type PeriodLock, type InsertPeriodLock,
+  fiscalYears, fiscalPeriods, fiscalOpeningBalances,
+  taxTypes, taxRates, taxLedgers,
+  invoiceAllocations,
+  auditLogs,
+  contraVouchers, contraVoucherLines,
+  assetCategories, fixedAssets, assetDepreciationRuns,
+  bankStatements, bankStatementLines, bankReconciliationItems,
+  budgets, budgetLines,
+  expenseEntries,
+  type ExpenseEntry, type InsertExpenseEntry, insertExpenseEntrySchema,
 } from "@shared/schema";
 
 type DbClient = typeof db;
@@ -44,6 +54,33 @@ export interface IStorage {
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   getUsers(): Promise<User[]>;
+
+  // Fiscal Year / Periods
+  getFiscalYears(): Promise<any[]>;
+  getFiscalPeriods(fiscalYearId: number): Promise<any[]>;
+  createFiscalYear(
+    data: { name: string; startDate: Date; endDate: Date; status?: "draft" | "open" | "closed" },
+    performedBy?: { userId?: number; role?: string },
+  ): Promise<any>;
+  setFiscalYearStatus(
+    fiscalYearId: number,
+    status: "draft" | "open" | "closed",
+    performedBy?: { userId?: number; role?: string },
+  ): Promise<any>;
+  setFiscalPeriodClosed(
+    periodId: number,
+    isClosed: boolean,
+    performedBy?: { userId?: number; role?: string },
+  ): Promise<any>;
+  rollForwardOpeningBalances(
+    fromFiscalYearId: number,
+    to: { name: string; startDate: Date; endDate: Date },
+    performedBy?: { userId?: number; role?: string },
+  ): Promise<any>;
+
+  // Expense entries
+  getExpenses(): Promise<ExpenseEntry[]>;
+  createExpense(expense: InsertExpenseEntry, performedBy?: { userId?: number; role?: string }): Promise<ExpenseEntry>;
 
   // Accounts
   getAccounts(type?: string): Promise<Account[]>;
@@ -291,6 +328,20 @@ function startOfPayrollMonth(month: string): Date {
   return new Date(year, mm - 1, 1);
 }
 
+function toYearMonth(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function endOfMonth(d: Date): Date {
+  const dt = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  dt.setHours(23, 59, 59, 999);
+  return dt;
+}
+
 type NormalSide = "DEBIT" | "CREDIT";
 function normalSideForAccountType(type: string | null | undefined): NormalSide {
   if (!type) return "DEBIT";
@@ -358,6 +409,274 @@ export class DatabaseStorage implements IStorage {
 
   async getUsers(): Promise<User[]> {
     return db.select().from(users).orderBy(users.fullName).all();
+  }
+
+  // Fiscal Years / Periods
+  async getFiscalYears() {
+    return db.select().from(fiscalYears).orderBy(fiscalYears.startDate).all();
+  }
+
+  async getFiscalPeriods(fiscalYearId: number) {
+    return db.select().from(fiscalPeriods).where(eq(fiscalPeriods.fiscalYearId, fiscalYearId)).orderBy(fiscalPeriods.periodStart).all();
+  }
+
+  private generatePeriodsForYear(client: DbClient, fiscalYearId: number, start: Date, end: Date) {
+    const cursor = new Date(start);
+    cursor.setDate(1);
+    cursor.setHours(0, 0, 0, 0);
+    while (cursor <= end) {
+      const periodStart = startOfMonth(cursor);
+      const periodEnd = endOfMonth(cursor);
+      client.insert(fiscalPeriods).values({
+        fiscalYearId,
+        yearMonth: toYearMonth(cursor),
+        periodStart,
+        periodEnd,
+        isClosed: false as any,
+      } as any).run();
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  async createFiscalYear(
+    data: { name: string; startDate: Date; endDate: Date; status?: "draft" | "open" | "closed" },
+    performedBy?: { userId?: number; role?: string },
+  ) {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const overlap = client
+        .select()
+        .from(fiscalYears)
+        .where(
+          or(
+            and(lte(fiscalYears.startDate, data.startDate), gte(fiscalYears.endDate, data.startDate)),
+            and(lte(fiscalYears.startDate, data.endDate), gte(fiscalYears.endDate, data.endDate)),
+          ),
+        )
+        .all();
+      if (overlap.length > 0) {
+        throw new Error("Fiscal year overlaps an existing year");
+      }
+
+      const fy = client.insert(fiscalYears).values({
+        name: data.name,
+        startDate: data.startDate,
+        endDate: data.endDate,
+        status: data.status || "draft",
+        createdBy: performedBy?.userId,
+        createdAt: new Date(),
+      } as any).returning().get();
+
+      this.generatePeriodsForYear(client, fy.id, data.startDate, data.endDate);
+
+      const accs = client.select().from(accounts).all();
+      for (const acc of accs) {
+        client.insert(fiscalOpeningBalances).values({
+          fiscalYearId: fy.id,
+          accountId: acc.id,
+          openingBalance: acc.openingBalance || "0",
+          createdBy: performedBy?.userId,
+          createdAt: new Date(),
+        } as any).run();
+      }
+
+      return fy as any;
+    });
+  }
+
+  async setFiscalYearStatus(
+    fiscalYearId: number,
+    status: "draft" | "open" | "closed",
+    performedBy?: { userId?: number; role?: string },
+  ) {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const [existing] = client.select().from(fiscalYears).where(eq(fiscalYears.id, fiscalYearId)).all();
+      if (!existing) return undefined;
+
+      if (status === "closed") {
+        client
+          .update(fiscalPeriods)
+          .set({ isClosed: true as any, closedBy: performedBy?.userId, closedAt: new Date() })
+          .where(eq(fiscalPeriods.fiscalYearId, fiscalYearId))
+          .run();
+      }
+
+      const [updated] = client
+        .update(fiscalYears)
+        .set({ status })
+        .where(eq(fiscalYears.id, fiscalYearId))
+        .returning()
+        .all();
+      return updated as any;
+    });
+  }
+
+  async setFiscalPeriodClosed(
+    periodId: number,
+    isClosed: boolean,
+    performedBy?: { userId?: number; role?: string },
+  ) {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const [existing] = client.select().from(fiscalPeriods).where(eq(fiscalPeriods.id, periodId)).all();
+      if (!existing) return undefined;
+
+      const [updated] = client
+        .update(fiscalPeriods)
+        .set({
+          isClosed: isClosed as any,
+          closedBy: isClosed ? performedBy?.userId : null,
+          closedAt: isClosed ? new Date() : null,
+        })
+        .where(eq(fiscalPeriods.id, periodId))
+        .returning()
+        .all();
+      return updated as any;
+    });
+  }
+
+  private computeBalanceAsOf(client: DbClient, accountId: number, asOf: Date): number {
+    const [acc] = client.select().from(accounts).where(eq(accounts.id, accountId)).all();
+    if (!acc) return 0;
+
+    const [fy] = client
+      .select()
+      .from(fiscalYears)
+      .where(and(lte(fiscalYears.startDate, asOf), gte(fiscalYears.endDate, asOf)))
+      .all();
+
+    let opening = parseAmount(acc.openingBalance || "0");
+    if (fy) {
+      const [fyOb] = client
+        .select()
+        .from(fiscalOpeningBalances)
+        .where(and(eq(fiscalOpeningBalances.fiscalYearId, fy.id), eq(fiscalOpeningBalances.accountId, accountId)))
+        .all();
+      if (fyOb) {
+        opening = parseAmount(fyOb.openingBalance);
+      }
+      // add movements from fiscal year start to asOf
+      const [movementRow] = client
+        .select({
+          total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+        })
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.accountId, accountId), gte(ledgerEntries.entryDate, fy.startDate), lte(ledgerEntries.entryDate, asOf)))
+        .all();
+      opening += parseAmount(movementRow?.total || "0");
+    } else {
+      const [movementRow] = client
+        .select({
+          total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+        })
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.accountId, accountId), lte(ledgerEntries.entryDate, asOf)))
+        .all();
+      opening += parseAmount(movementRow?.total || "0");
+    }
+    return opening;
+  }
+
+  async rollForwardOpeningBalances(
+    fromFiscalYearId: number,
+    to: { name: string; startDate: Date; endDate: Date },
+    performedBy?: { userId?: number; role?: string },
+  ) {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const [fromFy] = client.select().from(fiscalYears).where(eq(fiscalYears.id, fromFiscalYearId)).all();
+      if (!fromFy) throw new Error("Source fiscal year not found");
+
+      const nextFy = client
+        .insert(fiscalYears)
+        .values({
+          name: to.name,
+          startDate: to.startDate,
+          endDate: to.endDate,
+          status: "draft",
+          createdBy: performedBy?.userId,
+          createdAt: new Date(),
+        } as any)
+        .returning()
+        .get();
+
+      this.generatePeriodsForYear(client, nextFy.id, to.startDate, to.endDate);
+
+      const accs = client.select().from(accounts).all();
+      for (const acc of accs) {
+        const closing = this.computeBalanceAsOf(client, acc.id, new Date(fromFy.endDate as any));
+        client.insert(fiscalOpeningBalances).values({
+          fiscalYearId: nextFy.id,
+          accountId: acc.id,
+          openingBalance: closing.toString(),
+          createdBy: performedBy?.userId,
+          createdAt: new Date(),
+        } as any).run();
+      }
+
+      return nextFy as any;
+    });
+  }
+
+  // Expense entries
+  async getExpenses(): Promise<ExpenseEntry[]> {
+    return db.select().from(expenseEntries).orderBy(desc(expenseEntries.expenseDate)).all();
+  }
+
+  private nextExpenseNumber(client: DbClient): string {
+    const year = new Date().getFullYear();
+    const [last] = client.select().from(expenseEntries).orderBy(desc(expenseEntries.id)).limit(1).all();
+    const next = last ? parseInt((last.voucherNo || "").split("-").pop() || "0") + 1 : 1;
+    return `EXP-${year}-${String(next).padStart(5, "0")}`;
+  }
+
+  async createExpense(expense: InsertExpenseEntry, performedBy?: { userId?: number; role?: string }): Promise<ExpenseEntry> {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const postingDate = expense.expenseDate ? new Date(expense.expenseDate as any) : new Date();
+      this.assertPostingAllowed(client, postingDate, "expense");
+
+      const [expAcc] = client.select().from(accounts).where(eq(accounts.id, expense.expenseAccountId)).all();
+      if (!expAcc || String(expAcc.type).toLowerCase() !== "expense") throw new Error("Expense account must be of type expense");
+      const [payAcc] = client.select().from(accounts).where(eq(accounts.id, expense.payFromAccountId)).all();
+      if (!payAcc) throw new Error("Pay-from account not found");
+
+      const voucherNo = this.nextExpenseNumber(client);
+      const amount = parseAmount(expense.amount || "0");
+      if (amount <= 0) throw new Error("Amount must be greater than zero");
+
+      const created = client.insert(expenseEntries).values({
+        ...expense,
+        voucherNo,
+        amount: amount.toString(),
+        expenseDate: postingDate,
+        createdBy: performedBy?.userId,
+        createdAt: new Date(),
+      } as any).returning().get();
+
+      // Dr Expense, Cr Cash/Bank/Other
+      this.postLedgerEntry(client, {
+        accountId: expense.expenseAccountId,
+        transactionType: "debit",
+        amount: amount.toString(),
+        description: `Expense ${voucherNo}`,
+        referenceType: "expense",
+        referenceId: created.id,
+        entryDate: postingDate,
+      });
+      this.postLedgerEntry(client, {
+        accountId: expense.payFromAccountId,
+        transactionType: "credit",
+        amount: amount.toString(),
+        description: `Expense ${voucherNo}`,
+        referenceType: "expense",
+        referenceId: created.id,
+        entryDate: postingDate,
+      });
+
+      return created as any;
+    });
   }
 
   // Employees
@@ -555,7 +874,7 @@ export class DatabaseStorage implements IStorage {
       const salaryExpense = this.ensureSystemAccount(client, "Salary Expense", "salary");
 
       const voucherDate = postingDate ?? new Date();
-      this.assertPeriodNotLocked(client, voucherDate, "payroll approval");
+      this.assertPostingAllowed(client, voucherDate, "payroll approval");
 
       const month = payroll.payrollMonth;
       const amount = parseAmount(payroll.netSalary || "0").toString();
@@ -638,7 +957,7 @@ export class DatabaseStorage implements IStorage {
 
       const amount = parseAmount(payroll.netSalary || "0").toString();
       const paymentDate = payment.paymentDate ?? new Date();
-      this.assertPeriodNotLocked(client, paymentDate, "payroll payment");
+      this.assertPostingAllowed(client, paymentDate, "payroll payment");
 
       let creditAccountId: number;
       if (payment.method === "Cash") {
@@ -758,6 +1077,47 @@ export class DatabaseStorage implements IStorage {
       .set({ currentBalance: newBalance.toString() })
       .where(eq(accounts.id, id));
   }
+
+  private applyAccountBalanceInternal(client: DbClient, account: Account, transactionType: "debit" | "credit", amount: number): number {
+    const normal = normalSideForAccountType(account.type);
+    const current = parseAmount(account.currentBalance || "0");
+    let newBalance = current;
+    if (transactionType === "debit") {
+      newBalance = normal === "DEBIT" ? current + amount : current - amount;
+    } else {
+      newBalance = normal === "CREDIT" ? current + amount : current - amount;
+    }
+    client.update(accounts).set({ currentBalance: newBalance.toString() }).where(eq(accounts.id, account.id)).run();
+    return newBalance;
+  }
+
+  private postLedgerEntry(client: DbClient, entry: Omit<InsertLedgerEntry, "balance">): LedgerEntry {
+    const [account] = client.select().from(accounts).where(eq(accounts.id, entry.accountId)).all();
+    if (!account) throw new Error(`Account not found (${entry.accountId})`);
+    const amount = parseAmount(entry.amount || "0");
+    const newBalance = this.applyAccountBalanceInternal(client, account as any, entry.transactionType as any, amount);
+
+    const newEntry = client.insert(ledgerEntries).values({
+      ...entry,
+      balance: newBalance.toString(),
+    }).returning().get();
+
+    // Auto record cash movement for system Cash in Hand
+    if (account.isSystemAccount && account.name === "Cash in Hand") {
+      const tx: CashTxInput = {
+        accountId: account.id,
+        transactionType: entry.transactionType === "debit" ? "DEBIT" : "CREDIT",
+        transactionDate: entry.entryDate || new Date(),
+        referenceType: entry.referenceType,
+        referenceId: entry.referenceId,
+        amount: entry.amount,
+        narration: entry.description,
+      };
+      client.insert(cashTransactions).values(tx).run();
+    }
+
+    return newEntry as any;
+  }
   private ensureCashAccountInternal(client: DbClient): Account {
     const existing = client.select().from(accounts)
       .where(and(eq(accounts.name, "Cash in Hand"), eq(accounts.isSystemAccount, true as any)))
@@ -791,6 +1151,78 @@ export class DatabaseStorage implements IStorage {
     return created as any;
   }
 
+  private ensureFiscalCalendarInitialized(client: DbClient, performedBy?: { userId?: number }) {
+    const existing = client.select().from(fiscalYears).all();
+    if (existing.length > 0) return;
+
+    const year = new Date().getFullYear();
+    const start = new Date(year, 0, 1);
+    const end = new Date(year, 11, 31, 23, 59, 59, 999);
+
+    const fy = client.insert(fiscalYears).values({
+      name: `FY-${year}`,
+      startDate: start,
+      endDate: end,
+      status: "open",
+      createdBy: performedBy?.userId,
+      createdAt: new Date(),
+    } as any).returning().get();
+
+    for (let m = 0; m < 12; m++) {
+      const dt = new Date(year, m, 1);
+      client.insert(fiscalPeriods).values({
+        fiscalYearId: fy.id,
+        yearMonth: toYearMonth(dt),
+        periodStart: startOfMonth(dt),
+        periodEnd: endOfMonth(dt),
+        isClosed: false as any,
+      } as any).run();
+    }
+
+    const allAccounts = client.select().from(accounts).all();
+    for (const acc of allAccounts) {
+      client.insert(fiscalOpeningBalances).values({
+        fiscalYearId: fy.id,
+        accountId: acc.id,
+        openingBalance: acc.openingBalance || "0",
+        createdBy: performedBy?.userId,
+        createdAt: new Date(),
+      } as any).run();
+    }
+  }
+
+  private assertFiscalPeriodOpen(client: DbClient, postingDate: Date, context: string) {
+    this.ensureFiscalCalendarInitialized(client);
+
+    const [fy] = client
+      .select()
+      .from(fiscalYears)
+      .where(and(lte(fiscalYears.startDate, postingDate), gte(fiscalYears.endDate, postingDate)))
+      .all();
+
+    if (!fy) {
+      throw new Error(`No fiscal year configured for ${context} (${postingDate.toISOString().slice(0, 10)})`);
+    }
+    if (fy.status !== "open") {
+      throw new Error(`Fiscal year is not open for ${context} (${fy.name})`);
+    }
+
+    const [period] = client
+      .select()
+      .from(fiscalPeriods)
+      .where(and(eq(fiscalPeriods.fiscalYearId, fy.id), lte(fiscalPeriods.periodStart, postingDate), gte(fiscalPeriods.periodEnd, postingDate)))
+      .all();
+
+    if (!period) {
+      throw new Error(`No fiscal period configured for ${context} (${postingDate.toISOString().slice(0, 10)})`);
+    }
+    if (period.isClosed) {
+      throw new Error(`Fiscal period is closed for ${context} (${period.yearMonth})`);
+    }
+
+    return { fiscalYear: fy, fiscalPeriod: period };
+  }
+
   private assertPeriodNotLocked(client: DbClient, postingDate: Date, context: string) {
     const locks = client
       .select()
@@ -803,6 +1235,11 @@ export class DatabaseStorage implements IStorage {
         `Period is locked for ${context} (${new Date(lock.fromDate as any).toISOString().slice(0, 10)} to ${new Date(lock.toDate as any).toISOString().slice(0, 10)})`,
       );
     }
+  }
+
+  private assertPostingAllowed(client: DbClient, postingDate: Date, context: string) {
+    this.assertPeriodNotLocked(client, postingDate, context);
+    this.assertFiscalPeriodOpen(client, postingDate, context);
   }
 
   // Products
@@ -953,7 +1390,7 @@ export class DatabaseStorage implements IStorage {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
       const postingDate = purchase.purchaseDate ? new Date(purchase.purchaseDate as any) : new Date();
-      this.assertPeriodNotLocked(client, postingDate, "purchase");
+      this.assertPostingAllowed(client, postingDate, "purchase");
 
       const year = new Date().getFullYear();
       const [last] = tx.select().from(purchases).orderBy(desc(purchases.id)).limit(1).all();
@@ -988,7 +1425,8 @@ export class DatabaseStorage implements IStorage {
       const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
 
       const lineSubtotal = subtotal + brokerCommission;
-      const grandAmount = lineSubtotal + chargesAdd - chargesLess;
+      const taxAmount = parseAmount((purchase as any).taxAmount || 0);
+      const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
       const paidAmount = parseAmount((purchase as any).paidAmount || 0);
       const balanceDue = grandAmount - paidAmount;
       const amountInWords = `${toWords(Math.round(grandAmount))} only`;
@@ -1006,6 +1444,8 @@ export class DatabaseStorage implements IStorage {
         totalMoundRemainderKg: totalMoundRemainderKg.toString(),
         chargesAdd: chargesAdd.toString(),
         chargesLess: chargesLess.toString(),
+        taxAmount: taxAmount.toString(),
+        taxTypeId: (purchase as any).taxTypeId ?? null,
         buyerAmount: grandAmount.toString(),
         balanceDue: balanceDue.toString(),
         brokerCommissionAmount: brokerCommission.toString(),
@@ -1046,14 +1486,58 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      this.updateAccountBalanceInternal(client, purchase.supplierId, grandAmount.toString(), "add");
+      // Double-entry: Dr Inventory/Expense (+Tax Input if any), Cr Supplier (AP)
+      const debitAccountId = purchase.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
+      const supplierAccountId = purchase.supplierId;
+      const baseAmount = Math.max(grandAmount - taxAmount, 0);
 
-      this.createLedgerEntryInternal(client, {
-        accountId: purchase.supplierId,
+      if (baseAmount > 0) {
+        this.postLedgerEntry(client, {
+          accountId: debitAccountId,
+          transactionType: "debit",
+          amount: baseAmount.toString(),
+          description: `Purchase Invoice ${invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+      }
+
+      if (taxAmount > 0) {
+        const taxTypeId = (purchase as any).taxTypeId as number | undefined;
+        let taxAccountId: number;
+        if (taxTypeId) {
+          const [tt] = tx.select().from(taxTypes).where(eq(taxTypes.id, taxTypeId)).all();
+          const taxAcct = tt?.inputAccountId ? tx.select().from(accounts).where(eq(accounts.id, tt.inputAccountId)).all()[0] : undefined;
+          taxAccountId = taxAcct?.id ?? this.ensureSystemAccount(client, "Tax Input", "asset").id;
+        } else {
+          taxAccountId = this.ensureSystemAccount(client, "Tax Input", "asset").id;
+        }
+        this.postLedgerEntry(client, {
+          accountId: taxAccountId,
+          transactionType: "debit",
+          amount: taxAmount.toString(),
+          description: `Purchase Tax ${invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+        tx.insert(taxLedgers).values({
+          taxTypeId: taxTypeId ?? null,
+          sourceType: "purchase",
+          sourceId: newPurchase.id,
+          taxBase: lineSubtotal.toString(),
+          taxAmount: taxAmount.toString(),
+          postingDate,
+          createdAt: new Date(),
+        } as any).run();
+      }
+
+      this.postLedgerEntry(client, {
+        accountId: supplierAccountId,
         transactionType: "credit",
         amount: grandAmount.toString(),
-        balance: "0",
-        description: `Purchase Invoice: ${invoiceNumber}`,
+        description: `Purchase Invoice ${invoiceNumber}`,
         referenceType: "purchase",
         referenceId: newPurchase.id,
         entryDate: postingDate,
@@ -1082,16 +1566,30 @@ export class DatabaseStorage implements IStorage {
         : existing.purchaseDate
           ? new Date(existing.purchaseDate as any)
           : new Date();
-      this.assertPeriodNotLocked(client, postingDate, "purchase");
+      this.assertPostingAllowed(client, postingDate, "purchase");
+
+      // Reverse prior ledger impact (post reversing entries for balance integrity)
+      const priorEntries = tx
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
+        .all();
+      for (const le of priorEntries) {
+        this.postLedgerEntry(client, {
+          accountId: le.accountId,
+          transactionType: le.transactionType === "debit" ? "credit" : "debit",
+          amount: le.amount,
+          description: `Reversal Purchase ${existing.invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+      }
 
       // Rollback previous stock impact
       for (const item of existing.items) {
         this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
       }
-
-      // Rollback supplier balance by old total
-      const oldTotal = parseAmount(existing.totalAmount);
-      this.updateAccountBalanceInternal(client, existing.supplierId, oldTotal.toString(), "subtract");
 
       // Rebuild new items/totals
       let subtotal = 0;
@@ -1120,7 +1618,8 @@ export class DatabaseStorage implements IStorage {
       const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
 
       const lineSubtotal = subtotal + brokerCommission;
-      const grandAmount = lineSubtotal + chargesAdd - chargesLess;
+      const taxAmount = parseAmount((purchase as any).taxAmount ?? existing.taxAmount ?? 0);
+      const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
       const paidAmount = parseAmount((purchase as any).paidAmount ?? existing.paidAmount ?? 0);
       const balanceDue = grandAmount - paidAmount;
       const amountInWords = `${toWords(Math.round(grandAmount))} only`;
@@ -1160,26 +1659,53 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      // Adjust supplier balance with delta
-      const delta = grandAmount - oldTotal;
-      if (delta !== 0) {
-        this.updateAccountBalanceInternal(
-          client,
-          purchase.supplierId ?? existing.supplierId,
-          Math.abs(delta).toString(),
-          delta > 0 ? "add" : "subtract"
-        );
-        this.createLedgerEntryInternal(client, {
-          accountId: purchase.supplierId ?? existing.supplierId,
-          transactionType: delta > 0 ? "credit" : "debit",
-          amount: Math.abs(delta).toString(),
-          balance: "0",
-          description: `Purchase Update Adjustment #${id}`,
+      // Post fresh double-entry for updated purchase
+      const debitAccountId = purchase.expenseAccountId ?? existing.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
+      const supplierAccountId = purchase.supplierId ?? existing.supplierId;
+      const baseAmount = Math.max(grandAmount - taxAmount, 0);
+
+      if (baseAmount > 0) {
+        this.postLedgerEntry(client, {
+          accountId: debitAccountId,
+          transactionType: "debit",
+          amount: baseAmount.toString(),
+          description: `Purchase Update ${existing.invoiceNumber}`,
           referenceType: "purchase",
           referenceId: id,
           entryDate: postingDate,
         });
       }
+
+      if (taxAmount > 0) {
+        const taxTypeId = (purchase as any).taxTypeId ?? existing.taxTypeId;
+        let taxAccountId: number;
+        if (taxTypeId) {
+          const [tt] = tx.select().from(taxTypes).where(eq(taxTypes.id, taxTypeId as any)).all();
+          const taxAcct = tt?.inputAccountId ? tx.select().from(accounts).where(eq(accounts.id, tt.inputAccountId)).all()[0] : undefined;
+          taxAccountId = taxAcct?.id ?? this.ensureSystemAccount(client, "Tax Input", "asset").id;
+        } else {
+          taxAccountId = this.ensureSystemAccount(client, "Tax Input", "asset").id;
+        }
+        this.postLedgerEntry(client, {
+          accountId: taxAccountId,
+          transactionType: "debit",
+          amount: taxAmount.toString(),
+          description: `Purchase Tax ${existing.invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+      }
+
+      this.postLedgerEntry(client, {
+        accountId: supplierAccountId,
+        transactionType: "credit",
+        amount: grandAmount.toString(),
+        description: `Purchase Update ${existing.invoiceNumber}`,
+        referenceType: "purchase",
+        referenceId: id,
+        entryDate: postingDate,
+      });
 
       return updatedPurchase;
     });
@@ -1307,7 +1833,7 @@ export class DatabaseStorage implements IStorage {
 
       const client = tx as unknown as DbClient;
       const postingDate = sale.saleDate ? new Date(sale.saleDate as any) : new Date();
-      this.assertPeriodNotLocked(client, postingDate, "sale");
+      this.assertPostingAllowed(client, postingDate, "sale");
 
       let subtotal = 0;
       const normalizedItems = items.map((item) => {
@@ -1333,10 +1859,11 @@ export class DatabaseStorage implements IStorage {
         }
       }
 
-      const charges = parseAmount(sale.loadingCharges || "0") + 
-                     parseAmount(sale.weighingCharges || "0") + 
+      const charges = parseAmount(sale.loadingCharges || "0") +
+                     parseAmount(sale.weighingCharges || "0") +
                      parseAmount(sale.otherCharges || "0");
-      const totalAmount = subtotal + charges;
+      const taxAmount = parseAmount((sale as any).taxAmount || 0);
+      const totalAmount = subtotal + charges + taxAmount;
 
       const newSale = tx.insert(sales).values({
         ...sale,
@@ -1344,6 +1871,8 @@ export class DatabaseStorage implements IStorage {
         gatePassNumber,
         subtotal: subtotal.toString(),
         totalAmount: totalAmount.toString(),
+        taxAmount: taxAmount.toString(),
+        taxTypeId: (sale as any).taxTypeId ?? null,
       }).returning().get();
 
       for (const item of normalizedItems) {
@@ -1354,18 +1883,92 @@ export class DatabaseStorage implements IStorage {
         this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
       }
 
-      this.updateAccountBalanceInternal(client, sale.customerId, totalAmount.toString(), "add");
-
-      this.createLedgerEntryInternal(client, {
+      // Double-entry: Dr Customer (AR), Cr Revenue (+ tax output), record COGS/Inventory
+      this.postLedgerEntry(client, {
         accountId: sale.customerId,
         transactionType: "debit",
         amount: totalAmount.toString(),
-        balance: "0",
-        description: `Sale Invoice: ${invoiceNumber}`,
+        description: `Sale Invoice ${invoiceNumber}`,
         referenceType: "sale",
         referenceId: newSale.id,
         entryDate: postingDate,
       });
+
+      const revenueAccount = this.ensureSystemAccount(client, "Sales Revenue", "income");
+      const baseRevenue = Math.max(totalAmount - taxAmount, 0);
+      if (baseRevenue > 0) {
+        this.postLedgerEntry(client, {
+          accountId: revenueAccount.id,
+          transactionType: "credit",
+          amount: baseRevenue.toString(),
+          description: `Sale Revenue ${invoiceNumber}`,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+      }
+
+      if (taxAmount > 0) {
+        const taxTypeId = (sale as any).taxTypeId as number | undefined;
+        let taxAccountId: number;
+        if (taxTypeId) {
+          const [tt] = tx.select().from(taxTypes).where(eq(taxTypes.id, taxTypeId)).all();
+          const taxAcct = tt?.outputAccountId ? tx.select().from(accounts).where(eq(accounts.id, tt.outputAccountId)).all()[0] : undefined;
+          taxAccountId = taxAcct?.id ?? this.ensureSystemAccount(client, "Tax Output", "liability").id;
+        } else {
+          taxAccountId = this.ensureSystemAccount(client, "Tax Output", "liability").id;
+        }
+        this.postLedgerEntry(client, {
+          accountId: taxAccountId,
+          transactionType: "credit",
+          amount: taxAmount.toString(),
+          description: `Sales Tax ${invoiceNumber}`,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+        tx.insert(taxLedgers).values({
+          taxTypeId: taxTypeId ?? null,
+          sourceType: "sale",
+          sourceId: newSale.id,
+          taxBase: subtotal.toString(),
+          taxAmount: taxAmount.toString(),
+          postingDate,
+          createdAt: new Date(),
+        } as any).run();
+      }
+
+      // COGS: use current avgPurchasePrice * qty
+      const inventoryAccount = this.ensureSystemAccount(client, "Inventory", "asset");
+      const cogsAccount = this.ensureSystemAccount(client, "Cost of Goods Sold", "cogs");
+      let totalCogs = 0;
+      for (const item of normalizedItems) {
+        const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+        const avgCost = parseAmount(product?.avgPurchasePrice || "0");
+        const qty = parseAmount(item.quantity);
+        const lineCost = avgCost * qty;
+        totalCogs += lineCost;
+      }
+      if (totalCogs > 0) {
+        this.postLedgerEntry(client, {
+          accountId: cogsAccount.id,
+          transactionType: "debit",
+          amount: totalCogs.toString(),
+          description: `COGS ${invoiceNumber}`,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+        this.postLedgerEntry(client, {
+          accountId: inventoryAccount.id,
+          transactionType: "credit",
+          amount: totalCogs.toString(),
+          description: `Inventory Relief ${invoiceNumber}`,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+      }
 
       return newSale;
     });
@@ -1433,28 +2036,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   private createLedgerEntryInternal(client: DbClient, entry: InsertLedgerEntry): Promise<LedgerEntry> {
-    const [account] = client.select().from(accounts).where(eq(accounts.id, entry.accountId)).all();
-    const balance = account?.currentBalance || "0";
-    const newEntry = client.insert(ledgerEntries).values({
-      ...entry,
-      balance,
-    }).returning().get();
-
-    // Auto record cash movement for system Cash in Hand
-    if (account?.isSystemAccount && account.name === "Cash in Hand") {
-      const tx: CashTxInput = {
-        accountId: account.id,
-        transactionType: entry.transactionType === "debit" ? "DEBIT" : "CREDIT",
-        transactionDate: entry.entryDate || new Date(),
-        referenceType: entry.referenceType,
-        referenceId: entry.referenceId,
-        amount: entry.amount,
-        narration: entry.description,
-      };
-      client.insert(cashTransactions).values(tx).run();
-    }
-
-    return Promise.resolve(newEntry);
+    return Promise.resolve(this.postLedgerEntry(client, entry));
   }
 
   async createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry> {
@@ -1529,47 +2111,50 @@ export class DatabaseStorage implements IStorage {
     return `${voucherType}-${year}-${String(nextNum).padStart(5, "0")}`;
   }
 
-  private validateBalanced(lines: ReceiptLineInput[], voucherType?: string) {
-    const type = (voucherType || "CR").toUpperCase();
+  private validateBalanced(lines: ReceiptLineInput[]) {
     let totalDebit = 0;
     let totalCredit = 0;
     for (const line of lines) {
       totalDebit += parseAmount(line.debit || "0");
       totalCredit += parseAmount(line.credit || "0");
     }
-
-    if (type === "CR") {
-      if (totalCredit <= 0) throw new Error("Credit amount must be greater than 0");
-      return { totalDebit: 0, totalCredit };
-    }
-    if (type === "DR") {
-      if (totalDebit <= 0) throw new Error("Debit amount must be greater than 0");
-      return { totalDebit, totalCredit: 0 };
-    }
-
     if (Math.abs(totalDebit - totalCredit) > 0.0001) {
       throw new Error("Debit and Credit must be equal");
     }
     return { totalDebit, totalCredit };
   }
 
-  private normalizeReceiptLines(lines: ReceiptLineInput[], voucherType?: string): ReceiptLineInput[] {
-    const type = (voucherType || "CR").toUpperCase();
-    if (type === "CR") {
-      return lines.map((line) => ({ ...line, debit: "0", credit: parseAmount(line.credit || line.debit || "0").toString() }));
-    }
-    if (type === "DR") {
-      return lines.map((line) => ({ ...line, credit: "0", debit: parseAmount(line.debit || line.credit || "0").toString() }));
-    }
-    return lines;
-  }
-
   async createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher> {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
       const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : new Date();
-      this.assertPeriodNotLocked(client, postingDate, "receipt/payment voucher");
-      const normalizedLines = this.normalizeReceiptLines(lines, data.voucherType);
+      this.assertPostingAllowed(client, postingDate, "receipt/payment voucher");
+
+      const voucherType = (data.voucherType || "CR").toUpperCase();
+      const settlementAccount =
+        data.settlementAccountId ||
+        (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
+
+      const cleanLines = (lines || []).map((line) => {
+        const amt = parseAmount((line.debit || line.credit || "0") ?? "0").toString();
+        return {
+          ...line,
+          debit: voucherType === "DR" ? amt : "0",
+          credit: voucherType === "CR" ? amt : "0",
+        };
+      });
+
+      const total = cleanLines.reduce((sum, l) => sum + parseAmount(l.debit || l.credit || "0"), 0);
+      if (total <= 0) throw new Error("Voucher amount must be greater than 0");
+
+      // Append counter-entry for settlement account to enforce double-entry
+      const settlementLine: ReceiptLineInput = voucherType === "CR"
+        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: "Settlement (Cash/Bank)" }
+        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: "Settlement (Cash/Bank)" };
+
+      const normalizedLines = [...cleanLines, settlementLine];
+      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
+      const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
 
       const year = new Date().getFullYear();
       const [last] = tx.select().from(receiptVouchers)
@@ -1583,11 +2168,9 @@ export class DatabaseStorage implements IStorage {
         ? data.voucherNumber
         : generatedNumber;
 
-      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines, data.voucherType || "CR");
-      const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
-
       const voucher = tx.insert(receiptVouchers).values({
         ...data,
+        settlementAccountId: settlementAccount,
         voucherNumber,
         totalDebit: totalDebit.toString(),
         totalCredit: totalCredit.toString(),
@@ -1607,27 +2190,23 @@ export class DatabaseStorage implements IStorage {
         }).run();
 
         if (debit > 0) {
-          this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "add");
-          this.createLedgerEntryInternal(client, {
+          this.postLedgerEntry(client, {
             accountId: line.accountId,
             transactionType: "debit",
             amount: debit.toString(),
-            balance: "0",
             description: `Receipt ${voucher.voucherNumber}`,
-            referenceType: "receipt",
+            referenceType: voucherType === "CR" ? "receipt" : "payment",
             referenceId: voucher.id,
             entryDate: postingDate,
           });
         }
         if (credit > 0) {
-          this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "subtract");
-          this.createLedgerEntryInternal(client, {
+          this.postLedgerEntry(client, {
             accountId: line.accountId,
             transactionType: "credit",
             amount: credit.toString(),
-            balance: "0",
             description: `Receipt ${voucher.voucherNumber}`,
-            referenceType: "receipt",
+            referenceType: voucherType === "CR" ? "receipt" : "payment",
             referenceId: voucher.id,
             entryDate: postingDate,
           });
@@ -1641,27 +2220,44 @@ export class DatabaseStorage implements IStorage {
   async updateReceiptVoucher(id: number, data: Partial<InsertReceiptVoucher>, lines: ReceiptLineInput[]): Promise<ReceiptVoucher | undefined> {
     const existing = await this.getReceiptVoucher(id);
     if (!existing) return undefined;
-    const normalizedLines = this.normalizeReceiptLines(lines, data.voucherType || existing.voucherType);
-
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
       const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : existing.voucherDate ? new Date(existing.voucherDate as any) : new Date();
-      this.assertPeriodNotLocked(client, postingDate, "receipt/payment voucher");
+      this.assertPostingAllowed(client, postingDate, "receipt/payment voucher");
 
-      // reverse ledger/account impacts
-      for (const line of existing.lines) {
-        const debit = parseAmount(line.debit);
-        const credit = parseAmount(line.credit);
-        if (debit > 0) this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "subtract");
-        if (credit > 0) this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "add");
-      }
+      // Reverse previous ledger impacts by recalculating balances from remaining entries (simpler approach: adjust via new postings only)
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
+      tx.delete(ledgerEntries).where(and(eq(ledgerEntries.referenceType, existing.voucherType === "CR" ? "receipt" : "payment"), eq(ledgerEntries.referenceId, id))).run();
 
-      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines, data.voucherType || existing.voucherType || "CR");
+      const voucherType = (data.voucherType || existing.voucherType || "CR").toUpperCase();
+      const settlementAccount =
+        data.settlementAccountId ||
+        existing.settlementAccountId ||
+        (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
+
+      const cleanLines = (lines || []).map((line) => {
+        const amt = parseAmount((line.debit || line.credit || "0") ?? "0").toString();
+        return {
+          ...line,
+          debit: voucherType === "DR" ? amt : "0",
+          credit: voucherType === "CR" ? amt : "0",
+        };
+      });
+
+      const total = cleanLines.reduce((sum, l) => sum + parseAmount(l.debit || l.credit || "0"), 0);
+      if (total <= 0) throw new Error("Voucher amount must be greater than 0");
+
+      const settlementLine: ReceiptLineInput = voucherType === "CR"
+        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: "Settlement (Cash/Bank)" }
+        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: "Settlement (Cash/Bank)" };
+
+      const normalizedLines = [...cleanLines, settlementLine];
+      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
       const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
 
       const updated = tx.update(receiptVouchers).set({
         ...data,
+        settlementAccountId: settlementAccount,
         totalDebit: totalDebit.toString(),
         totalCredit: totalCredit.toString(),
         amountInWords,
@@ -1678,28 +2274,25 @@ export class DatabaseStorage implements IStorage {
           debit: debit.toString(),
           credit: credit.toString(),
         }).run();
+
         if (debit > 0) {
-          this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "add");
-          this.createLedgerEntryInternal(client, {
+          this.postLedgerEntry(client, {
             accountId: line.accountId,
             transactionType: "debit",
             amount: debit.toString(),
-            balance: "0",
             description: `Receipt ${updated.voucherNumber}`,
-            referenceType: "receipt",
+            referenceType: voucherType === "CR" ? "receipt" : "payment",
             referenceId: id,
             entryDate: postingDate,
           });
         }
         if (credit > 0) {
-          this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "subtract");
-          this.createLedgerEntryInternal(client, {
+          this.postLedgerEntry(client, {
             accountId: line.accountId,
             transactionType: "credit",
             amount: credit.toString(),
-            balance: "0",
             description: `Receipt ${updated.voucherNumber}`,
-            referenceType: "receipt",
+            referenceType: voucherType === "CR" ? "receipt" : "payment",
             referenceId: id,
             entryDate: postingDate,
           });
@@ -1718,8 +2311,28 @@ export class DatabaseStorage implements IStorage {
       for (const line of existing.lines) {
         const debit = parseAmount(line.debit);
         const credit = parseAmount(line.credit);
-        if (debit > 0) this.updateAccountBalanceInternal(client, line.accountId, debit.toString(), "subtract");
-        if (credit > 0) this.updateAccountBalanceInternal(client, line.accountId, credit.toString(), "add");
+        if (debit > 0) {
+          this.postLedgerEntry(client, {
+            accountId: line.accountId,
+            transactionType: "credit",
+            amount: debit.toString(),
+            description: `Reversal of voucher ${existing.voucherNumber}`,
+            referenceType: existing.voucherType === "CR" ? "receipt" : "payment",
+            referenceId: id,
+            entryDate: new Date(),
+          });
+        }
+        if (credit > 0) {
+          this.postLedgerEntry(client, {
+            accountId: line.accountId,
+            transactionType: "debit",
+            amount: credit.toString(),
+            description: `Reversal of voucher ${existing.voucherNumber}`,
+            referenceType: existing.voucherType === "CR" ? "receipt" : "payment",
+            referenceId: id,
+            entryDate: new Date(),
+          });
+        }
       }
       tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
@@ -1797,13 +2410,10 @@ export class DatabaseStorage implements IStorage {
   private postJournalToLedger(client: DbClient, voucher: JournalVoucher, entries: JournalEntryInput[]) {
     for (const entry of entries) {
       const amount = parseAmount(entry.amount || "0").toString();
-      const direction = entry.entryType === "DEBIT" ? "add" : "subtract";
-      this.updateAccountBalanceInternal(client, entry.accountId, amount, direction);
-      this.createLedgerEntryInternal(client, {
+      this.postLedgerEntry(client, {
         accountId: entry.accountId,
         transactionType: entry.entryType === "DEBIT" ? "debit" : "credit",
         amount,
-        balance: "0",
         description: `Journal Voucher ${voucher.voucherNo}`,
         referenceType: "journal_voucher",
         referenceId: voucher.id,
@@ -1819,7 +2429,7 @@ export class DatabaseStorage implements IStorage {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
       const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : new Date();
-      this.assertPeriodNotLocked(client, postingDate, "journal voucher");
+      this.assertPostingAllowed(client, postingDate, "journal voucher");
 
       const [last] = tx.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
       const year = new Date().getFullYear();
@@ -1905,7 +2515,7 @@ export class DatabaseStorage implements IStorage {
       const { total } = this.normalizeJournalEntries(entries);
       const amountInWords = `${toWords(Math.round(total))} only`;
       const postingDate = existing.voucherDate ? new Date(existing.voucherDate as any) : new Date();
-      this.assertPeriodNotLocked(client, postingDate, "journal voucher approval");
+      this.assertPostingAllowed(client, postingDate, "journal voucher approval");
 
       const [updated] = tx.update(journalVouchers).set({
         status: "approved",

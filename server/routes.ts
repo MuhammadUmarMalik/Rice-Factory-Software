@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema, insertJournalVoucherSchema, insertEmployeeSchema, insertEmployeeSalaryStructureSchema } from "@shared/schema";
+import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema, insertJournalVoucherSchema, insertEmployeeSchema, insertEmployeeSalaryStructureSchema, insertExpenseEntrySchema } from "@shared/schema";
 import { z } from "zod";
 import { format } from "date-fns";
 import { promises as fs } from "fs";
@@ -146,6 +146,14 @@ const productSchema = insertProductSchema.extend({
 });
 
 const productUpdateSchema = productSchema.partial();
+
+const expenseEntrySchema = insertExpenseEntrySchema.extend({
+  expenseDate: z.union([z.string(), z.date(), z.number()]).transform((val) => new Date(val)),
+  amount: numericString,
+  expenseAccountId: z.number().int().positive(),
+  payFromAccountId: z.number().int().positive(),
+  description: z.string().optional(),
+});
 
 const settingsSchema = z.object({
   businessName: z.string().default(""),
@@ -369,6 +377,34 @@ export async function registerRoutes(
       }
       console.error(error);
       res.status(500).json({ error: "Failed to update account" });
+    }
+  });
+
+  // Expense entries (direct expenses)
+  app.get("/api/expenses", async (_req, res) => {
+    try {
+      const rows = await storage.getExpenses();
+      res.json(rows);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch expenses" });
+    }
+  });
+
+  app.post("/api/expenses", async (req, res) => {
+    try {
+      const parsed = expenseEntrySchema.parse(req.body);
+      const created = await storage.createExpense(parsed, { userId: getUserId(req), role: getUserRole(req) });
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ error: error.errors });
+      }
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to create expense" });
     }
   });
 
