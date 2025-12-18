@@ -1027,6 +1027,27 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
+  // Cash in Hand
+  app.get("/api/cash/summary", async (_req, res) => {
+    try {
+      const summary = await storage.getCashSummary();
+      res.json(summary);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch cash summary" });
+    }
+  });
+
+  app.get("/api/cash/transactions", async (_req, res) => {
+    try {
+      const tx = await storage.getCashTransactions();
+      res.json(tx);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch cash transactions" });
+    }
+  });
+
   // Reports
   app.get("/api/reports/stock", async (req, res) => {
     try {

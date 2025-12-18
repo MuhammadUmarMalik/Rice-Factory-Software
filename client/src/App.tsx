@@ -29,6 +29,7 @@ import Receipts from "@/pages/receipts";
 import PaymentsPage from "@/pages/payments";
 import { useLanguage } from "@/contexts/language-context";
 import Journal from "@/pages/journal";
+import Cash from "@/pages/cash";
 
 
 function Router() {
@@ -40,6 +41,7 @@ function Router() {
       <Route path="/receipts" component={Receipts} />
       <Route path="/payments" component={PaymentsPage} />
       <Route path="/journal" component={Journal} />
+      <Route path="/cash" component={Cash} />
       <Route path="/processing" component={Processing} />
       <Route path="/sales" component={Sales} />
       <Route path="/settings" component={Settings} />

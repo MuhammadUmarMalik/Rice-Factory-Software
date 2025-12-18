@@ -15,6 +15,8 @@ import {
   journalVouchers, journalVoucherEntries,
   type JournalVoucher, type InsertJournalVoucher,
   type JournalVoucherEntry, type InsertJournalVoucherEntry,
+  cashTransactions,
+  type CashTransaction, type InsertCashTransaction,
 } from "@shared/schema";
 
 type DbClient = typeof db;
@@ -23,6 +25,7 @@ type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
 type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
 type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
 type JournalEntryInput = Omit<InsertJournalVoucherEntry, "id" | "journalVoucherId">;
+type CashTxInput = Omit<InsertCashTransaction, "id" | "createdAt">;
 
 export interface IStorage {
   // Users
@@ -77,6 +80,10 @@ export interface IStorage {
   // Ledger
   getLedgerEntries(accountId?: number, referenceType?: string): Promise<LedgerEntry[]>;
   createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry>;
+  getOrCreateCashAccount(): Promise<Account>;
+  recordCashTransaction(tx: CashTxInput): Promise<CashTransaction>;
+  getCashSummary(): Promise<{ opening: number; debit: number; credit: number; closing: number }>;
+  getCashTransactions(): Promise<CashTransaction[]>;
 
   // Reports
   getStockReport(): Promise<{ product: Product; totalPurchased: string; totalSold: string; currentStock: string }[]>;
@@ -220,6 +227,20 @@ export class DatabaseStorage implements IStorage {
     client.update(accounts)
       .set({ currentBalance: newBalance.toString() })
       .where(eq(accounts.id, id));
+  }
+  private async ensureCashAccountInternal(client: DbClient): Promise<Account> {
+    const existing = client.select().from(accounts)
+      .where(and(eq(accounts.name, "Cash in Hand"), eq(accounts.isSystemAccount, true as any)))
+      .all();
+    if (existing.length > 0) return existing[0];
+    const [created] = client.insert(accounts).values({
+      name: "Cash in Hand",
+      type: "asset" as any,
+      openingBalance: "0",
+      currentBalance: "0",
+      isSystemAccount: true,
+    }).returning();
+    return created;
   }
 
   // Products
@@ -825,11 +846,57 @@ export class DatabaseStorage implements IStorage {
       ...entry,
       balance,
     }).returning().get();
+
+    // Auto record cash movement for system Cash in Hand
+    if (account?.isSystemAccount && account.name === "Cash in Hand") {
+      const tx: CashTxInput = {
+        accountId: account.id,
+        transactionType: entry.transactionType === "debit" ? "DEBIT" : "CREDIT",
+        transactionDate: entry.entryDate || new Date(),
+        referenceType: entry.referenceType,
+        referenceId: entry.referenceId,
+        amount: entry.amount,
+        narration: entry.description,
+        createdBy: entry.createdBy,
+      };
+      client.insert(cashTransactions).values(tx).run();
+    }
+
     return Promise.resolve(newEntry);
   }
 
   async createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry> {
     return this.createLedgerEntryInternal(db, entry);
+  }
+
+  async getOrCreateCashAccount(): Promise<Account> {
+    return this.ensureCashAccountInternal(db);
+  }
+
+  async recordCashTransaction(tx: CashTxInput): Promise<CashTransaction> {
+    await this.ensureCashAccountInternal(db);
+    const [created] = db.insert(cashTransactions).values(tx).returning();
+    return created;
+  }
+
+  async getCashSummary(): Promise<{ opening: number; debit: number; credit: number; closing: number }> {
+    const cash = await this.ensureCashAccountInternal(db);
+    const rows = db.select().from(cashTransactions).where(eq(cashTransactions.accountId, cash.id)).orderBy(cashTransactions.transactionDate).all();
+    let debit = 0;
+    let credit = 0;
+    for (const r of rows) {
+      const amt = parseAmount(r.amount);
+      if (r.transactionType === "DEBIT") debit += amt;
+      else credit += amt;
+    }
+    const opening = parseAmount(cash.openingBalance || "0");
+    const closing = opening + debit - credit;
+    return { opening, debit, credit, closing };
+  }
+
+  async getCashTransactions(): Promise<CashTransaction[]> {
+    const cash = await this.ensureCashAccountInternal(db);
+    return db.select().from(cashTransactions).where(eq(cashTransactions.accountId, cash.id)).orderBy(desc(cashTransactions.transactionDate)).all();
   }
 
   // Cash Receipt Vouchers
