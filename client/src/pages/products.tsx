@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Edit, Package, Scale, Trash2 } from "lucide-react";
+import { Plus, Edit, Package, Scale, Trash2, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -54,6 +54,7 @@ export default function ProductsPage() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | "raw" | "bio">("all");
   const [sortOption, setSortOption] = useState<"name-asc" | "name-desc" | "price-asc" | "price-desc">("name-asc");
 
@@ -76,10 +77,20 @@ export default function ProductsPage() {
 
   const filteredProducts = useMemo(() => {
     const list = [...products];
+    const q = searchQuery.trim().toLowerCase();
+    const searched = q
+      ? list.filter((p) => {
+          const haystack = [p.name, p.nameUrdu, p.productType, p.unit]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(q);
+        })
+      : list;
     let filtered =
       typeFilter === "all"
-        ? list
-        : list.filter((p) => (p.productType || "").toLowerCase() === typeFilter);
+        ? searched
+        : searched.filter((p) => (p.productType || "").toLowerCase() === typeFilter);
 
     const compare = {
       "name-asc": (a: Product, b: Product) => a.name.localeCompare(b.name),
@@ -91,7 +102,7 @@ export default function ProductsPage() {
     }[sortOption];
 
     return filtered.sort(compare);
-  }, [products, sortOption, typeFilter]);
+  }, [products, searchQuery, sortOption, typeFilter]);
 
   const createMutation = useMutation({
     mutationFn: (data: ProductFormData) => {
@@ -364,7 +375,11 @@ export default function ProductsPage() {
 
       <Card>
         <CardContent className="pt-6">
-            <div className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 ${isRTL ? "sm:flex-row-reverse" : ""}`}>
+          <div
+            className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end sm:gap-6 mb-4 ${
+              isRTL ? "sm:flex-row-reverse" : ""
+            }`}
+          >
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">{t("filter") || "Filter"}</span>
               <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as any)}>
@@ -401,6 +416,7 @@ export default function ProductsPage() {
             columns={columns}
             data={filteredProducts}
             isLoading={isLoading}
+            searchAlign="end"
             testIdPrefix="products"
           />
         </CardContent>

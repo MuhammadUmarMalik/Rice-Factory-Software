@@ -25,11 +25,13 @@ export default function ProfitLossPage() {
   const { data: profitLoss } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", dateFrom, dateTo],
     queryFn: async () => {
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
       const params = new URLSearchParams();
       if (dateFrom) params.set("startDate", dateFrom);
       if (dateTo) params.set("endDate", dateTo);
       const res = await fetch(`/api/reports/profit-loss?${params.toString()}`, {
         credentials: "include",
+        headers: role ? { "x-user-role": role } : {},
       });
       if (!res.ok) throw new Error("Failed to fetch profit/loss");
       return res.json();

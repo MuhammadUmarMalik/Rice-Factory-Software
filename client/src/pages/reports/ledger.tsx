@@ -23,11 +23,13 @@ type LedgerRow = {
   accountId: number;
   transactionType: "debit" | "credit";
   amount: string;
+  balance?: string;
   description: string;
   descriptionUrdu?: string;
   referenceType?: string;
   referenceId?: number;
   entryDate: string | number | Date;
+  openingBalance?: string;
   debit?: string;
   credit?: string;
   runningBalance?: string;
@@ -60,13 +62,19 @@ export default function LedgerPage() {
   });
 
   const { data: ledgerEntries = [], isLoading } = useQuery<LedgerRow[]>({
-    queryKey: ["/api/ledger", selectedAccountId, scope],
+    queryKey: ["/api/ledger", selectedAccountId, scope, dateFrom, dateTo],
     enabled: !!selectedAccountId,
     queryFn: async () => {
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
       const params = new URLSearchParams();
       if (selectedAccountId) params.set("accountId", selectedAccountId);
       if (scope) params.set("scope", scope);
-      const res = await fetch(`/api/ledger?${params.toString()}`, { credentials: "include" });
+      if (dateFrom) params.set("startDate", dateFrom);
+      if (dateTo) params.set("endDate", dateTo);
+      const res = await fetch(`/api/ledger?${params.toString()}`, {
+        credentials: "include",
+        headers: role ? { "x-user-role": role } : {},
+      });
       if (!res.ok) throw new Error("Failed to fetch ledger");
       return res.json();
     },
@@ -80,16 +88,14 @@ export default function LedgerPage() {
 
   const selectedAccount = accountChoices.find((a) => a.id.toString() === selectedAccountId);
 
-  const filteredEntries = ledgerEntries.filter((entry) => {
-    if (dateFrom && new Date(entry.entryDate) < new Date(dateFrom)) return false;
-    if (dateTo && new Date(entry.entryDate) > new Date(dateTo)) return false;
-    return true;
-  });
-
   const orderedEntries = useMemo(
-    () => [...filteredEntries].sort((a, b) => new Date(a.entryDate).getTime() - new Date(b.entryDate).getTime()),
-    [filteredEntries],
+    () => [...ledgerEntries].sort((a, b) => new Date(a.entryDate).getTime() - new Date(b.entryDate).getTime()),
+    [ledgerEntries],
   );
+
+  const rangeOpening = orderedEntries.length
+    ? parseFloat(orderedEntries[0].openingBalance || selectedAccount?.openingBalance || "0")
+    : parseFloat(selectedAccount?.openingBalance || "0");
 
   const totals = orderedEntries.reduce(
     (acc, e) => {
@@ -105,7 +111,7 @@ export default function LedgerPage() {
     {
       debit: 0,
       credit: 0,
-      closing: selectedAccount ? parseFloat(selectedAccount.openingBalance || "0") : 0,
+      closing: rangeOpening,
     },
   );
 
@@ -179,7 +185,7 @@ export default function LedgerPage() {
               {selectedAccount.name}
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Opening balance: Rs. {parseFloat(selectedAccount.openingBalance || "0").toLocaleString()}
+              Opening balance: Rs. {rangeOpening.toLocaleString()}
             </p>
           </CardHeader>
           <CardContent className="overflow-auto">

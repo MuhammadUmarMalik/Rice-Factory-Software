@@ -1,11 +1,54 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema, insertJournalVoucherSchema } from "@shared/schema";
+import { insertAccountSchema, insertProductSchema, insertPurchaseSchema, insertProcessingSchema, insertSaleSchema, insertReceiptVoucherSchema, insertReceiptVoucherLineSchema, insertJournalVoucherSchema, insertEmployeeSchema, insertEmployeeSalaryStructureSchema } from "@shared/schema";
 import { z } from "zod";
 import { format } from "date-fns";
 import { promises as fs } from "fs";
 import path from "path";
+
+function getUserRole(req: any): string {
+  const role = (req.headers?.["x-user-role"] as string | undefined) || "";
+  return role.toLowerCase() || "operator";
+}
+
+function requireRoles(allowed: string[]) {
+  const allow = allowed.map((r) => r.toLowerCase());
+  return (req: any, res: any, next: any) => {
+    const role = getUserRole(req);
+    if (!allow.includes(role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  };
+}
+
+function getUserId(req: any): number | undefined {
+  const raw = req.headers?.["x-user-id"];
+  if (!raw) return undefined;
+  const n = typeof raw === "string" ? parseInt(raw, 10) : Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function parseRequiredDate(value: unknown, label: string): Date {
+  if (!value || typeof value !== "string") throw new Error(`${label} is required`);
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) throw new Error(`${label} is invalid`);
+  return d;
+}
+
+function parseOptionalDate(value: unknown): Date | undefined {
+  if (!value || typeof value !== "string") return undefined;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d;
+}
+
+function parseOptionalInt(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = typeof value === "string" ? parseInt(value, 10) : Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
 
 const numericString = z.union([z.string(), z.number()]).transform((val) => {
   const num = typeof val === "number" ? val : parseFloat(val);
@@ -326,6 +369,159 @@ export async function registerRoutes(
       }
       console.error(error);
       res.status(500).json({ error: "Failed to update account" });
+    }
+  });
+
+  // Employees & Payroll (HR)
+  app.get("/api/employees", requireRoles(["admin", "manager", "hr", "accountant"]), async (_req, res) => {
+    try {
+      const rows = await storage.getEmployees();
+      res.json(rows);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch employees" });
+    }
+  });
+
+  app.get("/api/employees/:id", requireRoles(["admin", "manager", "hr", "accountant"]), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const row = await storage.getEmployee(id);
+      if (!row) return res.status(404).json({ error: "Employee not found" });
+      res.json(row);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch employee" });
+    }
+  });
+
+  app.post("/api/employees", requireRoles(["admin", "manager", "hr"]), async (req, res) => {
+    try {
+      const data = insertEmployeeSchema.parse(req.body);
+      const created = await storage.createEmployee({ ...data, createdBy: getUserId(req) } as any);
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error(error);
+      res.status(500).json({ error: "Failed to create employee" });
+    }
+  });
+
+  app.patch("/api/employees/:id", requireRoles(["admin", "manager", "hr"]), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const data = insertEmployeeSchema.partial().parse(req.body);
+      const updated = await storage.updateEmployee(id, data);
+      if (!updated) return res.status(404).json({ error: "Employee not found" });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error(error);
+      res.status(500).json({ error: "Failed to update employee" });
+    }
+  });
+
+  app.get("/api/employees/:id/salary-structures", requireRoles(["admin", "manager", "hr", "accountant"]), async (req, res) => {
+    try {
+      const employeeId = parseInt(req.params.id, 10);
+      const rows = await storage.getEmployeeSalaryStructures(employeeId);
+      res.json(rows);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch salary structures" });
+    }
+  });
+
+  app.post("/api/employees/:id/salary-structures", requireRoles(["admin", "manager", "hr"]), async (req, res) => {
+    try {
+      const employeeId = parseInt(req.params.id, 10);
+      const body = insertEmployeeSalaryStructureSchema.omit({ employeeId: true }).parse(req.body);
+      const created = await storage.createEmployeeSalaryStructure({
+        ...body,
+        employeeId,
+        createdBy: getUserId(req),
+      } as any);
+      res.status(201).json(created);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error(error);
+      res.status(500).json({ error: "Failed to create salary structure" });
+    }
+  });
+
+  const payrollMonthSchema = z.object({ payrollMonth: z.string().regex(/^\\d{4}-\\d{2}$/) });
+
+  app.get("/api/payrolls", requireRoles(["admin", "manager", "hr", "accountant"]), async (req, res) => {
+    try {
+      const month = typeof req.query.month === "string" ? req.query.month : undefined;
+      const status = typeof req.query.status === "string" ? req.query.status : undefined;
+      const employeeId = parseOptionalInt(req.query.employeeId);
+      const rows = await storage.getPayrolls({ month, status, employeeId });
+      const employeesList = await storage.getEmployees();
+      const employeeMap = new Map(employeesList.map((e) => [e.id, e]));
+      res.json(rows.map((p) => ({ ...p, employee: employeeMap.get(p.employeeId) || null })));
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch payrolls" });
+    }
+  });
+
+  app.post("/api/payrolls/generate", requireRoles(["admin", "manager", "hr", "accountant"]), async (req, res) => {
+    try {
+      const { payrollMonth } = payrollMonthSchema.parse(req.body);
+      const result = await storage.generateMonthlyPayroll(payrollMonth, { userId: getUserId(req), role: getUserRole(req) });
+      res.json(result);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error(error);
+      res.status(500).json({ error: "Failed to generate payroll" });
+    }
+  });
+
+  app.post("/api/payrolls/:id/approve", requireRoles(["admin", "manager"]), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const postingDate = parseOptionalDate(req.body?.postingDate);
+      const updated = await storage.approvePayroll(id, { userId: getUserId(req), role: getUserRole(req) }, postingDate);
+      if (!updated) return res.status(404).json({ error: "Payroll not found" });
+      res.json(updated);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to approve payroll" });
+    }
+  });
+
+  app.post("/api/payrolls/:id/pay", requireRoles(["admin", "accountant"]), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const payload = z.object({
+        method: z.enum(["Cash", "Bank"]),
+        paymentAccountId: z.number().int().positive().optional(),
+        paymentDate: z.string().optional(),
+      }).parse(req.body);
+      const paymentDate = parseOptionalDate(payload.paymentDate);
+      const updated = await storage.paySalary(
+        id,
+        { method: payload.method, paymentAccountId: payload.paymentAccountId, paymentDate },
+        { userId: getUserId(req), role: getUserRole(req) },
+      );
+      if (!updated) return res.status(404).json({ error: "Payroll not found" });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+      console.error(error);
+      res.status(500).json({ error: "Failed to pay salary" });
+    }
+  });
+
+  app.get("/api/payrolls/:id/audit", requireRoles(["admin", "manager", "hr", "accountant"]), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const rows = await storage.getPayrollAudit(id);
+      res.json(rows);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch audit trail" });
     }
   });
 
@@ -691,10 +887,11 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   });
 
   // Journal Vouchers
-  const buildJournalEntries = (body: z.infer<typeof journalVoucherInputSchema>) => ([
-    { accountId: body.debitAccountId, entryType: "DEBIT", amount: body.debitAmount },
-    { accountId: body.creditAccountId, entryType: "CREDIT", amount: body.creditAmount },
-  ]);
+  const buildJournalEntries = (body: z.infer<typeof journalVoucherInputSchema>) =>
+    ([
+      { accountId: body.debitAccountId, entryType: "DEBIT" as const, amount: body.debitAmount },
+      { accountId: body.creditAccountId, entryType: "CREDIT" as const, amount: body.creditAmount },
+    ]);
 
   app.get("/api/journal-vouchers", async (_req, res) => {
     try {
@@ -743,7 +940,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
-  app.post("/api/journal-vouchers", async (req, res) => {
+  app.post("/api/journal-vouchers", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
     try {
       const parsed = journalVoucherInputSchema.parse(req.body);
       const { debitAccountId, debitAmount, creditAccountId, creditAmount, ...header } = parsed;
@@ -761,7 +958,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
-  app.patch("/api/journal-vouchers/:id", async (req, res) => {
+  app.patch("/api/journal-vouchers/:id", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const parsed = journalVoucherInputSchema.parse(req.body);
@@ -781,7 +978,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
-  app.post("/api/journal-vouchers/:id/approve", async (req, res) => {
+  app.post("/api/journal-vouchers/:id/approve", requireRoles(["admin", "manager"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const approverIdRaw = req.body?.approvedBy;
@@ -798,7 +995,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
-  app.delete("/api/journal-vouchers/:id", async (req, res) => {
+  app.delete("/api/journal-vouchers/:id", requireRoles(["admin", "manager"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const ok = await storage.deleteJournalVoucher(id);
@@ -1019,7 +1216,9 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
       const accountId = req.query.accountId ? parseInt(req.query.accountId as string) : undefined;
       const scope = (req.query.scope as string) || "";
       const referenceType = scope === "sales" ? "sale" : scope === "purchases" ? "purchase" : undefined;
-      const entries = await storage.getLedgerEntries(accountId, referenceType);
+      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
+      const endDate = req.query.endDate ? new Date(req.query.endDate as string) : undefined;
+      const entries = await storage.getLedgerEntries(accountId, referenceType, startDate, endDate);
       res.json(entries);
     } catch (error) {
       console.error(error);
@@ -1113,6 +1312,165 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to fetch sales report" });
+    }
+  });
+
+  // New Accounting Reporting Suite
+  app.get("/api/reports/period-purchases", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
+      const toDate = parseRequiredDate(req.query.toDate, "toDate");
+      const supplierId = parseOptionalInt(req.query.supplierId);
+      const report = await storage.getPeriodPurchases(fromDate, toDate, supplierId);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/reports/period-sales", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
+      const toDate = parseRequiredDate(req.query.toDate, "toDate");
+      const customerId = parseOptionalInt(req.query.customerId);
+      const report = await storage.getPeriodSales(fromDate, toDate, customerId);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/reports/gross-profit", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
+      const toDate = parseRequiredDate(req.query.toDate, "toDate");
+      const report = await storage.getGrossProfit(fromDate, toDate);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/reports/day-book", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date();
+      const toDate = parseOptionalDate(req.query.toDate) ?? fromDate;
+      const report = await storage.getDayBook(fromDate, toDate);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/reports/outstanding-customers", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const asOfDate = parseOptionalDate(req.query.asOfDate) ?? new Date();
+      const customerId = parseOptionalInt(req.query.customerId);
+      const report = await storage.getOutstandingCustomers(asOfDate, customerId);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/reports/outstanding-suppliers", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const asOfDate = parseOptionalDate(req.query.asOfDate) ?? new Date();
+      const supplierId = parseOptionalInt(req.query.supplierId);
+      const report = await storage.getOutstandingSuppliers(asOfDate, supplierId);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  // Financial Statements
+  app.get("/api/financial/income-statement", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
+      const toDate = parseRequiredDate(req.query.toDate, "toDate");
+      const report = await storage.getIncomeStatement(fromDate, toDate);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/financial/balance-sheet", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const asOfDate = parseOptionalDate(req.query.asOfDate) ?? new Date();
+      const report = await storage.getBalanceSheet(asOfDate);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/financial/capital", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
+      const toDate = parseRequiredDate(req.query.toDate, "toDate");
+      const report = await storage.getCapitalStatement(fromDate, toDate);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/financial/salary", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+    try {
+      const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
+      const toDate = parseRequiredDate(req.query.toDate, "toDate");
+      const report = await storage.getSalaryAccount(fromDate, toDate);
+      res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  // Period locks (posting controls)
+  app.get("/api/period-locks", requireRoles(["admin", "manager"]), async (_req, res) => {
+    try {
+      const locks = await storage.getPeriodLocks();
+      res.json(locks);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch period locks" });
+    }
+  });
+
+  app.post("/api/period-locks", requireRoles(["admin", "manager"]), async (req, res) => {
+    try {
+      const fromDate = parseRequiredDate(req.body?.fromDate, "fromDate");
+      const toDate = parseRequiredDate(req.body?.toDate, "toDate");
+      const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+      const createdBy = parseOptionalInt(req.body?.createdBy);
+      const created = await storage.createPeriodLock({ fromDate, toDate, reason, createdBy } as any);
+      res.json(created);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.delete("/api/period-locks/:id", requireRoles(["admin", "manager"]), async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const ok = await storage.deletePeriodLock(id);
+      res.json({ success: ok });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete period lock" });
     }
   });
 

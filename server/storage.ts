@@ -1,9 +1,14 @@
 import { db } from "./db";
-import { eq, and, desc, sql, gte, lte, isNull } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, lt, isNull, inArray } from "drizzle-orm";
 import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
   processing, sales, saleItems, ledgerEntries,
   type User, type InsertUser, type Account, type InsertAccount,
+  employees, employeeSalaryStructures, payrolls, payrollAuditLogs,
+  type Employee, type InsertEmployee,
+  type EmployeeSalaryStructure, type InsertEmployeeSalaryStructure,
+  type Payroll, type InsertPayroll,
+  type PayrollAuditLog, type InsertPayrollAuditLog,
   type Product, type InsertProduct, type Purchase, type InsertPurchase,
   type PurchaseItem, type InsertPurchaseItem, type PurchaseCharge, type InsertPurchaseCharge,
   type Processing, type InsertProcessing,
@@ -17,10 +22,16 @@ import {
   type JournalVoucherEntry, type InsertJournalVoucherEntry,
   cashTransactions,
   type CashTransaction, type InsertCashTransaction,
+  periodLocks,
+  type PeriodLock, type InsertPeriodLock,
 } from "@shared/schema";
 
 type DbClient = typeof db;
-type PurchaseItemInput = Omit<InsertPurchaseItem, "id" | "purchaseId">;
+type PurchaseItemInput = Omit<
+  InsertPurchaseItem,
+  "id" | "purchaseId" | "grossWeightKg" | "netWeightKg" | "moundQty" | "moundRemainderKg" | "amount"
+> &
+  Partial<Pick<InsertPurchaseItem, "grossWeightKg" | "netWeightKg" | "moundQty" | "moundRemainderKg" | "amount">>;
 type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
 type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
 type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
@@ -78,7 +89,7 @@ export interface IStorage {
   getSaleItems(saleId: number): Promise<SaleItem[]>;
 
   // Ledger
-  getLedgerEntries(accountId?: number, referenceType?: string): Promise<LedgerEntry[]>;
+  getLedgerEntries(accountId?: number, referenceType?: string, startDate?: Date, endDate?: Date): Promise<LedgerEntry[]>;
   createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry>;
   getOrCreateCashAccount(): Promise<Account>;
   recordCashTransaction(tx: CashTxInput): Promise<CashTransaction>;
@@ -98,6 +109,115 @@ export interface IStorage {
     saleCount: number;
   }>;
 
+  // New Accounting Reports (derived, no duplicate data)
+  getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number): Promise<{
+    rows: Array<{
+      id: number;
+      purchaseDate: Date;
+      supplierId: number;
+      supplierName: string;
+      purchaseAmount: string;
+      tax: string;
+      netAmount: string;
+      invoiceNumber: string;
+    }>;
+    totals: { purchaseAmount: string; tax: string; netAmount: string };
+  }>;
+  getPeriodSales(startDate: Date, endDate: Date, customerId?: number): Promise<{
+    rows: Array<{
+      id: number;
+      saleDate: Date;
+      customerId: number;
+      customerName: string;
+      salesAmount: string;
+      tax: string;
+      netAmount: string;
+      invoiceNumber: string;
+    }>;
+    totals: { salesAmount: string; tax: string; netAmount: string };
+  }>;
+  getGrossProfit(startDate: Date, endDate: Date): Promise<{
+    totalSales: string;
+    costOfGoodsSold: string;
+    grossProfit: string;
+  }>;
+  getDayBook(startDate: Date, endDate: Date): Promise<{
+    openingBalance: string;
+    rows: Array<{
+      date: Date;
+      openingBalance: string;
+      voucherType: string;
+      voucherNo: string;
+      debit: string;
+      credit: string;
+      closingBalance: string;
+      referenceType?: string | null;
+      referenceId?: number | null;
+      narration?: string | null;
+    }>;
+    closingBalance: string;
+  }>;
+  getOutstandingCustomers(asOfDate: Date, customerId?: number): Promise<{
+    rows: Array<{
+      saleId: number;
+      invoiceNumber: string;
+      customerId: number;
+      customerName: string;
+      invoiceAmount: string;
+      receivedAmount: string;
+      outstandingAmount: string;
+      dueDate: Date | null;
+      saleDate: Date;
+    }>;
+    totals: { invoiceAmount: string; receivedAmount: string; outstandingAmount: string };
+  }>;
+  getOutstandingSuppliers(asOfDate: Date, supplierId?: number): Promise<{
+    rows: Array<{
+      purchaseId: number;
+      invoiceNumber: string;
+      supplierId: number;
+      supplierName: string;
+      billAmount: string;
+      paidAmount: string;
+      outstandingAmount: string;
+      dueDate: Date | null;
+      purchaseDate: Date;
+    }>;
+    totals: { billAmount: string; paidAmount: string; outstandingAmount: string };
+  }>;
+  getIncomeStatement(startDate: Date, endDate: Date): Promise<{
+    period: { fromDate: Date; toDate: Date };
+    revenue: string;
+    costOfSales: string;
+    grossProfit: string;
+    operatingExpenses: string;
+    netProfit: string;
+  }>;
+  getBalanceSheet(asOfDate: Date): Promise<{
+    asOfDate: Date;
+    assets: { cash: string; bank: string; receivables: string; inventory: string; total: string };
+    liabilities: { payables: string; expensesPayable: string; total: string };
+    equity: { capital: string; retainedEarnings: string; total: string };
+    totals: { assets: string; liabilitiesAndEquity: string };
+  }>;
+  getCapitalStatement(startDate: Date, endDate: Date): Promise<{
+    openingCapital: string;
+    additionalCapital: string;
+    drawings: string;
+    closingCapital: string;
+  }>;
+  getSalaryAccount(startDate: Date, endDate: Date): Promise<{
+    rows: Array<{
+      employee: string;
+      salaryMonth: string;
+      basicSalary: string;
+      allowances: string;
+      deductions: string;
+      netSalary: string;
+    }>;
+    totals: { netSalary: string };
+  }>;
+
   // Cash Receipts
   getReceiptVouchers(): Promise<ReceiptVoucher[]>;
   getReceiptVoucher(id: number): Promise<(ReceiptVoucher & { lines: ReceiptVoucherLine[] }) | undefined>;
@@ -114,6 +234,33 @@ export interface IStorage {
   approveJournalVoucher(id: number, approverId?: number): Promise<JournalVoucher | undefined>;
   getNextJournalVoucherNumber(): Promise<string>;
   deleteJournalVoucher(id: number): Promise<boolean>;
+
+  // HR / Employees
+  getEmployees(): Promise<Employee[]>;
+  getEmployee(id: number): Promise<Employee | undefined>;
+  createEmployee(employee: InsertEmployee): Promise<Employee>;
+  updateEmployee(id: number, employee: Partial<InsertEmployee>): Promise<Employee | undefined>;
+
+  // Salary Structures
+  getEmployeeSalaryStructures(employeeId: number): Promise<EmployeeSalaryStructure[]>;
+  createEmployeeSalaryStructure(data: InsertEmployeeSalaryStructure): Promise<EmployeeSalaryStructure>;
+  getEffectiveSalaryStructure(employeeId: number, asOf: Date): Promise<EmployeeSalaryStructure | undefined>;
+
+  // Payroll
+  getPayrolls(filters?: { month?: string; status?: string; employeeId?: number }): Promise<Payroll[]>;
+  generateMonthlyPayroll(month: string, performedBy?: { userId?: number; role?: string }): Promise<{ created: number; skipped: number }>;
+  approvePayroll(payrollId: number, performedBy?: { userId?: number; role?: string }, postingDate?: Date): Promise<Payroll | undefined>;
+  paySalary(
+    payrollId: number,
+    payment: { method: "Cash" | "Bank"; paymentAccountId?: number; paymentDate?: Date },
+    performedBy?: { userId?: number; role?: string },
+  ): Promise<Payroll | undefined>;
+  getPayrollAudit(payrollId: number): Promise<PayrollAuditLog[]>;
+
+  // Period locks
+  getPeriodLocks(): Promise<PeriodLock[]>;
+  createPeriodLock(lock: InsertPeriodLock): Promise<PeriodLock>;
+  deletePeriodLock(id: number): Promise<boolean>;
 }
 
 function parseAmount(value: string | number | null | undefined): number {
@@ -122,6 +269,34 @@ function parseAmount(value: string | number | null | undefined): number {
     throw new Error("Invalid numeric value");
   }
   return num;
+}
+
+function endOfDay(d: Date): Date {
+  const dt = new Date(d);
+  dt.setHours(23, 59, 59, 999);
+  return dt;
+}
+
+function parsePayrollMonth(value: string): { year: number; month: number } {
+  const m = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!m) throw new Error("payrollMonth must be YYYY-MM");
+  const year = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10);
+  if (month < 1 || month > 12) throw new Error("payrollMonth must be YYYY-MM");
+  return { year, month };
+}
+
+function startOfPayrollMonth(month: string): Date {
+  const { year, month: mm } = parsePayrollMonth(month);
+  return new Date(year, mm - 1, 1);
+}
+
+type NormalSide = "DEBIT" | "CREDIT";
+function normalSideForAccountType(type: string | null | undefined): NormalSide {
+  if (!type) return "DEBIT";
+  const t = String(type).toLowerCase();
+  if (["supplier", "liability", "equity", "income"].includes(t)) return "CREDIT";
+  return "DEBIT";
 }
 
 function toWords(n: number): string {
@@ -185,6 +360,361 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(users).orderBy(users.fullName).all();
   }
 
+  // Employees
+  async getEmployees(): Promise<Employee[]> {
+    return db.select().from(employees).orderBy(employees.name).all();
+  }
+
+  async getEmployee(id: number): Promise<Employee | undefined> {
+    const [row] = db.select().from(employees).where(eq(employees.id, id)).all();
+    return row;
+  }
+
+  private generateEmployeeCodeInternal(client: DbClient): string {
+    const [last] = client.select({ code: employees.employeeCode }).from(employees).orderBy(desc(employees.id)).limit(1).all();
+    const prefix = `EMP-${new Date().getFullYear()}-`;
+    if (!last?.code || !last.code.startsWith(prefix)) {
+      return `${prefix}${String(1).padStart(5, "0")}`;
+    }
+    const n = parseInt(last.code.slice(prefix.length), 10);
+    const next = Number.isFinite(n) ? n + 1 : 1;
+    return `${prefix}${String(next).padStart(5, "0")}`;
+  }
+
+  async createEmployee(employee: InsertEmployee): Promise<Employee> {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const employeeCode = this.generateEmployeeCodeInternal(client);
+
+      const employeeAccount = tx.insert(accounts).values({
+        name: `Employee Payable: ${employee.name} (${employeeCode})`,
+        type: "employee" as any,
+        openingBalance: "0",
+        currentBalance: "0",
+        isActive: true as any,
+        isSystemAccount: false as any,
+      }).returning().get();
+
+      const created = tx.insert(employees).values({
+        ...employee,
+        employeeCode,
+        accountId: employeeAccount.id,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any).returning().get();
+
+      return created as any;
+    });
+  }
+
+  async updateEmployee(id: number, employee: Partial<InsertEmployee>): Promise<Employee | undefined> {
+    return db.transaction((tx) => {
+      const [existing] = tx.select().from(employees).where(eq(employees.id, id)).all();
+      if (!existing) return undefined;
+
+      const updated = tx.update(employees).set({
+        ...employee,
+        updatedAt: new Date(),
+      } as any).where(eq(employees.id, id)).returning().get();
+
+      if (employee.name && existing.accountId) {
+        tx.update(accounts).set({
+          name: `Employee Payable: ${employee.name} (${existing.employeeCode})`,
+        } as any).where(eq(accounts.id, existing.accountId)).run();
+      }
+
+      return updated as any;
+    });
+  }
+
+  // Salary Structures
+  async getEmployeeSalaryStructures(employeeId: number): Promise<EmployeeSalaryStructure[]> {
+    return db
+      .select()
+      .from(employeeSalaryStructures)
+      .where(eq(employeeSalaryStructures.employeeId, employeeId))
+      .orderBy(desc(employeeSalaryStructures.effectiveFrom))
+      .all();
+  }
+
+  async getEffectiveSalaryStructure(employeeId: number, asOf: Date): Promise<EmployeeSalaryStructure | undefined> {
+    const [row] = db
+      .select()
+      .from(employeeSalaryStructures)
+      .where(and(eq(employeeSalaryStructures.employeeId, employeeId), lte(employeeSalaryStructures.effectiveFrom, asOf)))
+      .orderBy(desc(employeeSalaryStructures.effectiveFrom))
+      .limit(1)
+      .all();
+    return row;
+  }
+
+  async createEmployeeSalaryStructure(data: InsertEmployeeSalaryStructure): Promise<EmployeeSalaryStructure> {
+    const basic = parseAmount((data as any).basicSalary || "0");
+    const allowances = parseAmount((data as any).allowances || "0");
+    const deductions = parseAmount((data as any).deductions || "0");
+    const gross = basic + allowances;
+    const net = gross - deductions;
+    if (net < 0) throw new Error("Net salary cannot be negative");
+
+    const created = db.insert(employeeSalaryStructures).values({
+      ...data,
+      grossSalary: gross.toString(),
+      netSalary: net.toString(),
+      createdAt: new Date(),
+    } as any).returning().get();
+
+    return created as any;
+  }
+
+  // Payroll
+  async getPayrolls(filters?: { month?: string; status?: string; employeeId?: number }): Promise<Payroll[]> {
+    const where: any[] = [];
+    if (filters?.month) where.push(eq(payrolls.payrollMonth, filters.month));
+    if (filters?.status) where.push(eq(payrolls.status, filters.status as any));
+    if (filters?.employeeId) where.push(eq(payrolls.employeeId, filters.employeeId));
+
+    return where.length
+      ? db.select().from(payrolls).where(and(...(where as any))).orderBy(desc(payrolls.id)).all()
+      : db.select().from(payrolls).orderBy(desc(payrolls.id)).all();
+  }
+
+  async generateMonthlyPayroll(month: string, performedBy?: { userId?: number; role?: string }) {
+    parsePayrollMonth(month);
+    const asOf = startOfPayrollMonth(month);
+
+    return db.transaction((tx) => {
+      const activeEmployees = tx.select().from(employees).where(eq(employees.status, "Active" as any)).all();
+      let created = 0;
+      let skipped = 0;
+
+      for (const emp of activeEmployees) {
+        const [existing] = tx
+          .select({ id: payrolls.id })
+          .from(payrolls)
+          .where(and(eq(payrolls.payrollMonth, month), eq(payrolls.employeeId, emp.id)))
+          .limit(1)
+          .all();
+        if (existing) {
+          skipped += 1;
+          continue;
+        }
+
+        const [structure] = tx
+          .select()
+          .from(employeeSalaryStructures)
+          .where(and(eq(employeeSalaryStructures.employeeId, emp.id), lte(employeeSalaryStructures.effectiveFrom, asOf)))
+          .orderBy(desc(employeeSalaryStructures.effectiveFrom))
+          .limit(1)
+          .all();
+
+        const basic = parseAmount(structure?.basicSalary ?? emp.basicSalary ?? "0");
+        const allowances = parseAmount(structure?.allowances ?? "0");
+        const deductions = parseAmount(structure?.deductions ?? "0");
+        const net = Math.max(basic + allowances - deductions, 0);
+
+        const payroll = tx.insert(payrolls).values({
+          payrollMonth: month,
+          employeeId: emp.id,
+          basicSalary: basic.toString(),
+          allowances: allowances.toString(),
+          deductions: deductions.toString(),
+          netSalary: net.toString(),
+          paymentStatus: "Unpaid",
+          status: "generated",
+          createdBy: performedBy?.userId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as any).returning().get();
+
+        tx.insert(payrollAuditLogs).values({
+          payrollId: payroll.id,
+          action: "generated",
+          performedBy: performedBy?.userId,
+          performedByRole: performedBy?.role,
+          detailsJson: JSON.stringify({ month, employeeId: emp.id }),
+        } as any).run();
+
+        created += 1;
+      }
+
+      return { created, skipped };
+    });
+  }
+
+  async approvePayroll(payrollId: number, performedBy?: { userId?: number; role?: string }, postingDate?: Date) {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const [payroll] = tx.select().from(payrolls).where(eq(payrolls.id, payrollId)).all();
+      if (!payroll) return undefined;
+      if (payroll.status !== "generated") throw new Error("Payroll cannot be approved in its current state");
+
+      const [emp] = tx.select().from(employees).where(eq(employees.id, payroll.employeeId)).all();
+      if (!emp) throw new Error("Employee not found");
+      if (!emp.accountId) throw new Error("Employee payable account is not configured");
+
+      const salaryExpense = this.ensureSystemAccount(client, "Salary Expense", "salary");
+
+      const voucherDate = postingDate ?? new Date();
+      this.assertPeriodNotLocked(client, voucherDate, "payroll approval");
+
+      const month = payroll.payrollMonth;
+      const amount = parseAmount(payroll.netSalary || "0").toString();
+      const narration = `Payroll ${month} - ${emp.employeeCode} ${emp.name}`;
+
+      const createdVoucher = (() => {
+        const entries: JournalEntryInput[] = [
+          { accountId: salaryExpense.id, entryType: "DEBIT", amount },
+          { accountId: emp.accountId!, entryType: "CREDIT", amount },
+        ];
+        const { normalized, total } = this.normalizeJournalEntries(entries);
+
+        const [last] = tx.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
+        const year = new Date().getFullYear();
+        const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
+        const voucherNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
+        const amountInWords = `${toWords(Math.round(total))} only`;
+
+        const v = tx.insert(journalVouchers).values({
+          voucherNo,
+          voucherDate,
+          narration,
+          status: "approved",
+          totalAmount: total.toString(),
+          amountInWords,
+          createdBy: performedBy?.userId,
+          approvedBy: performedBy?.userId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as any).returning().get();
+
+        for (const entry of normalized) {
+          tx.insert(journalVoucherEntries).values({
+            ...entry,
+            journalVoucherId: v.id,
+            amount: parseAmount(entry.amount).toString(),
+          } as any).run();
+        }
+
+        this.postJournalToLedger(client, v as any, normalized);
+        return v as any as JournalVoucher;
+      })();
+
+      const updated = tx.update(payrolls).set({
+        status: "approved",
+        approvedBy: performedBy?.userId,
+        approvedByRole: performedBy?.role,
+        approvedAt: new Date(),
+        journalVoucherId: createdVoucher.id,
+        updatedAt: new Date(),
+      } as any).where(eq(payrolls.id, payrollId)).returning().get();
+
+      tx.insert(payrollAuditLogs).values({
+        payrollId,
+        action: "approved",
+        performedBy: performedBy?.userId,
+        performedByRole: performedBy?.role,
+        detailsJson: JSON.stringify({ journalVoucherId: createdVoucher.id, postingDate: voucherDate.toISOString() }),
+      } as any).run();
+
+      return updated as any;
+    });
+  }
+
+  async paySalary(
+    payrollId: number,
+    payment: { method: "Cash" | "Bank"; paymentAccountId?: number; paymentDate?: Date },
+    performedBy?: { userId?: number; role?: string },
+  ) {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const [payroll] = tx.select().from(payrolls).where(eq(payrolls.id, payrollId)).all();
+      if (!payroll) return undefined;
+      if (payroll.status !== "approved") throw new Error("Payroll must be approved before payment");
+      if (payroll.paymentStatus === "Paid") throw new Error("Payroll is already paid");
+
+      const [emp] = tx.select().from(employees).where(eq(employees.id, payroll.employeeId)).all();
+      if (!emp) throw new Error("Employee not found");
+      if (!emp.accountId) throw new Error("Employee payable account is not configured");
+
+      const amount = parseAmount(payroll.netSalary || "0").toString();
+      const paymentDate = payment.paymentDate ?? new Date();
+      this.assertPeriodNotLocked(client, paymentDate, "payroll payment");
+
+      let creditAccountId: number;
+      if (payment.method === "Cash") {
+        const cash = this.ensureCashAccountInternal(client);
+        creditAccountId = cash.id;
+      } else {
+        if (!payment.paymentAccountId) throw new Error("paymentAccountId is required for bank payments");
+        const [bank] = tx.select().from(accounts).where(eq(accounts.id, payment.paymentAccountId)).all();
+        if (!bank) throw new Error("Invalid bank account");
+        if (String(bank.type).toLowerCase() !== "bank") throw new Error("paymentAccountId must be a bank account");
+        creditAccountId = bank.id;
+      }
+
+      const narration = `Salary Payment ${payroll.payrollMonth} - ${emp.employeeCode} ${emp.name}`;
+
+      const entries: JournalEntryInput[] = [
+        { accountId: emp.accountId, entryType: "DEBIT", amount },
+        { accountId: creditAccountId, entryType: "CREDIT", amount },
+      ];
+      const { normalized, total } = this.normalizeJournalEntries(entries);
+
+      const [last] = tx.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
+      const year = new Date().getFullYear();
+      const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
+      const voucherNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
+      const amountInWords = `${toWords(Math.round(total))} only`;
+
+      const v = tx.insert(journalVouchers).values({
+        voucherNo,
+        voucherDate: paymentDate,
+        narration,
+        status: "approved",
+        totalAmount: total.toString(),
+        amountInWords,
+        createdBy: performedBy?.userId,
+        approvedBy: performedBy?.userId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any).returning().get();
+
+      for (const entry of normalized) {
+        tx.insert(journalVoucherEntries).values({
+          ...entry,
+          journalVoucherId: v.id,
+          amount: parseAmount(entry.amount).toString(),
+        } as any).run();
+      }
+
+      this.postJournalToLedger(client, v as any, normalized);
+
+      const updated = tx.update(payrolls).set({
+        paymentStatus: "Paid",
+        paymentMethod: payment.method,
+        paymentAccountId: payment.method === "Bank" ? payment.paymentAccountId : null,
+        status: "paid",
+        paidAt: paymentDate,
+        paymentJournalVoucherId: v.id,
+        updatedAt: new Date(),
+      } as any).where(eq(payrolls.id, payrollId)).returning().get();
+
+      tx.insert(payrollAuditLogs).values({
+        payrollId,
+        action: "paid",
+        performedBy: performedBy?.userId,
+        performedByRole: performedBy?.role,
+        detailsJson: JSON.stringify({ paymentJournalVoucherId: v.id, method: payment.method, paymentDate: paymentDate.toISOString() }),
+      } as any).run();
+
+      return updated as any;
+    });
+  }
+
+  async getPayrollAudit(payrollId: number): Promise<PayrollAuditLog[]> {
+    return db.select().from(payrollAuditLogs).where(eq(payrollAuditLogs.payrollId, payrollId)).orderBy(desc(payrollAuditLogs.performedAt)).all();
+  }
+
   // Accounts
   async getAccounts(type?: string): Promise<Account[]> {
     if (type) {
@@ -228,19 +758,51 @@ export class DatabaseStorage implements IStorage {
       .set({ currentBalance: newBalance.toString() })
       .where(eq(accounts.id, id));
   }
-  private async ensureCashAccountInternal(client: DbClient): Promise<Account> {
+  private ensureCashAccountInternal(client: DbClient): Account {
     const existing = client.select().from(accounts)
       .where(and(eq(accounts.name, "Cash in Hand"), eq(accounts.isSystemAccount, true as any)))
       .all();
     if (existing.length > 0) return existing[0];
-    const [created] = client.insert(accounts).values({
+    const created = client.insert(accounts).values({
       name: "Cash in Hand",
       type: "asset" as any,
       openingBalance: "0",
       currentBalance: "0",
       isSystemAccount: true,
-    }).returning();
-    return created;
+    }).returning().get();
+    return created as any;
+  }
+
+  private ensureSystemAccount(client: DbClient, name: string, type: Account["type"] | string): Account {
+    const existing = client
+      .select()
+      .from(accounts)
+      .where(and(eq(accounts.name, name), eq(accounts.isSystemAccount, true as any)))
+      .all();
+    if (existing.length > 0) return existing[0];
+
+    const created = client.insert(accounts).values({
+      name,
+      type: type as any,
+      openingBalance: "0",
+      currentBalance: "0",
+      isSystemAccount: true,
+    }).returning().get();
+    return created as any;
+  }
+
+  private assertPeriodNotLocked(client: DbClient, postingDate: Date, context: string) {
+    const locks = client
+      .select()
+      .from(periodLocks)
+      .where(and(lte(periodLocks.fromDate, postingDate), gte(periodLocks.toDate, postingDate)))
+      .all();
+    if (locks.length > 0) {
+      const lock = locks[0];
+      throw new Error(
+        `Period is locked for ${context} (${new Date(lock.fromDate as any).toISOString().slice(0, 10)} to ${new Date(lock.toDate as any).toISOString().slice(0, 10)})`,
+      );
+    }
   }
 
   // Products
@@ -389,6 +951,10 @@ export class DatabaseStorage implements IStorage {
 
   async createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase> {
     return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const postingDate = purchase.purchaseDate ? new Date(purchase.purchaseDate as any) : new Date();
+      this.assertPeriodNotLocked(client, postingDate, "purchase");
+
       const year = new Date().getFullYear();
       const [last] = tx.select().from(purchases).orderBy(desc(purchases.id)).limit(1).all();
       const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
@@ -426,8 +992,6 @@ export class DatabaseStorage implements IStorage {
       const paidAmount = parseAmount((purchase as any).paidAmount || 0);
       const balanceDue = grandAmount - paidAmount;
       const amountInWords = `${toWords(Math.round(grandAmount))} only`;
-
-      const client = tx as unknown as DbClient;
 
       const newPurchase = tx.insert(purchases).values({
         ...purchase,
@@ -492,7 +1056,7 @@ export class DatabaseStorage implements IStorage {
         description: `Purchase Invoice: ${invoiceNumber}`,
         referenceType: "purchase",
         referenceId: newPurchase.id,
-        entryDate: new Date(),
+        entryDate: postingDate,
       });
 
       return newPurchase;
@@ -513,6 +1077,12 @@ export class DatabaseStorage implements IStorage {
 
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
+      const postingDate = purchase.purchaseDate
+        ? new Date(purchase.purchaseDate as any)
+        : existing.purchaseDate
+          ? new Date(existing.purchaseDate as any)
+          : new Date();
+      this.assertPeriodNotLocked(client, postingDate, "purchase");
 
       // Rollback previous stock impact
       for (const item of existing.items) {
@@ -607,7 +1177,7 @@ export class DatabaseStorage implements IStorage {
           description: `Purchase Update Adjustment #${id}`,
           referenceType: "purchase",
           referenceId: id,
-          entryDate: new Date(),
+          entryDate: postingDate,
         });
       }
 
@@ -736,6 +1306,8 @@ export class DatabaseStorage implements IStorage {
       const gatePassNumber = `GP-${year}-${String(nextGp).padStart(4, "0")}`;
 
       const client = tx as unknown as DbClient;
+      const postingDate = sale.saleDate ? new Date(sale.saleDate as any) : new Date();
+      this.assertPeriodNotLocked(client, postingDate, "sale");
 
       let subtotal = 0;
       const normalizedItems = items.map((item) => {
@@ -792,7 +1364,7 @@ export class DatabaseStorage implements IStorage {
         description: `Sale Invoice: ${invoiceNumber}`,
         referenceType: "sale",
         referenceId: newSale.id,
-        entryDate: new Date(),
+        entryDate: postingDate,
       });
 
       return newSale;
@@ -805,10 +1377,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Ledger
-  async getLedgerEntries(accountId?: number, referenceType?: string): Promise<(LedgerEntry & { runningBalance?: string; debit?: string; credit?: string })[]> {
+  async getLedgerEntries(
+    accountId?: number,
+    referenceType?: string,
+    startDate?: Date,
+    endDate?: Date,
+  ): Promise<(LedgerEntry & { runningBalance?: string; debit?: string; credit?: string; openingBalance?: string })[]> {
     const whereClauses = [];
     if (accountId) whereClauses.push(eq(ledgerEntries.accountId, accountId));
     if (referenceType) whereClauses.push(eq(ledgerEntries.referenceType, referenceType));
+    if (startDate) whereClauses.push(gte(ledgerEntries.entryDate, startDate));
+    if (endDate) whereClauses.push(lte(ledgerEntries.entryDate, endOfDay(endDate)));
 
     const rowsBase = whereClauses.length
       ? db.select().from(ledgerEntries).where(and(...whereClauses as any)).orderBy(ledgerEntries.entryDate).all()
@@ -819,19 +1398,33 @@ export class DatabaseStorage implements IStorage {
     }
 
     const [account] = db.select().from(accounts).where(eq(accounts.id, accountId)).all();
-    const opening = parseAmount(account?.openingBalance || "0");
+    const normalSide = normalSideForAccountType(account?.type);
+
+    let opening = parseAmount(account?.openingBalance || "0");
+    if (startDate) {
+      const movementWhere = [eq(ledgerEntries.accountId, accountId), lt(ledgerEntries.entryDate, startDate)];
+      if (referenceType) movementWhere.push(eq(ledgerEntries.referenceType, referenceType));
+
+      const [movementRow] = db
+        .select({
+          total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = ${normalSide === "DEBIT" ? sql`'debit'` : sql`'credit'`} THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+        })
+        .from(ledgerEntries)
+        .where(and(...movementWhere as any))
+        .all();
+      opening += parseAmount(movementRow?.total || "0");
+    }
     const rows = rowsBase;
 
     let running = opening;
     return rows.map((row) => {
       const amount = parseAmount(row.amount);
-      if (row.transactionType === "debit") {
-        running += amount;
-      } else {
-        running -= amount;
-      }
+      const isIncrease =
+        normalSide === "DEBIT" ? row.transactionType === "debit" : row.transactionType === "credit";
+      running = isIncrease ? running + amount : running - amount;
       return {
         ...row,
+        openingBalance: opening.toString(),
         debit: row.transactionType === "debit" ? row.amount : "0",
         credit: row.transactionType === "credit" ? row.amount : "0",
         runningBalance: running.toString(),
@@ -857,7 +1450,6 @@ export class DatabaseStorage implements IStorage {
         referenceId: entry.referenceId,
         amount: entry.amount,
         narration: entry.description,
-        createdBy: entry.createdBy,
       };
       client.insert(cashTransactions).values(tx).run();
     }
@@ -875,8 +1467,8 @@ export class DatabaseStorage implements IStorage {
 
   async recordCashTransaction(tx: CashTxInput): Promise<CashTransaction> {
     await this.ensureCashAccountInternal(db);
-    const [created] = db.insert(cashTransactions).values(tx).returning();
-    return created;
+    const created = db.insert(cashTransactions).values(tx).returning().get();
+    return created as any;
   }
 
   async getCashSummary(): Promise<{ opening: number; debit: number; credit: number; closing: number }> {
@@ -975,6 +1567,8 @@ export class DatabaseStorage implements IStorage {
   async createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher> {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
+      const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : new Date();
+      this.assertPeriodNotLocked(client, postingDate, "receipt/payment voucher");
       const normalizedLines = this.normalizeReceiptLines(lines, data.voucherType);
 
       const year = new Date().getFullYear();
@@ -1022,7 +1616,7 @@ export class DatabaseStorage implements IStorage {
             description: `Receipt ${voucher.voucherNumber}`,
             referenceType: "receipt",
             referenceId: voucher.id,
-            entryDate: data.voucherDate || new Date(),
+            entryDate: postingDate,
           });
         }
         if (credit > 0) {
@@ -1035,7 +1629,7 @@ export class DatabaseStorage implements IStorage {
             description: `Receipt ${voucher.voucherNumber}`,
             referenceType: "receipt",
             referenceId: voucher.id,
-            entryDate: data.voucherDate || new Date(),
+            entryDate: postingDate,
           });
         }
       }
@@ -1051,6 +1645,8 @@ export class DatabaseStorage implements IStorage {
 
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
+      const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : existing.voucherDate ? new Date(existing.voucherDate as any) : new Date();
+      this.assertPeriodNotLocked(client, postingDate, "receipt/payment voucher");
 
       // reverse ledger/account impacts
       for (const line of existing.lines) {
@@ -1092,7 +1688,7 @@ export class DatabaseStorage implements IStorage {
             description: `Receipt ${updated.voucherNumber}`,
             referenceType: "receipt",
             referenceId: id,
-            entryDate: data.voucherDate || new Date(),
+            entryDate: postingDate,
           });
         }
         if (credit > 0) {
@@ -1105,7 +1701,7 @@ export class DatabaseStorage implements IStorage {
             description: `Receipt ${updated.voucherNumber}`,
             referenceType: "receipt",
             referenceId: id,
-            entryDate: data.voucherDate || new Date(),
+            entryDate: postingDate,
           });
         }
       }
@@ -1222,6 +1818,8 @@ export class DatabaseStorage implements IStorage {
 
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
+      const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : new Date();
+      this.assertPeriodNotLocked(client, postingDate, "journal voucher");
 
       const [last] = tx.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
       const year = new Date().getFullYear();
@@ -1235,7 +1833,7 @@ export class DatabaseStorage implements IStorage {
       const voucher = tx.insert(journalVouchers).values({
         ...data,
         voucherNo,
-        voucherDate: data.voucherDate || new Date(),
+        voucherDate: postingDate,
         totalAmount: total.toString(),
         amountInWords,
         status,
@@ -1306,6 +1904,8 @@ export class DatabaseStorage implements IStorage {
       this.ensureAccountsExist(entries);
       const { total } = this.normalizeJournalEntries(entries);
       const amountInWords = `${toWords(Math.round(total))} only`;
+      const postingDate = existing.voucherDate ? new Date(existing.voucherDate as any) : new Date();
+      this.assertPeriodNotLocked(client, postingDate, "journal voucher approval");
 
       const [updated] = tx.update(journalVouchers).set({
         status: "approved",
@@ -1450,6 +2050,662 @@ export class DatabaseStorage implements IStorage {
       purchaseCount: purchaseTotal?.count ?? 0,
       saleCount: saleTotal?.count ?? 0,
     };
+  }
+
+  async getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number) {
+    const from = startDate;
+    const to = endOfDay(endDate);
+    const conditions = [gte(purchases.purchaseDate, from), lte(purchases.purchaseDate, to)];
+    if (supplierId) conditions.push(eq(purchases.supplierId, supplierId));
+
+    const baseRows = db
+      .select({
+        id: purchases.id,
+        invoiceNumber: purchases.invoiceNumber,
+        purchaseDate: purchases.purchaseDate,
+        supplierId: purchases.supplierId,
+        supplierName: accounts.name,
+        purchaseAmount: purchases.subtotal,
+        netAmount: purchases.totalAmount,
+      })
+      .from(purchases)
+      .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
+      .where(and(...conditions))
+      .orderBy(desc(purchases.purchaseDate))
+      .all();
+
+    const purchaseIds = baseRows.map((r) => r.id);
+    const taxRows = purchaseIds.length
+      ? db
+          .select({
+            purchaseId: purchaseCharges.purchaseId,
+            tax: sql<string>`COALESCE(SUM(CASE WHEN ${purchaseCharges.type} = 'market_fee' THEN CAST(${purchaseCharges.amount} AS REAL) ELSE 0 END), 0)`,
+          })
+          .from(purchaseCharges)
+          .where(inArray(purchaseCharges.purchaseId, purchaseIds))
+          .groupBy(purchaseCharges.purchaseId)
+          .all()
+      : [];
+    const taxByPurchaseId = new Map(taxRows.map((r) => [r.purchaseId, r.tax]));
+
+    let purchaseAmountTotal = 0;
+    let taxTotal = 0;
+    let netTotal = 0;
+
+    const rows = baseRows.map((r) => {
+      const tax = parseAmount(taxByPurchaseId.get(r.id) || "0");
+      const purchaseAmount = parseAmount(r.purchaseAmount || "0");
+      const netAmount = parseAmount(r.netAmount || "0");
+      purchaseAmountTotal += purchaseAmount;
+      taxTotal += tax;
+      netTotal += netAmount;
+      return {
+        id: r.id,
+        invoiceNumber: r.invoiceNumber,
+        purchaseDate: new Date(r.purchaseDate as any),
+        supplierId: r.supplierId,
+        supplierName: r.supplierName || "",
+        purchaseAmount: purchaseAmount.toString(),
+        tax: tax.toString(),
+        netAmount: netAmount.toString(),
+      };
+    });
+
+    return {
+      rows,
+      totals: {
+        purchaseAmount: purchaseAmountTotal.toString(),
+        tax: taxTotal.toString(),
+        netAmount: netTotal.toString(),
+      },
+    };
+  }
+
+  async getPeriodSales(startDate: Date, endDate: Date, customerId?: number) {
+    const from = startDate;
+    const to = endOfDay(endDate);
+    const conditions = [gte(sales.saleDate, from), lte(sales.saleDate, to)];
+    if (customerId) conditions.push(eq(sales.customerId, customerId));
+
+    const rows = db
+      .select({
+        id: sales.id,
+        invoiceNumber: sales.invoiceNumber,
+        saleDate: sales.saleDate,
+        customerId: sales.customerId,
+        customerName: accounts.name,
+        salesAmount: sales.subtotal,
+        netAmount: sales.totalAmount,
+        loading: sales.loadingCharges,
+        weighing: sales.weighingCharges,
+        other: sales.otherCharges,
+      })
+      .from(sales)
+      .leftJoin(accounts, eq(sales.customerId, accounts.id))
+      .where(and(...conditions))
+      .orderBy(desc(sales.saleDate))
+      .all()
+      .map((r) => {
+        const salesAmount = parseAmount(r.salesAmount || "0");
+        const tax = parseAmount(r.loading || "0") + parseAmount(r.weighing || "0") + parseAmount(r.other || "0");
+        const netAmount = parseAmount(r.netAmount || "0");
+        return {
+          id: r.id,
+          invoiceNumber: r.invoiceNumber,
+          saleDate: new Date(r.saleDate as any),
+          customerId: r.customerId,
+          customerName: r.customerName || "",
+          salesAmount: salesAmount.toString(),
+          tax: tax.toString(),
+          netAmount: netAmount.toString(),
+        };
+      });
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.salesAmount += parseAmount(r.salesAmount);
+        acc.tax += parseAmount(r.tax);
+        acc.netAmount += parseAmount(r.netAmount);
+        return acc;
+      },
+      { salesAmount: 0, tax: 0, netAmount: 0 },
+    );
+
+    return {
+      rows,
+      totals: {
+        salesAmount: totals.salesAmount.toString(),
+        tax: totals.tax.toString(),
+        netAmount: totals.netAmount.toString(),
+      },
+    };
+  }
+
+  async getGrossProfit(startDate: Date, endDate: Date) {
+    const from = startDate;
+    const to = endOfDay(endDate);
+
+    const [salesTotal] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CAST(${sales.subtotal} AS REAL)), 0)`,
+      })
+      .from(sales)
+      .where(and(gte(sales.saleDate, from), lte(sales.saleDate, to)))
+      .all();
+
+    const [cogsTotal] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL) * CAST(${products.avgPurchasePrice} AS REAL)), 0)`,
+      })
+      .from(saleItems)
+      .leftJoin(sales, eq(saleItems.saleId, sales.id))
+      .leftJoin(products, eq(saleItems.productId, products.id))
+      .where(and(gte(sales.saleDate, from), lte(sales.saleDate, to)))
+      .all();
+
+    const totalSales = parseAmount(salesTotal?.total || "0");
+    const costOfGoodsSold = parseAmount(cogsTotal?.total || "0");
+    const grossProfit = totalSales - costOfGoodsSold;
+
+    return {
+      totalSales: totalSales.toString(),
+      costOfGoodsSold: costOfGoodsSold.toString(),
+      grossProfit: grossProfit.toString(),
+    };
+  }
+
+  async getDayBook(startDate: Date, endDate: Date) {
+    const cash = await this.ensureCashAccountInternal(db);
+    const from = startDate;
+    const to = endOfDay(endDate);
+
+    const [movementBefore] = db
+      .select({
+        movement: sql<string>`COALESCE(SUM(CASE WHEN ${cashTransactions.transactionType} = 'DEBIT' THEN CAST(${cashTransactions.amount} AS REAL) ELSE -CAST(${cashTransactions.amount} AS REAL) END), 0)`,
+      })
+      .from(cashTransactions)
+      .where(and(eq(cashTransactions.accountId, cash.id), lt(cashTransactions.transactionDate, from)))
+      .all();
+
+    const opening = parseAmount(cash.openingBalance || "0") + parseAmount(movementBefore?.movement || "0");
+
+    const txs = db
+      .select()
+      .from(cashTransactions)
+      .where(and(eq(cashTransactions.accountId, cash.id), gte(cashTransactions.transactionDate, from), lte(cashTransactions.transactionDate, to)))
+      .orderBy(cashTransactions.transactionDate)
+      .all();
+
+    const purchaseIds = txs.filter((t) => t.referenceType === "purchase" && t.referenceId).map((t) => t.referenceId!) as number[];
+    const saleIds = txs.filter((t) => t.referenceType === "sale" && t.referenceId).map((t) => t.referenceId!) as number[];
+    const receiptIds = txs.filter((t) => t.referenceType === "receipt" && t.referenceId).map((t) => t.referenceId!) as number[];
+    const journalIds = txs.filter((t) => t.referenceType === "journal_voucher" && t.referenceId).map((t) => t.referenceId!) as number[];
+
+    const purchaseNoById = new Map<number, string>(
+      purchaseIds.length
+        ? db
+            .select({ id: purchases.id, no: purchases.invoiceNumber })
+            .from(purchases)
+            .where(inArray(purchases.id, purchaseIds))
+            .all()
+            .map((r) => [r.id, r.no])
+        : [],
+    );
+    const saleNoById = new Map<number, string>(
+      saleIds.length
+        ? db
+            .select({ id: sales.id, no: sales.invoiceNumber })
+            .from(sales)
+            .where(inArray(sales.id, saleIds))
+            .all()
+            .map((r) => [r.id, r.no])
+        : [],
+    );
+    const receiptById = new Map<number, { voucherNumber: string; voucherType: string }>(
+      receiptIds.length
+        ? db
+            .select({ id: receiptVouchers.id, voucherNumber: receiptVouchers.voucherNumber, voucherType: receiptVouchers.voucherType })
+            .from(receiptVouchers)
+            .where(inArray(receiptVouchers.id, receiptIds))
+            .all()
+            .map((r) => [r.id, { voucherNumber: r.voucherNumber, voucherType: r.voucherType }])
+        : [],
+    );
+    const journalNoById = new Map<number, string>(
+      journalIds.length
+        ? db
+            .select({ id: journalVouchers.id, no: journalVouchers.voucherNo })
+            .from(journalVouchers)
+            .where(inArray(journalVouchers.id, journalIds))
+            .all()
+            .map((r) => [r.id, r.no])
+        : [],
+    );
+
+    let running = opening;
+    const rows = txs.map((t) => {
+      const rowOpening = running;
+      const amt = parseAmount(t.amount);
+      if (t.transactionType === "DEBIT") running += amt;
+      else running -= amt;
+
+      let voucherType = t.referenceType || "";
+      let voucherNo = `${t.referenceType || ""}#${t.referenceId || ""}`;
+
+      if (t.referenceType === "purchase" && t.referenceId) {
+        voucherType = "PUR";
+        voucherNo = purchaseNoById.get(t.referenceId) || voucherNo;
+      } else if (t.referenceType === "sale" && t.referenceId) {
+        voucherType = "SAL";
+        voucherNo = saleNoById.get(t.referenceId) || voucherNo;
+      } else if (t.referenceType === "receipt" && t.referenceId) {
+        const rv = receiptById.get(t.referenceId);
+        voucherType = rv?.voucherType || "RCPT";
+        voucherNo = rv?.voucherNumber || voucherNo;
+      } else if (t.referenceType === "journal_voucher" && t.referenceId) {
+        voucherType = "JV";
+        voucherNo = journalNoById.get(t.referenceId) || voucherNo;
+      }
+
+      return {
+        date: new Date(t.transactionDate as any),
+        openingBalance: rowOpening.toString(),
+        voucherType,
+        voucherNo,
+        debit: t.transactionType === "DEBIT" ? amt.toString() : "0",
+        credit: t.transactionType === "CREDIT" ? amt.toString() : "0",
+        closingBalance: running.toString(),
+        referenceType: t.referenceType,
+        referenceId: t.referenceId,
+        narration: t.narration,
+      };
+    });
+
+    return {
+      openingBalance: opening.toString(),
+      rows,
+      closingBalance: running.toString(),
+    };
+  }
+
+  async getOutstandingCustomers(asOfDate: Date, customerId?: number) {
+    const to = endOfDay(asOfDate);
+    const conditions = [lte(sales.saleDate, to)];
+    if (customerId) conditions.push(eq(sales.customerId, customerId));
+
+    const rows = db
+      .select({
+        saleId: sales.id,
+        invoiceNumber: sales.invoiceNumber,
+        saleDate: sales.saleDate,
+        customerId: sales.customerId,
+        customerName: accounts.name,
+        invoiceAmount: sales.totalAmount,
+        receivedAmount: sales.paidAmount,
+      })
+      .from(sales)
+      .leftJoin(accounts, eq(sales.customerId, accounts.id))
+      .where(and(...conditions))
+      .orderBy(desc(sales.saleDate))
+      .all()
+      .map((r) => {
+        const invoice = parseAmount(r.invoiceAmount || "0");
+        const received = parseAmount(r.receivedAmount || "0");
+        const outstanding = Math.max(invoice - received, 0);
+        return {
+          saleId: r.saleId,
+          invoiceNumber: r.invoiceNumber,
+          saleDate: new Date(r.saleDate as any),
+          customerId: r.customerId,
+          customerName: r.customerName || "",
+          invoiceAmount: invoice.toString(),
+          receivedAmount: received.toString(),
+          outstandingAmount: outstanding.toString(),
+          dueDate: null as Date | null,
+        };
+      })
+      .filter((r) => parseAmount(r.outstandingAmount) > 0);
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.invoiceAmount += parseAmount(r.invoiceAmount);
+        acc.receivedAmount += parseAmount(r.receivedAmount);
+        acc.outstandingAmount += parseAmount(r.outstandingAmount);
+        return acc;
+      },
+      { invoiceAmount: 0, receivedAmount: 0, outstandingAmount: 0 },
+    );
+
+    return {
+      rows,
+      totals: {
+        invoiceAmount: totals.invoiceAmount.toString(),
+        receivedAmount: totals.receivedAmount.toString(),
+        outstandingAmount: totals.outstandingAmount.toString(),
+      },
+    };
+  }
+
+  async getOutstandingSuppliers(asOfDate: Date, supplierId?: number) {
+    const to = endOfDay(asOfDate);
+    const conditions = [lte(purchases.purchaseDate, to)];
+    if (supplierId) conditions.push(eq(purchases.supplierId, supplierId));
+
+    const rows = db
+      .select({
+        purchaseId: purchases.id,
+        invoiceNumber: purchases.invoiceNumber,
+        purchaseDate: purchases.purchaseDate,
+        supplierId: purchases.supplierId,
+        supplierName: accounts.name,
+        billAmount: purchases.totalAmount,
+        paidAmount: purchases.paidAmount,
+        dueDate: purchases.dueDate,
+      })
+      .from(purchases)
+      .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
+      .where(and(...conditions))
+      .orderBy(desc(purchases.purchaseDate))
+      .all()
+      .map((r) => {
+        const bill = parseAmount(r.billAmount || "0");
+        const paid = parseAmount(r.paidAmount || "0");
+        const outstanding = Math.max(bill - paid, 0);
+        return {
+          purchaseId: r.purchaseId,
+          invoiceNumber: r.invoiceNumber,
+          purchaseDate: new Date(r.purchaseDate as any),
+          supplierId: r.supplierId,
+          supplierName: r.supplierName || "",
+          billAmount: bill.toString(),
+          paidAmount: paid.toString(),
+          outstandingAmount: outstanding.toString(),
+          dueDate: r.dueDate ? new Date(r.dueDate as any) : null,
+        };
+      })
+      .filter((r) => parseAmount(r.outstandingAmount) > 0);
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.billAmount += parseAmount(r.billAmount);
+        acc.paidAmount += parseAmount(r.paidAmount);
+        acc.outstandingAmount += parseAmount(r.outstandingAmount);
+        return acc;
+      },
+      { billAmount: 0, paidAmount: 0, outstandingAmount: 0 },
+    );
+
+    return {
+      rows,
+      totals: {
+        billAmount: totals.billAmount.toString(),
+        paidAmount: totals.paidAmount.toString(),
+        outstandingAmount: totals.outstandingAmount.toString(),
+      },
+    };
+  }
+
+  private async sumExpenseMovements(startDate: Date, endDate: Date) {
+    const from = startDate;
+    const to = endOfDay(endDate);
+    const expenseIds = db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(inArray(accounts.type, ["expense", "salary"] as any))
+      .all()
+      .map((r) => r.id);
+
+    if (expenseIds.length === 0) return 0;
+
+    const [row] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+      })
+      .from(ledgerEntries)
+      .where(and(inArray(ledgerEntries.accountId, expenseIds), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+      .all();
+
+    return parseAmount(row?.total || "0");
+  }
+
+  async getIncomeStatement(startDate: Date, endDate: Date) {
+    const gross = await this.getGrossProfit(startDate, endDate);
+    const operatingExpenses = await this.sumExpenseMovements(startDate, endDate);
+    const netProfit = parseAmount(gross.grossProfit) - operatingExpenses;
+
+    const [revenueRow] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CAST(${sales.subtotal} AS REAL)), 0)`,
+      })
+      .from(sales)
+      .where(and(gte(sales.saleDate, startDate), lte(sales.saleDate, endOfDay(endDate))))
+      .all();
+
+    return {
+      period: { fromDate: startDate, toDate: endDate },
+      revenue: parseAmount(revenueRow?.total || "0").toString(),
+      costOfSales: gross.costOfGoodsSold,
+      grossProfit: gross.grossProfit,
+      operatingExpenses: operatingExpenses.toString(),
+      netProfit: netProfit.toString(),
+    };
+  }
+
+  private async sumLedgerBalancesAsOf(asOfDate: Date, accountType: string, normal: NormalSide) {
+    const asOf = endOfDay(asOfDate);
+    const typeAccounts = db
+      .select({ id: accounts.id, opening: accounts.openingBalance })
+      .from(accounts)
+      .where(eq(accounts.type, accountType as any))
+      .all();
+    const ids = typeAccounts.map((a) => a.id);
+    if (ids.length === 0) return 0;
+
+    const [movementRow] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = ${normal === "DEBIT" ? sql`'debit'` : sql`'credit'`} THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+      })
+      .from(ledgerEntries)
+      .where(and(inArray(ledgerEntries.accountId, ids), lte(ledgerEntries.entryDate, asOf)))
+      .all();
+
+    const openingSum = typeAccounts.reduce((sum, a) => sum + parseAmount(a.opening || "0"), 0);
+    return openingSum + parseAmount(movementRow?.total || "0");
+  }
+
+  async getBalanceSheet(asOfDate: Date) {
+    const asOf = endOfDay(asOfDate);
+
+    const cash = await this.ensureCashAccountInternal(db);
+    const [cashMovement] = db
+      .select({
+        movement: sql<string>`COALESCE(SUM(CASE WHEN ${cashTransactions.transactionType} = 'DEBIT' THEN CAST(${cashTransactions.amount} AS REAL) ELSE -CAST(${cashTransactions.amount} AS REAL) END), 0)`,
+      })
+      .from(cashTransactions)
+      .where(and(eq(cashTransactions.accountId, cash.id), lte(cashTransactions.transactionDate, asOf)))
+      .all();
+    const cashBalance = parseAmount(cash.openingBalance || "0") + parseAmount(cashMovement?.movement || "0");
+
+    const bankBalance = await this.sumLedgerBalancesAsOf(asOfDate, "bank", "DEBIT");
+    const receivables = await this.sumLedgerBalancesAsOf(asOfDate, "customer", "DEBIT");
+    const payables = await this.sumLedgerBalancesAsOf(asOfDate, "supplier", "CREDIT");
+    const employeePayables = await this.sumLedgerBalancesAsOf(asOfDate, "employee", "CREDIT");
+
+    const purchased = db
+      .select({
+        productId: purchaseItems.productId,
+        qty: sql<string>`COALESCE(SUM(CAST(${purchaseItems.netWeightKg} AS REAL)), 0)`,
+      })
+      .from(purchaseItems)
+      .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      .where(lte(purchases.purchaseDate, asOf))
+      .groupBy(purchaseItems.productId)
+      .all();
+    const sold = db
+      .select({
+        productId: saleItems.productId,
+        qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL)), 0)`,
+      })
+      .from(saleItems)
+      .leftJoin(sales, eq(saleItems.saleId, sales.id))
+      .where(lte(sales.saleDate, asOf))
+      .groupBy(saleItems.productId)
+      .all();
+
+    const purchasedByProduct = new Map(purchased.map((r) => [r.productId, parseAmount(r.qty)]));
+    const soldByProduct = new Map(sold.map((r) => [r.productId, parseAmount(r.qty)]));
+    const allProducts = await this.getProducts();
+    const inventoryValue = allProducts.reduce((sum, p) => {
+      const inQty = (purchasedByProduct.get(p.id) || 0) - (soldByProduct.get(p.id) || 0);
+      const price = parseAmount(p.avgPurchasePrice || "0");
+      return sum + Math.max(inQty, 0) * price;
+    }, 0);
+
+    const retainedEarnings = parseAmount((await this.getIncomeStatement(new Date(0), asOfDate)).netProfit);
+    const capitalAccount = await this.ensureSystemAccount(db, "Capital", "equity");
+
+    const [capMovements] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'credit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+      })
+      .from(ledgerEntries)
+      .where(and(eq(ledgerEntries.accountId, capitalAccount.id), lte(ledgerEntries.entryDate, asOf)))
+      .all();
+    const capitalBalance = parseAmount(capitalAccount.openingBalance || "0") + parseAmount(capMovements?.total || "0");
+
+    const assetsTotal = cashBalance + bankBalance + receivables + inventoryValue;
+    const liabilitiesTotal = payables + employeePayables;
+    const equityTotal = capitalBalance + retainedEarnings;
+
+    return {
+      asOfDate,
+      assets: {
+        cash: cashBalance.toString(),
+        bank: bankBalance.toString(),
+        receivables: receivables.toString(),
+        inventory: inventoryValue.toString(),
+        total: assetsTotal.toString(),
+      },
+      liabilities: {
+        payables: payables.toString(),
+        expensesPayable: employeePayables.toString(),
+        total: liabilitiesTotal.toString(),
+      },
+      equity: {
+        capital: capitalBalance.toString(),
+        retainedEarnings: retainedEarnings.toString(),
+        total: equityTotal.toString(),
+      },
+      totals: {
+        assets: assetsTotal.toString(),
+        liabilitiesAndEquity: (liabilitiesTotal + equityTotal).toString(),
+      },
+    };
+  }
+
+  async getCapitalStatement(startDate: Date, endDate: Date) {
+    const capital = await this.ensureSystemAccount(db, "Capital", "equity");
+    const drawings = await this.ensureSystemAccount(db, "Drawings", "equity");
+
+    const from = startDate;
+    const to = endOfDay(endDate);
+
+    const [capBefore] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'credit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+      })
+      .from(ledgerEntries)
+      .where(and(eq(ledgerEntries.accountId, capital.id), lt(ledgerEntries.entryDate, from)))
+      .all();
+    const openingCapital = parseAmount(capital.openingBalance || "0") + parseAmount(capBefore?.total || "0");
+
+    const [capDuring] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'credit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+      })
+      .from(ledgerEntries)
+      .where(and(eq(ledgerEntries.accountId, capital.id), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+      .all();
+    const additionalCapital = parseAmount(capDuring?.total || "0");
+
+    const [drawDuring] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+      })
+      .from(ledgerEntries)
+      .where(and(eq(ledgerEntries.accountId, drawings.id), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+      .all();
+    const drawingsAmount = Math.max(parseAmount(drawDuring?.total || "0"), 0);
+
+    const closingCapital = openingCapital + additionalCapital - drawingsAmount;
+
+    return {
+      openingCapital: openingCapital.toString(),
+      additionalCapital: additionalCapital.toString(),
+      drawings: drawingsAmount.toString(),
+      closingCapital: closingCapital.toString(),
+    };
+  }
+
+  async getSalaryAccount(startDate: Date, endDate: Date) {
+    const from = startDate;
+    const to = endOfDay(endDate);
+
+    const salaryAccounts = db.select({ id: accounts.id }).from(accounts).where(eq(accounts.type, "salary" as any)).all();
+    const salaryAccountIds = salaryAccounts.map((a) => a.id);
+    if (salaryAccountIds.length === 0) return { rows: [], totals: { netSalary: "0" } };
+
+    const entries = db
+      .select({
+        entryDate: ledgerEntries.entryDate,
+        amount: ledgerEntries.amount,
+        description: ledgerEntries.description,
+      })
+      .from(ledgerEntries)
+      .where(and(inArray(ledgerEntries.accountId, salaryAccountIds), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+      .orderBy(ledgerEntries.entryDate)
+      .all();
+
+    const grouped = new Map<string, { employee: string; salaryMonth: string; net: number }>();
+    for (const e of entries) {
+      const dt = new Date(e.entryDate as any);
+      const salaryMonth = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+      const raw = (e.description || "").trim();
+      const employee = raw.includes(":") ? raw.split(":").slice(1).join(":").trim() : "Employee";
+      const net = parseAmount(e.amount);
+      const key = `${salaryMonth}||${employee}`;
+      const prev = grouped.get(key) || { employee, salaryMonth, net: 0 };
+      prev.net += net;
+      grouped.set(key, prev);
+    }
+
+    const values: Array<{ employee: string; salaryMonth: string; net: number }> = [];
+    grouped.forEach((v) => values.push(v));
+    const rows = values.map((r) => ({
+      employee: r.employee,
+      salaryMonth: r.salaryMonth,
+      basicSalary: r.net.toString(),
+      allowances: "0",
+      deductions: "0",
+      netSalary: r.net.toString(),
+    }));
+
+    const totalNet = rows.reduce((sum, r) => sum + parseAmount(r.netSalary), 0);
+    return { rows, totals: { netSalary: totalNet.toString() } };
+  }
+
+  async getPeriodLocks(): Promise<PeriodLock[]> {
+    return db.select().from(periodLocks).orderBy(desc(periodLocks.id)).all();
+  }
+
+  async createPeriodLock(lock: InsertPeriodLock): Promise<PeriodLock> {
+    const [created] = await db.insert(periodLocks).values(lock as any).returning();
+    return created;
+  }
+
+  async deletePeriodLock(id: number): Promise<boolean> {
+    const result = await db.delete(periodLocks).where(eq(periodLocks.id, id)).run();
+    return result.changes > 0;
   }
 }
 

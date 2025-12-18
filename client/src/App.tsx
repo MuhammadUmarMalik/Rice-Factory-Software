@@ -25,11 +25,23 @@ import SalesReport from "@/pages/reports/sales";
 import Ledger from "@/pages/reports/ledger";
 import TrialBalance from "@/pages/reports/trial-balance";
 import ProfitLoss from "@/pages/reports/profit-loss";
+import PeriodPurchases from "@/pages/reports/period-purchases";
+import PeriodSales from "@/pages/reports/period-sales";
+import GrossProfit from "@/pages/reports/gross-profit";
+import DayBook from "@/pages/reports/day-book";
+import OutstandingCustomers from "@/pages/reports/outstanding-customers";
+import OutstandingSuppliers from "@/pages/reports/outstanding-suppliers";
+import IncomeStatement from "@/pages/reports/income-statement";
+import BalanceSheet from "@/pages/reports/balance-sheet";
+import Capital from "@/pages/reports/capital";
+import SalaryAccount from "@/pages/reports/salary";
 import Receipts from "@/pages/receipts";
 import PaymentsPage from "@/pages/payments";
 import { useLanguage } from "@/contexts/language-context";
 import Journal from "@/pages/journal";
 import Cash from "@/pages/cash";
+import EmployeesPage from "@/pages/hr/employees";
+import PayrollPage from "@/pages/hr/payroll";
 
 
 function Router() {
@@ -52,6 +64,18 @@ function Router() {
       <Route path="/reports/stock" component={StockReport} />
       <Route path="/reports/purchases" component={PurchaseReport} />
       <Route path="/reports/sales" component={SalesReport} />
+      <Route path="/reports/period-purchases" component={PeriodPurchases} />
+      <Route path="/reports/period-sales" component={PeriodSales} />
+      <Route path="/reports/gross-profit" component={GrossProfit} />
+      <Route path="/reports/day-book" component={DayBook} />
+      <Route path="/reports/outstanding-customers" component={OutstandingCustomers} />
+      <Route path="/reports/outstanding-suppliers" component={OutstandingSuppliers} />
+      <Route path="/reports/income-statement" component={IncomeStatement} />
+      <Route path="/reports/balance-sheet" component={BalanceSheet} />
+      <Route path="/reports/capital" component={Capital} />
+      <Route path="/reports/salary" component={SalaryAccount} />
+      <Route path="/hr/employees" component={EmployeesPage} />
+      <Route path="/hr/payroll" component={PayrollPage} />
       <Route path="/reports/ledger" component={Ledger} />
       <Route path="/reports/ledger-sales" component={Ledger} />
       <Route path="/reports/ledger-purchases" component={Ledger} />
