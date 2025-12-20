@@ -41,7 +41,10 @@ import { format } from "date-fns";
 
 const processingFormSchema = z.object({
   sourceProductId: z.string().min(1, "Source product is required"),
-  sourceQuantity: z.string().min(1, "Quantity is required"),
+  sourceQuantity: z
+    .string()
+    .min(1, "Quantity is required")
+    .refine((val) => parseFloat(val) >= 5, { message: "Minimum 5 kg required" }),
   outputProductId: z.string().optional(),
   notes: z.string().optional(),
 });
