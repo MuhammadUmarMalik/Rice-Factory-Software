@@ -10,11 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Sale, Account } from "@shared/schema";
 import { format } from "date-fns";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 export default function SalesReportPage() {
   const { t, isRTL, language } = useLanguage();
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data: sales = [], isLoading } = useQuery<(Sale & { customer?: Account })[]>({
     queryKey: ["/api/reports/sales"],
@@ -219,10 +221,18 @@ export default function SalesReportPage() {
             columns={columns}
             data={filteredSales}
             isLoading={isLoading}
+            onRowClick={(row) => openDetail({ type: "sale", id: row.id })}
             testIdPrefix="sales-report"
           />
         </CardContent>
       </Card>
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }

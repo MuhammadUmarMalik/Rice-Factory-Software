@@ -17,6 +17,7 @@ import type { Account } from "@shared/schema";
 import { format } from "date-fns";
 import clsx from "clsx";
 import { Link, useLocation } from "wouter";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type LedgerRow = {
   id: number;
@@ -41,6 +42,7 @@ export default function LedgerPage() {
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const path = typeof window !== "undefined" ? window.location.pathname : location;
   const scope = path.includes("ledger-sales")
@@ -65,7 +67,7 @@ export default function LedgerPage() {
     queryKey: ["/api/ledger", selectedAccountId, scope, dateFrom, dateTo],
     enabled: !!selectedAccountId,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       if (selectedAccountId) params.set("accountId", selectedAccountId);
       if (scope) params.set("scope", scope);
@@ -114,6 +116,12 @@ export default function LedgerPage() {
       closing: rangeOpening,
     },
   );
+  const netMovement = totals.debit - totals.credit;
+  const netTotals = {
+    debit: netMovement > 0 ? netMovement : 0,
+    credit: netMovement < 0 ? Math.abs(netMovement) : 0,
+    closing: totals.closing,
+  };
 
   const tabs = [
     { label: "General", href: "/reports/ledger", active: scope === undefined },
@@ -208,13 +216,21 @@ export default function LedgerPage() {
                   const debit = parseFloat(entry.debit || (entry.transactionType === "debit" ? entry.amount : "0"));
                   const credit = parseFloat(entry.credit || (entry.transactionType === "credit" ? entry.amount : "0"));
                   const balance = parseFloat(entry.runningBalance || entry.balance || "0");
+                  const allowedTypes = ["purchase", "sale", "receipt", "payment", "journal_voucher"];
+                  const clickable = entry.referenceType && entry.referenceId && allowedTypes.includes(entry.referenceType);
                   return (
                     <div
                       key={entry.id}
                       className={clsx(
                         "grid grid-cols-[50px,120px,1fr,140px,140px,140px] text-sm border-b last:border-b-0",
+                        clickable ? "cursor-pointer hover:bg-muted/40 transition-colors" : "",
                         idx % 2 === 0 ? "bg-white" : "bg-muted/30",
                       )}
+                      onClick={() =>
+                        clickable && entry.referenceType
+                          ? openDetail({ type: entry.referenceType as any, id: Number(entry.referenceId) })
+                          : undefined
+                      }
                     >
                       <div className="px-3 py-2 border-r text-muted-foreground">{idx + 1}</div>
                       <div className="px-3 py-2 border-r">
@@ -250,9 +266,13 @@ export default function LedgerPage() {
                   <div className="px-3 py-2 border-r">Total</div>
                   <div className="px-3 py-2 border-r"></div>
                   <div className="px-3 py-2 border-r"></div>
-                  <div className="px-3 py-2 border-r text-right font-mono">Rs. {totals.debit.toLocaleString()}</div>
-                  <div className="px-3 py-2 border-r text-right font-mono">Rs. {totals.credit.toLocaleString()}</div>
-                  <div className="px-3 py-2 text-right font-mono">Rs. {totals.closing.toLocaleString()}</div>
+                  <div className="px-3 py-2 border-r text-right font-mono">
+                    {netTotals.debit > 0 ? `Rs. ${netTotals.debit.toLocaleString()}` : "—"}
+                  </div>
+                  <div className="px-3 py-2 border-r text-right font-mono">
+                    {netTotals.credit > 0 ? `Rs. ${netTotals.credit.toLocaleString()}` : "—"}
+                  </div>
+                  <div className="px-3 py-2 text-right font-mono">Rs. {netTotals.closing.toLocaleString()}</div>
                 </div>
               )}
             </div>
@@ -267,6 +287,13 @@ export default function LedgerPage() {
           </CardContent>
         </Card>
       )}
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }

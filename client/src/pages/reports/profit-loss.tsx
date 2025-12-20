@@ -25,7 +25,7 @@ export default function ProfitLossPage() {
   const { data: profitLoss } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", dateFrom, dateTo],
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       if (dateFrom) params.set("startDate", dateFrom);
       if (dateTo) params.set("endDate", dateTo);

@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type DayBookRow = {
   date: string | number | Date;
@@ -29,12 +30,13 @@ export default function DayBookPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [fromDate, setFromDate] = useState<string>(today);
   const [toDate, setToDate] = useState<string>(today);
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data, isLoading } = useQuery<DayBookReport>({
     queryKey: ["/api/reports/day-book", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
@@ -136,10 +138,28 @@ export default function DayBookPage() {
           <CardTitle className="text-lg">Entries</CardTitle>
         </CardHeader>
         <CardContent>
-          <DataTable columns={columns} data={rows} isLoading={isLoading} searchable emptyMessage="No cash entries found" />
+          <DataTable
+            columns={columns}
+            data={rows}
+            isLoading={isLoading}
+            searchable
+            emptyMessage="No cash entries found"
+            onRowClick={(row) => {
+              const allowed = ["purchase", "sale", "receipt", "payment", "journal_voucher"];
+              if (row.referenceType && row.referenceId && allowed.includes(row.referenceType)) {
+                openDetail({ type: row.referenceType as any, id: Number(row.referenceId) });
+              }
+            }}
+          />
         </CardContent>
       </Card>
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }
-

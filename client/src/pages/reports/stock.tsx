@@ -6,6 +6,7 @@ import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import type { Product } from "@shared/schema";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type StockReportRow = {
   product: Product;
@@ -16,6 +17,7 @@ type StockReportRow = {
 
 export default function StockReportPage() {
   const { t, isRTL, language } = useLanguage();
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data: products = [], isLoading } = useQuery<StockReportRow[]>({
     queryKey: ["/api/reports/stock"],
@@ -183,10 +185,18 @@ export default function StockReportPage() {
             columns={columns}
             data={products}
             isLoading={isLoading}
+            onRowClick={(row) => openDetail({ type: "product", id: row.product.id })}
             testIdPrefix="stock"
           />
         </CardContent>
       </Card>
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }

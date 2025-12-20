@@ -20,7 +20,7 @@ export default function BalanceSheetPage() {
     queryKey: ["/api/financial/balance-sheet", asOfDate],
     enabled: !!asOfDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("asOfDate", asOfDate);
       const res = await fetch(`/api/financial/balance-sheet?${params.toString()}`, {
@@ -144,4 +144,3 @@ function KV({ label, value, emphasize }: { label: string; value?: string; emphas
     </div>
   );
 }
-

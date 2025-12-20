@@ -6,6 +6,7 @@ import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type TrialBalanceRow = {
   account: Account;
@@ -15,6 +16,7 @@ type TrialBalanceRow = {
 
 export default function TrialBalancePage() {
   const { t, isRTL, language } = useLanguage();
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data: rows = [], isLoading } = useQuery<TrialBalanceRow[]>({
     queryKey: ["/api/reports/trial-balance"],
@@ -193,7 +195,13 @@ export default function TrialBalancePage() {
 
       <Card>
         <CardContent className="pt-6">
-          <DataTable columns={columns} data={accountsWithBalance} isLoading={isLoading} testIdPrefix="trial-balance" />
+          <DataTable
+            columns={columns}
+            data={accountsWithBalance}
+            isLoading={isLoading}
+            testIdPrefix="trial-balance"
+            onRowClick={(row) => openDetail({ type: "account", id: row.account.id })}
+          />
 
           <div className={`mt-4 pt-4 border-t flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
             <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -213,6 +221,13 @@ export default function TrialBalancePage() {
           </div>
         </CardContent>
       </Card>
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }

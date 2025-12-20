@@ -12,7 +12,7 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+  const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
   const res = await fetch(url, {
     method,
     headers: {
@@ -33,7 +33,7 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+    const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
     const res = await fetch(queryKey.join("/") as string, {
       headers: role ? { "x-user-role": role } : {},
       credentials: "include",

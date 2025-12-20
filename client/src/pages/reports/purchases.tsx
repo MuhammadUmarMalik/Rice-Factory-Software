@@ -10,11 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Purchase, Account } from "@shared/schema";
 import { format } from "date-fns";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 export default function PurchaseReportPage() {
   const { t, isRTL, language } = useLanguage();
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
     queryKey: ["/api/reports/purchases"],
@@ -219,10 +221,18 @@ export default function PurchaseReportPage() {
             columns={columns}
             data={filteredPurchases}
             isLoading={isLoading}
+            onRowClick={(row) => openDetail({ type: "purchase", id: row.id })}
             testIdPrefix="purchases-report"
           />
         </CardContent>
       </Card>
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }
