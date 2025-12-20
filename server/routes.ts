@@ -50,13 +50,16 @@ function parseOptionalInt(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-const numericString = z.union([z.string(), z.number()]).transform((val) => {
-  const num = typeof val === "number" ? val : parseFloat(val);
-  if (!Number.isFinite(num) || num < 0) {
-    throw new Error("Invalid numeric value");
-  }
-  return num.toString();
-});
+const numericString = z
+  .union([z.string(), z.number(), z.null(), z.undefined()])
+  .transform((val) => {
+    if (val === null || val === undefined || val === "") return "0";
+    const num = typeof val === "number" ? val : parseFloat(val);
+    if (!Number.isFinite(num) || num < 0) {
+      throw new Error("Invalid numeric value");
+    }
+    return num.toString();
+  });
 
 const purchaseItemsSchema = z.array(z.object({
   productId: z.number().int().positive(),
@@ -982,7 +985,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
-  app.post("/api/journal-vouchers", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+  app.post("/api/journal-vouchers", requireRoles(["admin", "manager", "accountant", "operator"]), async (req, res) => {
     try {
       const parsed = journalVoucherInputSchema.parse(req.body);
       const { debitAccountId, debitAmount, creditAccountId, creditAmount, ...header } = parsed;
@@ -1000,7 +1003,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
-  app.patch("/api/journal-vouchers/:id", requireRoles(["admin", "manager", "accountant"]), async (req, res) => {
+  app.patch("/api/journal-vouchers/:id", requireRoles(["admin", "manager", "accountant", "operator"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const parsed = journalVoucherInputSchema.parse(req.body);
@@ -1020,7 +1023,7 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
     }
   });
 
-  app.post("/api/journal-vouchers/:id/approve", requireRoles(["admin", "manager"]), async (req, res) => {
+  app.post("/api/journal-vouchers/:id/approve", requireRoles(["admin", "manager", "accountant", "operator"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       const approverIdRaw = req.body?.approvedBy;
@@ -1072,6 +1075,21 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
       }
       console.error(error);
       res.status(500).json({ error: "Failed to update purchase" });
+    }
+  });
+
+  app.delete("/api/purchases/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const ok = await storage.deletePurchase(id, getUserId(req));
+      if (!ok) return res.status(404).json({ error: "Purchase not found" });
+      res.json({ success: true, message: "Purchase deleted successfully" });
+    } catch (error) {
+      if (error instanceof Error) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error(error);
+      res.status(500).json({ error: "Failed to delete purchase" });
     }
   });
 

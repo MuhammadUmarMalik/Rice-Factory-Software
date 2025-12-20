@@ -101,6 +101,7 @@ export interface IStorage {
   getPurchaseWithDetails(id: number): Promise<(Purchase & { items: PurchaseItem[]; charges: PurchaseCharge[] }) | undefined>;
   createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase>;
   updatePurchase(id: number, purchase: Partial<InsertPurchase>, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase | undefined>;
+  deletePurchase(id: number): Promise<boolean>;
   getNextPurchaseInvoiceNumber(): Promise<string>;
   getNextPurchaseBillNumber(): Promise<string>;
 
@@ -1289,11 +1290,11 @@ export class DatabaseStorage implements IStorage {
 
   // Purchases
   async getPurchases(): Promise<Purchase[]> {
-    return db.select().from(purchases).orderBy(desc(purchases.id)).all(); // Use ID for stability
+    return db.select().from(purchases).where(isNull(purchases.deletedAt)).orderBy(desc(purchases.id)).all(); // Use ID for stability
   }
 
   async getPurchase(id: number): Promise<Purchase | undefined> {
-    const [purchase] = db.select().from(purchases).where(eq(purchases.id, id)).all();
+    const [purchase] = db.select().from(purchases).where(and(eq(purchases.id, id), isNull(purchases.deletedAt))).all();
     return purchase;
   }
 
@@ -1548,7 +1549,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPurchaseItems(purchaseId: number): Promise<PurchaseItem[]> {
-    return db.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, purchaseId)).all();
+    return db.select().from(purchaseItems).where(and(eq(purchaseItems.purchaseId, purchaseId), isNull(purchaseItems.deletedAt))).all();
   }
 
   async getPurchaseCharges(purchaseId: number): Promise<PurchaseCharge[]> {
@@ -1708,6 +1709,57 @@ export class DatabaseStorage implements IStorage {
       });
 
       return updatedPurchase;
+    });
+  }
+
+  async deletePurchase(id: number, deletedBy?: number): Promise<boolean> {
+    const existing = await this.getPurchaseWithDetails(id);
+    if (!existing) return false;
+    if (existing.deletedAt) return false;
+    const paidAmount = parseAmount(existing.paidAmount || "0");
+    if (paidAmount > 0) {
+      throw new Error("Cannot delete a purchase that has recorded payments");
+    }
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const postingDate = existing.purchaseDate ? new Date(existing.purchaseDate as any) : new Date();
+      this.assertPostingAllowed(client, postingDate, "purchase");
+
+      // Reverse prior ledger impact and soft delete ledger rows
+      const priorEntries = tx
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id), isNull(ledgerEntries.deletedAt)))
+        .all();
+      for (const le of priorEntries) {
+        this.postLedgerEntry(client, {
+          accountId: le.accountId,
+          transactionType: le.transactionType === "debit" ? "credit" : "debit",
+          amount: le.amount,
+          description: `Reversal Purchase ${existing.invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+        tx.update(ledgerEntries)
+          .set({ deletedAt: new Date(), deletedBy })
+          .where(eq(ledgerEntries.id, le.id))
+          .run();
+      }
+
+      // Rollback stock impact
+      for (const item of existing.items.filter((i) => !i.deletedAt)) {
+        this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
+      }
+
+      // Soft delete related rows
+      tx.update(purchaseItems).set({ deletedAt: new Date(), deletedBy }).where(eq(purchaseItems.purchaseId, id)).run();
+      tx.update(purchases).set({ deletedAt: new Date(), deletedBy }).where(eq(purchases.id, id)).run();
+      tx.delete(purchaseCharges).where(eq(purchaseCharges.purchaseId, id)).run();
+      tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "purchase"), eq(taxLedgers.sourceId, id))).run();
+
+      return true;
     });
   }
 

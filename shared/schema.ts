@@ -295,6 +295,8 @@ export const purchases = sqliteTable("purchases", {
   purchaseDate: integer("purchase_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  deletedAt: integer("deleted_at", { mode: "timestamp" }),
+  deletedBy: integer("deleted_by").references(() => users.id),
 });
 
 export const insertPurchaseSchema = createInsertSchema(purchases).omit({
@@ -326,6 +328,8 @@ export const purchaseItems = sqliteTable("purchase_items", {
   rateUnit: text("rate_unit", { enum: ["kg", "mound", "bag", "quintal", "ton"] }).notNull().default("kg"),
   rate: text("rate").notNull(),
   amount: text("amount").notNull(),
+  deletedAt: integer("deleted_at", { mode: "timestamp" }),
+  deletedBy: integer("deleted_by").references(() => users.id),
 });
 
 export const insertPurchaseItemSchema = createInsertSchema(purchaseItems).omit({
@@ -558,6 +562,8 @@ export const cashTransactions = sqliteTable("cash_transactions", {
   narration: text("narration"),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  deletedAt: integer("deleted_at", { mode: "timestamp" }),
+  deletedBy: integer("deleted_by").references(() => users.id),
 });
 
 export const insertCashTransactionSchema = createInsertSchema(cashTransactions).omit({

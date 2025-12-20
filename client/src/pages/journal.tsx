@@ -42,23 +42,15 @@ const journalFormSchema = z
     voucherNo: z.string().optional(),
     voucherDate: z.string().min(1, "Voucher date is required"),
     debitAccountId: z.string().min(1, "Select debit account"),
-    debitAmount: z.string().min(1, "Debit amount is required"),
     creditAccountId: z.string().min(1, "Select credit account"),
-    creditAmount: z.string().min(1, "Credit amount is required"),
+    amount: z.string().min(1, "Amount is required"),
     narration: z.string().optional(),
     status: z.enum(["draft", "approved"]).default("draft"),
   })
   .superRefine((data, ctx) => {
-    const debit = parseFloat(data.debitAmount || "0");
-    const credit = parseFloat(data.creditAmount || "0");
-    if (!Number.isFinite(debit) || debit <= 0) {
-      ctx.addIssue({ code: "custom", path: ["debitAmount"], message: "Debit must be greater than 0" });
-    }
-    if (!Number.isFinite(credit) || credit <= 0) {
-      ctx.addIssue({ code: "custom", path: ["creditAmount"], message: "Credit must be greater than 0" });
-    }
-    if (Math.abs(debit - credit) > 0.0001) {
-      ctx.addIssue({ code: "custom", path: ["creditAmount"], message: "Debit and credit must match" });
+    const amount = parseFloat(data.amount || "0");
+    if (!Number.isFinite(amount) || amount <= 0) {
+      ctx.addIssue({ code: "custom", path: ["amount"], message: "Amount must be greater than 0" });
     }
   });
 
@@ -146,17 +138,17 @@ export default function JournalVoucherPage() {
       voucherNo: "",
       voucherDate: todayISO(),
       debitAccountId: "",
-      debitAmount: "",
       creditAccountId: "",
-      creditAmount: "",
+      amount: "",
       narration: "",
       status: "draft",
     },
   });
 
-  const debitAmount = parseFloat(form.watch("debitAmount") || "0");
-  const creditAmount = parseFloat(form.watch("creditAmount") || "0");
-  const totalAmount = useMemo(() => (Number.isFinite(debitAmount) ? debitAmount : 0), [debitAmount]);
+  const amountValue = parseFloat(form.watch("amount") || "0");
+  const totalAmount = useMemo(() => (Number.isFinite(amountValue) ? amountValue : 0), [amountValue]);
+  const debitAmount = totalAmount;
+  const creditAmount = totalAmount;
   const amountInWords = totalAmount > 0 ? `${numberToWords(totalAmount)} only` : "";
 
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
@@ -187,9 +179,8 @@ export default function JournalVoucherPage() {
       voucherNo: "",
       voucherDate: todayISO(),
       debitAccountId: "",
-      debitAmount: "",
       creditAccountId: "",
-      creditAmount: "",
+      amount: "",
       narration: "",
       status: "draft",
     });
@@ -206,9 +197,9 @@ export default function JournalVoucherPage() {
     narration: data.narration,
     status: data.status,
     debitAccountId: parseInt(data.debitAccountId),
-    debitAmount: data.debitAmount,
+    debitAmount: data.amount,
     creditAccountId: parseInt(data.creditAccountId),
-    creditAmount: data.creditAmount,
+    creditAmount: data.amount,
   });
 
   const createMutation = useMutation({
@@ -278,13 +269,13 @@ export default function JournalVoucherPage() {
   const applyVoucherToForm = (voucher: JournalVoucherRow, lockView = false) => {
     const debit = voucher.entries.find((e) => e.entryType === "DEBIT");
     const credit = voucher.entries.find((e) => e.entryType === "CREDIT");
+    const voucherAmount = debit?.amount || credit?.amount || voucher.totalAmount || "";
     form.reset({
       voucherNo: voucher.voucherNo,
       voucherDate: format(new Date(voucher.voucherDate), "yyyy-MM-dd"),
       debitAccountId: debit ? String(debit.accountId) : "",
-      debitAmount: debit?.amount || voucher.totalAmount || "",
       creditAccountId: credit ? String(credit.accountId) : "",
-      creditAmount: credit?.amount || voucher.totalAmount || "",
+      amount: voucherAmount || "",
       narration: voucher.narration || "",
       status: voucher.status,
     });
@@ -455,106 +446,78 @@ export default function JournalVoucherPage() {
                       />
                     </div>
 
-                    <div className="grid grid-cols-6 gap-3 items-end">
-                      <div className="col-span-4">
-                        <FormField
-                          control={form.control}
-                          name="debitAccountId"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Debit Account</FormLabel>
-                              <Select value={field.value} onValueChange={field.onChange} disabled={isLocked}>
-                                <FormControl>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select debit account" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  {accounts.map((acc) => (
-                                    <SelectItem key={acc.id} value={String(acc.id)}>
-                                      {acc.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <FormField
-                          control={form.control}
-                          name="debitAmount"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Debit Amount</FormLabel>
+                    <div className="grid grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="debitAccountId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Debit Account</FormLabel>
+                            <Select value={field.value} onValueChange={field.onChange} disabled={isLocked}>
                               <FormControl>
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  {...field}
-                                  disabled={isLocked}
-                                  className={isLocked ? readOnlyInputClass : ""}
-                                />
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select debit account" />
+                                </SelectTrigger>
                               </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
+                              <SelectContent>
+                                {accounts.map((acc) => (
+                                  <SelectItem key={acc.id} value={String(acc.id)}>
+                                    {acc.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="creditAccountId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Credit Account</FormLabel>
+                            <Select value={field.value} onValueChange={field.onChange} disabled={isLocked}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select credit account" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {accounts.map((acc) => (
+                                  <SelectItem key={acc.id} value={String(acc.id)}>
+                                    {acc.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     </div>
 
-                    <div className="grid grid-cols-6 gap-3 items-end">
-                      <div className="col-span-4">
-                        <FormField
-                          control={form.control}
-                          name="creditAccountId"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Credit Account</FormLabel>
-                              <Select value={field.value} onValueChange={field.onChange} disabled={isLocked}>
-                                <FormControl>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Select credit account" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  {accounts.map((acc) => (
-                                    <SelectItem key={acc.id} value={String(acc.id)}>
-                                      {acc.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <FormField
-                          control={form.control}
-                          name="creditAmount"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Credit Amount</FormLabel>
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  {...field}
-                                  disabled={isLocked}
-                                  className={isLocked ? readOnlyInputClass : ""}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
+                    <div className="grid grid-cols-1 gap-4">
+                      <FormField
+                        control={form.control}
+                        name="amount"
+                        render={({ field }) => (
+                          <FormItem className="col-span-1">
+                            <FormLabel>Amount</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                {...field}
+                                disabled={isLocked}
+                                className={isLocked ? readOnlyInputClass : ""}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     </div>
 
                     <FormField
