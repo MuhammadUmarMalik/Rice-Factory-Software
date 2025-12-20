@@ -290,7 +290,8 @@ export default function PurchasesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
-      setEditingId(null);
+      setPurchaseMode(null);
+      setActivePurchaseId(null);
       form.reset();
       toast({ title: t("savedSuccessfully") });
     },
@@ -503,6 +504,7 @@ export default function PurchasesPage() {
   const totalMound = Math.floor(totalNet / moundBaseKg);
   const totalMoundRemainder = Math.max(totalNet - totalMound * moundBaseKg, 0);
   const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
+  const isViewMode = purchaseMode === "view";
 
   const columns: Column<Purchase & { supplier?: Account }>[] = [
     {
@@ -657,7 +659,7 @@ export default function PurchasesPage() {
         }
       }}>
         <DialogContent
-          className={`${purchaseMode === "view" ? "sm:max-w-3xl w-full max-h-[80vh]" : "sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh]"} overflow-y-auto`}
+          className={`${isViewMode ? "sm:max-w-3xl w-full max-h-[80vh]" : "sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh]"} overflow-y-auto`}
         >
           <DialogHeader>
             <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -864,8 +866,8 @@ export default function PurchasesPage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={purchaseMode === "view"}
-                    onClick={() => purchaseMode !== "view" && append({ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" })}
+                    disabled={isViewMode}
+                    onClick={() => !isViewMode && append({ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" })}
                     data-testid="button-add-item"
                   >
                     <Plus className="h-4 w-4" />
@@ -1049,7 +1051,7 @@ export default function PurchasesPage() {
                           <Input value={computed?.amount?.toFixed(2) ?? "0"} disabled />
                         </div>
                         <div className="col-span-1">
-                          {purchaseMode !== "view" && fields.length > 1 && (
+                          {!isViewMode && fields.length > 1 && (
                             <Button
                               type="button"
                               variant="ghost"
