@@ -40,6 +40,9 @@ import { z } from "zod";
 import type { Purchase, Account, Product } from "@shared/schema";
 import { format } from "date-fns";
 import { useQuery as useRQQuery } from "@tanstack/react-query";
+import { useUIStore } from "@/stores/ui.store";
+import { usePurchaseStore } from "@/stores/purchase/store";
+import type { PurchaseMode } from "@/stores/purchase/types";
 
 const purchaseFormSchema = z.object({
   purchaseDate: z.string().optional(),
@@ -84,17 +87,28 @@ const purchaseFormSchema = z.object({
 });
 
 type PurchaseFormData = z.infer<typeof purchaseFormSchema>;
-type PurchaseMode = "view" | "edit" | "create" | null;
 
 export default function PurchasesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [purchaseMode, setPurchaseMode] = useState<PurchaseMode>(null);
-  const [activePurchaseId, setActivePurchaseId] = useState<number | null>(null);
-  const [viewPurchase, setViewPurchase] = useState<(Purchase & { items?: any[]; charges?: any[]; supplier?: Account }) | null>(null);
+  const purchaseMode = useUIStore((state) => state.viewModes.purchase ?? null);
+  const setViewMode = useUIStore((state) => state.setViewMode);
+  const isDialogOpen = useUIStore((state) => state.modals.purchaseForm?.open ?? false);
+  const openDialog = useUIStore((state) => state.openModal);
+  const closeDialog = useUIStore((state) => state.closeModal);
+  const setPurchaseStateMode = usePurchaseStore((state) => state.setMode);
+  const setCurrentPurchase = usePurchaseStore((state) => state.setCurrent);
+  const setCurrentPurchaseId = usePurchaseStore((state) => state.setCurrentId);
+  const resetPurchaseState = usePurchaseStore((state) => state.resetPurchase);
+  const syncPurchaseList = usePurchaseStore((state) => state.setList);
+  const currentPurchase = usePurchaseStore((state) => state.current);
+  const activePurchaseId = usePurchaseStore((state) => state.currentId);
   const [customProductDrafts, setCustomProductDrafts] = useState<Record<number, { name: string; unit: string }>>({});
   const [creatingProductIndex, setCreatingProductIndex] = useState<number | null>(null);
+  const setMode = (mode: PurchaseMode) => {
+    setViewMode("purchase", mode);
+    setPurchaseStateMode(mode);
+  };
 
   const defaultCharges = useMemo(() => ([
     "weight",
@@ -188,6 +202,18 @@ export default function PurchasesPage() {
     }));
   }, [purchases, suppliers]);
 
+  useEffect(() => {
+    syncPurchaseList(purchasesWithSupplier);
+  }, [purchasesWithSupplier, syncPurchaseList]);
+
+  useEffect(() => {
+    return () => {
+      resetPurchaseState();
+      setViewMode("purchase", null);
+      closeDialog("purchaseForm");
+    };
+  }, [closeDialog, resetPurchaseState, setViewMode]);
+
   const getUnitForProduct = (productId?: string) =>
     products.find((p) => p.id.toString() === productId)?.unit;
   const createInlineProduct = async (index: number) => {
@@ -252,7 +278,9 @@ export default function PurchasesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      setIsDialogOpen(false);
+      closeDialog("purchaseForm");
+      setMode(null);
+      resetPurchaseState();
       form.reset();
       toast({ title: t("savedSuccessfully") });
     },
@@ -289,9 +317,9 @@ export default function PurchasesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      setIsDialogOpen(false);
-      setPurchaseMode(null);
-      setActivePurchaseId(null);
+      closeDialog("purchaseForm");
+      setMode(null);
+      resetPurchaseState();
       form.reset();
       toast({ title: t("savedSuccessfully") });
     },
@@ -332,9 +360,8 @@ export default function PurchasesPage() {
   });
 
   const handleAddNew = () => {
-    setPurchaseMode("create");
-    setViewPurchase(null);
-    setActivePurchaseId(null);
+    resetPurchaseState();
+    setMode("create");
     form.reset({
       purchaseDate: new Date().toISOString().slice(0, 10),
       moundBaseKg: "40",
@@ -349,7 +376,7 @@ export default function PurchasesPage() {
       items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
       charges: defaultCharges,
     });
-    setIsDialogOpen(true);
+    openDialog("purchaseForm");
     refetchBillNo();
     setCustomProductDrafts({});
     setCreatingProductIndex(null);
@@ -399,19 +426,27 @@ export default function PurchasesPage() {
   };
 
   const handleEdit = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
-    setPurchaseMode("edit");
-    setViewPurchase(null);
-    setActivePurchaseId(purchase.id);
+    setMode("edit");
+    setCurrentPurchase(purchase as any);
+    setCurrentPurchaseId(purchase.id);
     populateFormFromPurchase(purchase);
-    setIsDialogOpen(true);
+    openDialog("purchaseForm");
   };
 
   const handleView = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
-    setPurchaseMode("view");
-    setViewPurchase(purchase as any);
-    setActivePurchaseId(null);
+    setMode("view");
+    setCurrentPurchase(purchase as any);
+    setCurrentPurchaseId(purchase.id);
     populateFormFromPurchase(purchase);
-    setIsDialogOpen(true);
+    openDialog("purchaseForm");
+  };
+  const handleCloseDialog = () => {
+    closeDialog("purchaseForm");
+    setMode(null);
+    resetPurchaseState();
+    form.reset();
+    setCustomProductDrafts({});
+    setCreatingProductIndex(null);
   };
   const numberToWords = (num: number) => {
     const belowTwenty = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
@@ -649,15 +684,14 @@ export default function PurchasesPage() {
           </CardContent>
         </Card>
 
-      <Dialog open={isDialogOpen} onOpenChange={(open) => {
-        setIsDialogOpen(open);
-        if (!open) {
-          setPurchaseMode(null);
-          setViewPurchase(null);
-          setActivePurchaseId(null);
-          form.reset();
-        }
-      }}>
+      <Dialog
+        open={isDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            handleCloseDialog();
+          }
+        }}
+      >
         <DialogContent
           className={`${isViewMode ? "sm:max-w-3xl w-full max-h-[80vh]" : "sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh]"} overflow-y-auto`}
         >
@@ -665,7 +699,7 @@ export default function PurchasesPage() {
             <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
               <div className="flex items-center gap-2">
                 {purchaseMode !== "view" && (
-                  <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
+                  <Button variant="ghost" size="icon" onClick={handleCloseDialog} aria-label="Back">
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
                 )}
@@ -1133,7 +1167,7 @@ export default function PurchasesPage() {
                                     </SelectTrigger>
                                   </FormControl>
                                     <SelectContent>
-                                      <SelectItem value="none">�</SelectItem>
+                                      <SelectItem value="none">None</SelectItem>
                                       {accounts.map((acc) => (
                                         <SelectItem key={acc.id} value={acc.id.toString()}>
                                           {acc.name}
@@ -1176,76 +1210,76 @@ export default function PurchasesPage() {
                 </fieldset>
               )}
 
-              {purchaseMode === "view" && viewPurchase && (
+              {purchaseMode === "view" && currentPurchase && (
                 <Card className="border bg-muted/40">
                   <CardContent className="pt-4 space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-xs text-muted-foreground">Invoice #</p>
-                        <p className="font-mono font-medium">{viewPurchase.invoiceNumber}</p>
+                        <p className="font-mono font-medium">{currentPurchase.invoiceNumber}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">Date</p>
                         <p className="font-medium">
-                          {viewPurchase.purchaseDate ? format(new Date(viewPurchase.purchaseDate), "dd MMM yyyy") : "-"}
+                          {currentPurchase.purchaseDate ? format(new Date(currentPurchase.purchaseDate), "dd MMM yyyy") : "-"}
                         </p>
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <p className="text-xs text-muted-foreground">Supplier</p>
-                        <p className="font-medium">{(viewPurchase as any).supplier?.name || "-"}</p>
-                        {(viewPurchase as any).supplier?.nameUrdu && (
-                          <p className="text-sm text-muted-foreground font-urdu">{(viewPurchase as any).supplier?.nameUrdu}</p>
+                        <p className="font-medium">{(currentPurchase as any).supplier?.name || "-"}</p>
+                        {(currentPurchase as any).supplier?.nameUrdu && (
+                          <p className="text-sm text-muted-foreground font-urdu">{(currentPurchase as any).supplier?.nameUrdu}</p>
                         )}
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">Vehicle</p>
-                        <p className="font-mono">{viewPurchase.vehicleNumber || "-"}</p>
+                        <p className="font-mono">{currentPurchase.vehicleNumber || "-"}</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-3 gap-3 text-sm">
                       <div>
                         <p className="text-xs text-muted-foreground">Total Bags</p>
-                        <p className="font-mono font-semibold">{Number(viewPurchase.totalBags || 0).toLocaleString()}</p>
+                        <p className="font-mono font-semibold">{Number(currentPurchase.totalBags || 0).toLocaleString()}</p>
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Gross Wt (kg)</p>
-                        <p className="font-mono font-semibold">{Number(viewPurchase.totalGrossWeightKg || 0).toLocaleString()}</p>
+                        <p className="font-mono font-semibold">{Number(currentPurchase.totalGrossWeightKg || 0).toLocaleString()}</p>
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Net Wt (kg)</p>
-                        <p className="font-mono font-semibold">{Number(viewPurchase.totalNetWeightKg || 0).toLocaleString()}</p>
+                        <p className="font-mono font-semibold">{Number(currentPurchase.totalNetWeightKg || 0).toLocaleString()}</p>
                       </div>
                     </div>
-                    {viewPurchase.items && viewPurchase.items.length > 0 && (
+                    {currentPurchase.items && currentPurchase.items.length > 0 && (
                       <div className="border rounded-md p-3 bg-white">
                         <p className="text-xs uppercase text-muted-foreground mb-2">Item details</p>
                         <div className="grid grid-cols-3 gap-3 text-sm">
                           <div>
                             <p className="text-muted-foreground text-xs">Bags</p>
-                            <p className="font-mono">{viewPurchase.items[0].bags}</p>
+                            <p className="font-mono">{currentPurchase.items[0].bags}</p>
                           </div>
                           <div>
                             <p className="text-muted-foreground text-xs">Filling (kg)</p>
-                            <p className="font-mono">{viewPurchase.items[0].fillingPerBagKg}</p>
+                            <p className="font-mono">{currentPurchase.items[0].fillingPerBagKg}</p>
                           </div>
                           <div>
                             <p className="text-muted-foreground text-xs">Loose (kg)</p>
-                            <p className="font-mono">{viewPurchase.items[0].looseKgs}</p>
+                            <p className="font-mono">{currentPurchase.items[0].looseKgs}</p>
                           </div>
                           <div>
                             <p className="text-muted-foreground text-xs">Less (kg)</p>
-                            <p className="font-mono">{viewPurchase.items[0].lessKg}</p>
+                            <p className="font-mono">{currentPurchase.items[0].lessKg}</p>
                           </div>
                           <div>
                             <p className="text-muted-foreground text-xs">Bardana (kg)</p>
-                            <p className="font-mono">{viewPurchase.items[0].bardanaKatKg}</p>
+                            <p className="font-mono">{currentPurchase.items[0].bardanaKatKg}</p>
                           </div>
                           <div>
                             <p className="text-muted-foreground text-xs">Rate</p>
                             <p className="font-mono">
-                              {viewPurchase.items[0].rate} / {viewPurchase.items[0].rateUnit}
+                              {currentPurchase.items[0].rate} / {currentPurchase.items[0].rateUnit}
                             </p>
                           </div>
                         </div>
@@ -1254,14 +1288,14 @@ export default function PurchasesPage() {
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div>
                         <p className="text-xs text-muted-foreground">Total Amount</p>
-                        <p className="font-mono font-semibold">Rs. {Number(viewPurchase.totalAmount || 0).toLocaleString()}</p>
+                        <p className="font-mono font-semibold">Rs. {Number(currentPurchase.totalAmount || 0).toLocaleString()}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">Paid</p>
                         <div className="flex items-center justify-end gap-2">
-                          <span className="font-mono font-semibold">Rs. {Number(viewPurchase.paidAmount || 0).toLocaleString()}</span>
-                          <Badge variant={Number(viewPurchase.paidAmount || 0) >= Number(viewPurchase.totalAmount || 0) ? "default" : "secondary"}>
-                            {Number(viewPurchase.paidAmount || 0) >= Number(viewPurchase.totalAmount || 0) ? "Paid" : "Due"}
+                          <span className="font-mono font-semibold">Rs. {Number(currentPurchase.paidAmount || 0).toLocaleString()}</span>
+                          <Badge variant={Number(currentPurchase.paidAmount || 0) >= Number(currentPurchase.totalAmount || 0) ? "default" : "secondary"}>
+                            {Number(currentPurchase.paidAmount || 0) >= Number(currentPurchase.totalAmount || 0) ? "Paid" : "Due"}
                           </Badge>
                         </div>
                       </div>
@@ -1273,7 +1307,7 @@ export default function PurchasesPage() {
               <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
                 {purchaseMode !== "view" && (
                   <>
-                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                    <Button type="button" variant="outline" onClick={handleCloseDialog}>
                       {t("cancel")}
                     </Button>
                     <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
