@@ -1,4 +1,5 @@
-
+
+
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Eye, Truck, Calculator, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,11 +42,10 @@ import { useQuery as useRQQuery } from "@tanstack/react-query";
 
 const purchaseFormSchema = z.object({
   purchaseDate: z.string().optional(),
-  dueDate: z.string().optional(),
+  moundBaseKg: z.enum(["40", "60"]).default("40"),
   billNo: z.string().optional(),
   bookNo: z.string().optional(),
   supplierId: z.string().min(1, "Supplier is required"),
-  expenseAccountId: z.string().min(1, "Expense account is required"),
   vehicleNumber: z.string().optional(),
   brokerId: z.string().optional(),
   brokerCommissionPercent: z.string().default("0"),
@@ -109,11 +109,10 @@ export default function PurchasesPage() {
     resolver: zodResolver(purchaseFormSchema),
     defaultValues: {
       purchaseDate: new Date().toISOString().slice(0, 10),
-      dueDate: new Date().toISOString().slice(0, 10),
+      moundBaseKg: "40",
       billNo: "",
       bookNo: "",
       supplierId: "",
-      expenseAccountId: "",
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
@@ -141,10 +140,6 @@ export default function PurchasesPage() {
 
   const { data: suppliers = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts?type=supplier"],
-  });
-
-  const { data: expenseAccounts = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=expense"],
   });
 
   const { data: accounts = [] } = useQuery<Account[]>({
@@ -225,12 +220,11 @@ export default function PurchasesPage() {
     mutationFn: (data: PurchaseFormData) =>
       apiRequest("POST", "/api/purchases", {
         ...data,
-        billNo: data.billNo || undefined,
+        billNo: data.billNo || nextBill?.billNo || undefined,
         supplierId: parseInt(data.supplierId),
-        expenseAccountId: parseInt(data.expenseAccountId),
         purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
-        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
         brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
+        moundBaseKg: moundBaseKg.toString(),
         items: data.items.map((item, idx) => ({
           productId: parseInt(item.productId),
           marka: item.marka,
@@ -266,11 +260,10 @@ export default function PurchasesPage() {
   const handleAddNew = () => {
     form.reset({
       purchaseDate: new Date().toISOString().slice(0, 10),
-      dueDate: new Date().toISOString().slice(0, 10),
+      moundBaseKg: "40",
       billNo: nextBill?.billNo || "",
       bookNo: "",
       supplierId: "",
-      expenseAccountId: "",
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
@@ -327,6 +320,7 @@ export default function PurchasesPage() {
   const watchCommission = form.watch("brokerCommissionPercent");
   const watchPaidAmount = form.watch("paidAmount");
 
+  const moundBaseKg = parseFloat(form.watch("moundBaseKg") || "40") || 40;
   const computedItems = watchItems.map((item) => {
     const bags = parseFloat(item.bags) || 0;
     const filling = parseFloat(item.fillingPerBagKg) || 0;
@@ -336,11 +330,11 @@ export default function PurchasesPage() {
     const rate = parseFloat(item.rate) || 0;
     const grossWeight = bags * filling + loose;
     const netWeight = Math.max(grossWeight - less - bardana, 0);
-    const moundQtyFloat = netWeight / 40;
+    const moundQtyFloat = netWeight / moundBaseKg;
     const moundQty = Math.floor(moundQtyFloat);
-    const moundRemainderKg = Math.max(netWeight - moundQty * 40, 0);
+    const moundRemainderKg = Math.max(netWeight - moundQty * moundBaseKg, 0);
     let billingQty = netWeight;
-    if (item.rateUnit === "mound") billingQty = netWeight / 40;
+    if (item.rateUnit === "mound") billingQty = netWeight / moundBaseKg;
     if (item.rateUnit === "bag") billingQty = bags;
     if (item.rateUnit === "quintal") billingQty = netWeight / 100;
     if (item.rateUnit === "ton") billingQty = netWeight / 1000;
@@ -371,9 +365,10 @@ export default function PurchasesPage() {
   const totalBags = watchItems.reduce((sum, i) => sum + (parseFloat(i.bags) || 0), 0);
   const totalGross = computedItems.reduce((sum, i) => sum + i.grossWeight, 0);
   const totalNet = computedItems.reduce((sum, i) => sum + i.netWeight, 0);
-  const totalMound = Math.floor(totalNet / 40);
-  const totalMoundRemainder = Math.max(totalNet - totalMound * 40, 0);
-  const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
+  const totalMound = Math.floor(totalNet / moundBaseKg);
+  const totalMoundRemainder = Math.max(totalNet - totalMound * moundBaseKg, 0);
+  const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
+
   const columns: Column<Purchase & { supplier?: Account }>[] = [
     {
       key: "invoiceNumber",
@@ -507,7 +502,7 @@ export default function PurchasesPage() {
             </DialogHeader>
             <Form {...form}>
               <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="supplierId"
@@ -532,32 +527,9 @@ export default function PurchasesPage() {
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="expenseAccountId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Expense A/C</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || undefined}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select expense" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {expenseAccounts.map((acc) => (
-                            <SelectItem key={acc.id} value={acc.id.toString()}>
-                              {acc.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-4">
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <FormField
                   control={form.control}
                   name="purchaseDate"
@@ -573,13 +545,21 @@ export default function PurchasesPage() {
                 />
                 <FormField
                   control={form.control}
-                  name="dueDate"
+                  name="moundBaseKg"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Due Date</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="date" />
-                      </FormControl>
+                      <FormLabel>Mound Base</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="40">40 kg (standard)</SelectItem>
+                          <SelectItem value="60">60 kg</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -607,7 +587,7 @@ export default function PurchasesPage() {
                     <FormItem>
                       <FormLabel>Bill No</FormLabel>
                       <FormControl>
-                        <Input {...field} placeholder="Bill#" />
+                        <Input {...field} placeholder={nextBill?.billNo || "Auto"} readOnly />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -693,7 +673,8 @@ export default function PurchasesPage() {
                     </FormItem>
                   )}
                 />
-              </div>
+              </div>
+
               <div className="space-y-4">
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
                   <h3 className="font-medium">Items</h3>
@@ -989,7 +970,7 @@ export default function PurchasesPage() {
                       <div className="flex justify-between"><span>Total Bags</span><span className="font-mono">{totalBags.toFixed(2)}</span></div>
                       <div className="flex justify-between"><span>Total Weight</span><span className="font-mono">{totalGross.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Net Weight</span><span className="font-mono">{totalNet.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Mound</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
+                      <div className="flex justify-between"><span>Mound ({moundBaseKg}kg)</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
                       <div className="flex justify-between"><span>Line Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Commission</span><span className="font-mono">Rs. {commissionAmount.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Charges +</span><span className="font-mono">Rs. {chargesAdd.toLocaleString()}</span></div>

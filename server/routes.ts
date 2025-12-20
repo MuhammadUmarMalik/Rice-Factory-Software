@@ -107,6 +107,10 @@ const purchaseInputSchema = insertPurchaseSchema
       if (val === null || val === undefined || val === "") return undefined;
       return new Date(val as any);
     }, z.date().optional()),
+    moundBaseKg: z.preprocess((val) => {
+      const num = typeof val === "string" ? parseInt(val, 10) : Number(val);
+      return num === 60 ? 60 : 40;
+    }, z.number().optional()),
   });
 
 const saleItemsSchema = z.array(z.object({
@@ -685,7 +689,9 @@ export async function registerRoutes(
       const data = purchaseInputSchema.parse(purchaseBody);
       const parsedItems = purchaseItemsSchema.parse(items || []);
       const parsedCharges = purchaseChargesSchema.parse(charges || []);
-      const purchase = await storage.createPurchase(data, parsedItems, parsedCharges);
+      const moundBaseKg = (data as any).moundBaseKg === 60 ? 60 : 40;
+      const { moundBaseKg: _mb, ...purchaseData } = data as any;
+      const purchase = await storage.createPurchase(purchaseData, parsedItems, parsedCharges, moundBaseKg);
       res.status(201).json(purchase);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1053,7 +1059,9 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
       const data = purchaseInputSchema.partial().parse(purchaseBody);
       const parsedItems = items ? purchaseItemsSchema.parse(items) : [];
       const parsedCharges = charges ? purchaseChargesSchema.parse(charges) : [];
-      const purchase = await storage.updatePurchase(id, data, parsedItems, parsedCharges);
+      const moundBaseKg = (data as any).moundBaseKg === 60 ? 60 : 40;
+      const { moundBaseKg: _mb, ...purchaseData } = data as any;
+      const purchase = await storage.updatePurchase(id, purchaseData, parsedItems, parsedCharges, moundBaseKg);
       if (!purchase) {
         return res.status(404).json({ error: "Purchase not found" });
       }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Edit, Receipt } from "lucide-react";
+import { Plus, Edit, Receipt, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
@@ -7,6 +7,7 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -61,6 +62,33 @@ export default function ExpensesPage() {
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/accounts/${id}`),
+    onMutate: async (id: number) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/accounts?type=expense"] });
+      const previousExpenses = queryClient.getQueryData<Account[]>([
+        "/api/accounts?type=expense",
+      ]);
+      queryClient.setQueryData<Account[]>(["/api/accounts?type=expense"], (old) =>
+        old ? old.filter((exp) => exp.id !== id) : old
+      );
+      return { previousExpenses };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previousExpenses) {
+        queryClient.setQueryData(["/api/accounts?type=expense"], context.previousExpenses);
+      }
+      toast({ title: "Delete failed", variant: "destructive" });
+    },
+    onSuccess: () => {
+      toast({ title: t("deletedSuccessfully") });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
     },
   });
 
@@ -120,36 +148,58 @@ export default function ExpensesPage() {
       ),
     },
     {
-      key: "currentBalance",
-      title: "Total Expenses",
-      titleUrdu: "کل اخراجات",
-      align: "right",
-      render: (item) => {
-        const balance = parseFloat(item.currentBalance || "0");
-        return (
-          <span className="font-mono font-medium">
-            Rs. {Math.abs(balance).toLocaleString()}
-          </span>
-        );
-      },
-    },
-    {
       key: "actions",
       title: "Actions",
-      titleUrdu: "ایکشنز",
+      titleUrdu: "\u0627\u06cc\u06a9\u0634\u0646\u0632",
       align: "center",
       render: (item) => (
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleEdit(item);
-          }}
-          data-testid={`button-edit-${item.id}`}
-        >
-          <Edit className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center justify-center gap-2">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleEdit(item);
+            }}
+            data-testid={`button-edit-${item.id}`}
+          >
+            <Edit className="h-4 w-4" />
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`button-delete-${item.id}`}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader className={isRTL ? "text-right" : ""}>
+                <AlertDialogTitle>
+                  {t("delete")} {item.name}
+                </AlertDialogTitle>
+                <AlertDialogDescription className={isRTL ? "font-urdu text-right" : ""}>
+                  {t("confirmDelete")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className={isRTL ? "flex-row-reverse" : ""}>
+                <AlertDialogCancel disabled={deleteMutation.isPending}>
+                  {t("cancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteMutation.mutate(item.id)}
+                  disabled={deleteMutation.isPending}
+                  data-testid={`confirm-delete-${item.id}`}
+                >
+                  {t("delete")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       ),
     },
   ];

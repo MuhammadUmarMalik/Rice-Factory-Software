@@ -1335,7 +1335,7 @@ export class DatabaseStorage implements IStorage {
     return this.computeNextBillNumber(db, year);
   }
 
-  private normalizePurchaseItem(item: PurchaseItemInput) {
+  private normalizePurchaseItem(item: PurchaseItemInput, moundBaseKg = 40) {
     const serialNo = item.serialNo ?? null;
     const bags = parseAmount(item.bags);
     const filling = parseAmount(item.fillingPerBagKg);
@@ -1345,13 +1345,13 @@ export class DatabaseStorage implements IStorage {
     const rate = parseAmount(item.rate);
     const grossWeightKg = (bags * filling) + looseKgs;
     const netWeightKg = Math.max(grossWeightKg - lessKg - bardanaKatKg, 0);
-    const moundQtyFloat = netWeightKg / 40;
+    const moundQtyFloat = netWeightKg / moundBaseKg;
     const moundQty = Math.floor(moundQtyFloat);
-    const moundRemainderKg = Math.max(netWeightKg - (moundQty * 40), 0);
+    const moundRemainderKg = Math.max(netWeightKg - (moundQty * moundBaseKg), 0);
 
     const unit = item.rateUnit;
     let billingQty = netWeightKg;
-    if (unit === "mound") billingQty = netWeightKg / 40;
+    if (unit === "mound") billingQty = netWeightKg / moundBaseKg;
     if (unit === "bag") billingQty = bags;
     if (unit === "quintal") billingQty = netWeightKg / 100;
     if (unit === "ton") billingQty = netWeightKg / 1000;
@@ -1386,7 +1386,7 @@ export class DatabaseStorage implements IStorage {
     return { add, less };
   }
 
-  async createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase> {
+  async createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[], moundBaseKg = 40): Promise<Purchase> {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
       const postingDate = purchase.purchaseDate ? new Date(purchase.purchaseDate as any) : new Date();
@@ -1408,7 +1408,7 @@ export class DatabaseStorage implements IStorage {
         const normalized = this.normalizePurchaseItem({
           serialNo: item.serialNo ?? idx + 1,
           ...item,
-        });
+        }, moundBaseKg);
         subtotal += parseAmount(normalized.amount);
         totalBags += parseAmount(normalized.bags);
         totalGrossWeightKg += parseAmount(normalized.grossWeightKg);
@@ -1416,9 +1416,9 @@ export class DatabaseStorage implements IStorage {
         return normalized;
       });
 
-      const totalMoundQtyFloat = totalNetWeightKg / 40;
+      const totalMoundQtyFloat = totalNetWeightKg / moundBaseKg;
       const totalMoundQty = Math.floor(totalMoundQtyFloat);
-      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * 40), 0);
+      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
       const brokerCommissionPercent = parseAmount(purchase.brokerCommissionPercent || "0");
@@ -1555,7 +1555,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(purchaseCharges).where(eq(purchaseCharges.purchaseId, purchaseId)).all();
   }
 
-  async updatePurchase(id: number, purchase: Partial<InsertPurchase>, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase | undefined> {
+  async updatePurchase(id: number, purchase: Partial<InsertPurchase>, items: PurchaseItemInput[], charges: PurchaseChargeInput[], moundBaseKg = 40): Promise<Purchase | undefined> {
     const existing = await this.getPurchaseWithDetails(id);
     if (!existing) return undefined;
 
@@ -1601,7 +1601,7 @@ export class DatabaseStorage implements IStorage {
         const normalized = this.normalizePurchaseItem({
           serialNo: item.serialNo ?? idx + 1,
           ...item,
-        });
+        }, moundBaseKg);
         subtotal += parseAmount(normalized.amount);
         totalBags += parseAmount(normalized.bags);
         totalGrossWeightKg += parseAmount(normalized.grossWeightKg);
@@ -1609,9 +1609,9 @@ export class DatabaseStorage implements IStorage {
         return normalized;
       });
 
-      const totalMoundQtyFloat = totalNetWeightKg / 40;
+      const totalMoundQtyFloat = totalNetWeightKg / moundBaseKg;
       const totalMoundQty = Math.floor(totalMoundQtyFloat);
-      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * 40), 0);
+      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
       const brokerCommissionPercent = parseAmount((purchase as any).brokerCommissionPercent ?? existing.brokerCommissionPercent ?? "0");
