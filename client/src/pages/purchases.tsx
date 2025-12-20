@@ -1,7 +1,7 @@
 
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Eye, Truck, Calculator, ArrowLeft } from "lucide-react";
+import { Plus, Eye, Truck, Calculator, ArrowLeft, Edit, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Form,
@@ -83,11 +84,15 @@ const purchaseFormSchema = z.object({
 });
 
 type PurchaseFormData = z.infer<typeof purchaseFormSchema>;
+type PurchaseMode = "view" | "edit" | "create" | null;
 
 export default function PurchasesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [purchaseMode, setPurchaseMode] = useState<PurchaseMode>(null);
+  const [activePurchaseId, setActivePurchaseId] = useState<number | null>(null);
+  const [viewPurchase, setViewPurchase] = useState<(Purchase & { items?: any[]; charges?: any[]; supplier?: Account }) | null>(null);
   const [customProductDrafts, setCustomProductDrafts] = useState<Record<number, { name: string; unit: string }>>({});
   const [creatingProductIndex, setCreatingProductIndex] = useState<number | null>(null);
 
@@ -229,12 +234,12 @@ export default function PurchasesPage() {
           productId: parseInt(item.productId),
           marka: item.marka,
           serialNo: idx + 1,
-          bags: item.bags,
-          fillingPerBagKg: item.fillingPerBagKg,
-          looseKgs: item.looseKgs,
-          lessKg: item.lessKg,
-          bardanaKatKg: item.bardanaKatKg,
-          rate: item.rate,
+          bags: item.bags || "0",
+          fillingPerBagKg: item.fillingPerBagKg || "0",
+          looseKgs: item.looseKgs || "0",
+          lessKg: item.lessKg || "0",
+          bardanaKatKg: item.bardanaKatKg || "0",
+          rate: item.rate || "0",
           rateUnit: item.rateUnit,
         })),
         charges: data.charges.map((c) => ({
@@ -253,11 +258,82 @@ export default function PurchasesPage() {
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: (payload: { id: number; data: PurchaseFormData }) =>
+      apiRequest("PATCH", `/api/purchases/${payload.id}`, {
+        ...payload.data,
+        billNo: payload.data.billNo || undefined,
+        supplierId: parseInt(payload.data.supplierId),
+        purchaseDate: payload.data.purchaseDate ? new Date(payload.data.purchaseDate) : undefined,
+        brokerId: payload.data.brokerId && payload.data.brokerId !== "none" ? parseInt(payload.data.brokerId) : null,
+        moundBaseKg: moundBaseKg.toString(),
+        items: payload.data.items.map((item, idx) => ({
+          productId: parseInt(item.productId),
+          marka: item.marka,
+          serialNo: idx + 1,
+          bags: item.bags || "0",
+          fillingPerBagKg: item.fillingPerBagKg || "0",
+          looseKgs: item.looseKgs || "0",
+          lessKg: item.lessKg || "0",
+          bardanaKatKg: item.bardanaKatKg || "0",
+          rate: item.rate || "0",
+          rateUnit: item.rateUnit,
+        })),
+        charges: payload.data.charges.map((c) => ({
+          ...c,
+          amount: c.amount || "0",
+          accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
+        })),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      setIsDialogOpen(false);
+      setEditingId(null);
+      form.reset();
+      toast({ title: t("savedSuccessfully") });
+    },
+  });
+
   const handleSubmit = (data: PurchaseFormData) => {
-    createMutation.mutate(data);
+    if (purchaseMode === "edit" && activePurchaseId) {
+      updateMutation.mutate({ id: activePurchaseId, data });
+    } else {
+      createMutation.mutate(data);
+    }
   };
 
+  const deleteMutation = useMutation({
+    mutationFn: async (id: number) => apiRequest("DELETE", `/api/purchases/${id}`),
+    onMutate: async (id: number) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/reports/purchases"] });
+      const prev = queryClient.getQueryData<(Purchase & { supplier?: Account })[]>(["/api/reports/purchases"]);
+      queryClient.setQueryData<(Purchase & { supplier?: Account })[]>(["/api/reports/purchases"], (old) =>
+        old ? old.filter((p) => p.id !== id) : old
+      );
+      return { prev };
+    },
+    onError: (_err, id, ctx) => {
+      if (ctx?.prev) {
+        queryClient.setQueryData(["/api/reports/purchases"], ctx.prev);
+      }
+      toast({ title: `Delete failed for purchase ${id}`, variant: "destructive" });
+    },
+    onSuccess: () => {
+      toast({ title: t("deletedSuccessfully") });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+    },
+  });
+
   const handleAddNew = () => {
+    setPurchaseMode("create");
+    setViewPurchase(null);
+    setActivePurchaseId(null);
     form.reset({
       purchaseDate: new Date().toISOString().slice(0, 10),
       moundBaseKg: "40",
@@ -276,6 +352,65 @@ export default function PurchasesPage() {
     refetchBillNo();
     setCustomProductDrafts({});
     setCreatingProductIndex(null);
+  };
+
+  const populateFormFromPurchase = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
+    const items = (purchase as any).items || [];
+    const charges = (purchase as any).charges || [];
+    const normalizedItems =
+      items.length > 0
+        ? items.map((item: any) => ({
+            productId: String(item.productId ?? ""),
+            marka: item.marka || "",
+            bags: item.bags || "0",
+            fillingPerBagKg: item.fillingPerBagKg || "0",
+            looseKgs: item.looseKgs || "0",
+            lessKg: item.lessKg || "0",
+            bardanaKatKg: item.bardanaKatKg || "0",
+            rate: item.rate || "0",
+            rateUnit: (item.rateUnit as PurchaseFormData["items"][number]["rateUnit"]) || "kg",
+          }))
+        : [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }];
+    const normalizedCharges =
+      charges.length > 0
+        ? charges.map((c: any) => ({
+            type: c.type,
+            mode: c.mode || "add",
+            amount: c.amount || "0",
+            accountId: c.accountId ? String(c.accountId) : "none",
+          }))
+        : defaultCharges;
+
+    form.reset({
+      purchaseDate: purchase.purchaseDate ? format(new Date(purchase.purchaseDate), "yyyy-MM-dd") : new Date().toISOString().slice(0, 10),
+      moundBaseKg: "40",
+      billNo: purchase.billNo || "",
+      bookNo: purchase.bookNo || "",
+      supplierId: purchase.supplierId ? String(purchase.supplierId) : "",
+      vehicleNumber: purchase.vehicleNumber || "",
+      brokerId: purchase.brokerId ? String(purchase.brokerId) : "none",
+      brokerCommissionPercent: purchase.brokerCommissionPercent || "0",
+      paidAmount: purchase.paidAmount || "0",
+      notes: purchase.notes || "",
+      items: normalizedItems,
+      charges: normalizedCharges,
+    });
+  };
+
+  const handleEdit = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
+    setPurchaseMode("edit");
+    setViewPurchase(null);
+    setActivePurchaseId(purchase.id);
+    populateFormFromPurchase(purchase);
+    setIsDialogOpen(true);
+  };
+
+  const handleView = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
+    setPurchaseMode("view");
+    setViewPurchase(purchase as any);
+    setActivePurchaseId(null);
+    populateFormFromPurchase(purchase);
+    setIsDialogOpen(true);
   };
   const numberToWords = (num: number) => {
     const belowTwenty = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
@@ -446,8 +581,37 @@ export default function PurchasesPage() {
       align: "center",
       render: (item) => (
         <div className={`flex gap-1 justify-center ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button size="icon" variant="ghost" data-testid={`button-view-${item.id}`}>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => handleView(item)}
+            data-testid={`button-view-${item.id}`}
+            title="View"
+          >
             <Eye className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => {
+              handleEdit(item);
+            }}
+            data-testid={`button-edit-${item.id}`}
+          >
+            <Edit className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => {
+              const ok = confirm("Delete this purchase?");
+              if (ok) {
+                deleteMutation.mutate(item.id);
+              }
+            }}
+            data-testid={`button-delete-${item.id}`}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
           </Button>
         </div>
       ),
@@ -483,26 +647,44 @@ export default function PurchasesPage() {
           </CardContent>
         </Card>
 
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogContent className="sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh] overflow-y-auto">
-            <DialogHeader>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <div className="flex items-center gap-2">
+      <Dialog open={isDialogOpen} onOpenChange={(open) => {
+        setIsDialogOpen(open);
+        if (!open) {
+          setPurchaseMode(null);
+          setViewPurchase(null);
+          setActivePurchaseId(null);
+          form.reset();
+        }
+      }}>
+        <DialogContent
+          className={`${purchaseMode === "view" ? "sm:max-w-3xl w-full max-h-[80vh]" : "sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh]"} overflow-y-auto`}
+        >
+          <DialogHeader>
+            <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+              <div className="flex items-center gap-2">
+                {purchaseMode !== "view" && (
                   <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
-                  <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-                    {language === "ur" ? "New Purchase" : "New Purchase"}
-                  </DialogTitle>
-                </div>
-                <Button variant="ghost" onClick={() => setIsDialogOpen(false)}>
-                  {language === "ur" ? "Close" : "Close"}
-                </Button>
+                )}
+                <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
+                  {purchaseMode === "view"
+                    ? (language === "ur" ? "Purchase View" : "Purchase View")
+                    : purchaseMode === "edit"
+                      ? (language === "ur" ? "Edit Purchase" : "Edit Purchase")
+                      : (language === "ur" ? "New Purchase" : "New Purchase")}
+                </DialogTitle>
               </div>
-            </DialogHeader>
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            </div>
+            <DialogDescription className="sr-only">
+              Create or edit a purchase by selecting supplier, entering items, charges, and payment details.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+              {purchaseMode !== "view" && (
+                <fieldset>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="supplierId"
@@ -682,7 +864,8 @@ export default function PurchasesPage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => append({ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" })}
+                    disabled={purchaseMode === "view"}
+                    onClick={() => purchaseMode !== "view" && append({ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" })}
                     data-testid="button-add-item"
                   >
                     <Plus className="h-4 w-4" />
@@ -707,7 +890,7 @@ export default function PurchasesPage() {
                             render={({ field }) => (
                               <FormItem>
                                 {index === 0 && <FormLabel>Product</FormLabel>}
-                                <Select onValueChange={field.onChange} value={field.value}>
+                                <Select onValueChange={field.onChange} value={field.value ?? ""}>
                                   <FormControl>
                                     <SelectTrigger data-testid={`select-product-${index}`}>
                                       <SelectValue placeholder="Select" />
@@ -716,7 +899,7 @@ export default function PurchasesPage() {
                                   <SelectContent>
                                     {products.map((p) => (
                                       <SelectItem key={p.id} value={p.id.toString()}>
-                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""} � {p.unit}
+                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""} - {p.unit}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
@@ -838,7 +1021,7 @@ export default function PurchasesPage() {
                             render={({ field }) => (
                               <FormItem>
                                 {index === 0 && <FormLabel>Unit</FormLabel>}
-                                <Select onValueChange={field.onChange} value={field.value}>
+                                <Select onValueChange={field.onChange} value={field.value ?? "kg"}>
                                   <FormControl>
                                     <SelectTrigger>
                                       <SelectValue />
@@ -866,7 +1049,7 @@ export default function PurchasesPage() {
                           <Input value={computed?.amount?.toFixed(2) ?? "0"} disabled />
                         </div>
                         <div className="col-span-1">
-                          {fields.length > 1 && (
+                          {purchaseMode !== "view" && fields.length > 1 && (
                             <Button
                               type="button"
                               variant="ghost"
@@ -936,17 +1119,17 @@ export default function PurchasesPage() {
                                 </FormItem>
                               )}
                             />
-                            <FormField
-                              control={form.control}
-                              name={`charges.${idx}.accountId`}
-                              render={({ field }) => (
-                                <FormItem className="col-span-1">
-                                  <Select onValueChange={field.onChange} value={field.value || undefined}>
-                                    <FormControl>
-                                      <SelectTrigger>
-                                        <SelectValue placeholder="A/C" />
-                                      </SelectTrigger>
-                                    </FormControl>
+                          <FormField
+                            control={form.control}
+                            name={`charges.${idx}.accountId`}
+                            render={({ field }) => (
+                              <FormItem className="col-span-1">
+                                <Select onValueChange={field.onChange} value={field.value ?? "none"}>
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="A/C" />
+                                    </SelectTrigger>
+                                  </FormControl>
                                     <SelectContent>
                                       <SelectItem value="none">�</SelectItem>
                                       {accounts.map((acc) => (
@@ -988,15 +1171,115 @@ export default function PurchasesPage() {
                   </div>
                 </CardContent>
               </Card>
+                </fieldset>
+              )}
+
+              {purchaseMode === "view" && viewPurchase && (
+                <Card className="border bg-muted/40">
+                  <CardContent className="pt-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Invoice #</p>
+                        <p className="font-mono font-medium">{viewPurchase.invoiceNumber}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Date</p>
+                        <p className="font-medium">
+                          {viewPurchase.purchaseDate ? format(new Date(viewPurchase.purchaseDate), "dd MMM yyyy") : "-"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Supplier</p>
+                        <p className="font-medium">{(viewPurchase as any).supplier?.name || "-"}</p>
+                        {(viewPurchase as any).supplier?.nameUrdu && (
+                          <p className="text-sm text-muted-foreground font-urdu">{(viewPurchase as any).supplier?.nameUrdu}</p>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Vehicle</p>
+                        <p className="font-mono">{viewPurchase.vehicleNumber || "-"}</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Bags</p>
+                        <p className="font-mono font-semibold">{Number(viewPurchase.totalBags || 0).toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Gross Wt (kg)</p>
+                        <p className="font-mono font-semibold">{Number(viewPurchase.totalGrossWeightKg || 0).toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Net Wt (kg)</p>
+                        <p className="font-mono font-semibold">{Number(viewPurchase.totalNetWeightKg || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
+                    {viewPurchase.items && viewPurchase.items.length > 0 && (
+                      <div className="border rounded-md p-3 bg-white">
+                        <p className="text-xs uppercase text-muted-foreground mb-2">Item details</p>
+                        <div className="grid grid-cols-3 gap-3 text-sm">
+                          <div>
+                            <p className="text-muted-foreground text-xs">Bags</p>
+                            <p className="font-mono">{viewPurchase.items[0].bags}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Filling (kg)</p>
+                            <p className="font-mono">{viewPurchase.items[0].fillingPerBagKg}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Loose (kg)</p>
+                            <p className="font-mono">{viewPurchase.items[0].looseKgs}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Less (kg)</p>
+                            <p className="font-mono">{viewPurchase.items[0].lessKg}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Bardana (kg)</p>
+                            <p className="font-mono">{viewPurchase.items[0].bardanaKatKg}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Rate</p>
+                            <p className="font-mono">
+                              {viewPurchase.items[0].rate} / {viewPurchase.items[0].rateUnit}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Amount</p>
+                        <p className="font-mono font-semibold">Rs. {Number(viewPurchase.totalAmount || 0).toLocaleString()}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Paid</p>
+                        <div className="flex items-center justify-end gap-2">
+                          <span className="font-mono font-semibold">Rs. {Number(viewPurchase.paidAmount || 0).toLocaleString()}</span>
+                          <Badge variant={Number(viewPurchase.paidAmount || 0) >= Number(viewPurchase.totalAmount || 0) ? "default" : "secondary"}>
+                            {Number(viewPurchase.paidAmount || 0) >= Number(viewPurchase.totalAmount || 0) ? "Paid" : "Due"}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
-                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  {t("cancel")}
-                </Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  <Calculator className="h-4 w-4" />
-                  {createMutation.isPending ? t("loading") : t("save")}
-                </Button>
+                {purchaseMode !== "view" && (
+                  <>
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      {t("cancel")}
+                    </Button>
+                    <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                      <Calculator className="h-4 w-4" />
+                      {createMutation.isPending || updateMutation.isPending ? t("loading") : t("save")}
+                    </Button>
+                  </>
+                )}
               </div>
             </form>
           </Form>
