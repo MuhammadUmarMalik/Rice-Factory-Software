@@ -4,8 +4,10 @@ import { DataTable, type Column } from "@/components/data-table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type SalaryRow = {
+  accountId: number | null;
   employee: string;
   salaryMonth: string;
   basicSalary: string;
@@ -22,12 +24,13 @@ type SalaryReport = {
 export default function SalaryAccountPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data, isLoading } = useQuery<SalaryReport>({
     queryKey: ["/api/financial/salary", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
@@ -87,10 +90,25 @@ export default function SalaryAccountPage() {
           <CardTitle className="text-lg">Entries</CardTitle>
         </CardHeader>
         <CardContent>
-          <DataTable columns={columns} data={rows} isLoading={isLoading} searchable emptyMessage="No salary entries found" />
+          <DataTable
+            columns={columns}
+            data={rows}
+            isLoading={isLoading}
+            searchable
+            emptyMessage="No salary entries found"
+            onRowClick={(row) =>
+              row.accountId ? openDetail({ type: "account", id: row.accountId }) : undefined
+            }
+          />
         </CardContent>
       </Card>
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }
-

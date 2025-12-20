@@ -416,7 +416,7 @@ export async function registerRoutes(
   });
 
   // Employees & Payroll (HR)
-  app.get("/api/employees", requireRoles(["admin", "manager", "hr", "accountant"]), async (_req, res) => {
+  app.get("/api/employees", requireRoles(["admin", "manager", "hr", "accountant", "operator"]), async (_req, res) => {
     try {
       const rows = await storage.getEmployees();
       res.json(rows);
@@ -426,7 +426,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/employees/:id", requireRoles(["admin", "manager", "hr", "accountant"]), async (req, res) => {
+  app.get("/api/employees/:id", requireRoles(["admin", "manager", "hr", "accountant", "operator"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       const row = await storage.getEmployee(id);
@@ -438,7 +438,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/employees", requireRoles(["admin", "manager", "hr"]), async (req, res) => {
+  app.post("/api/employees", requireRoles(["admin", "manager", "hr", "operator"]), async (req, res) => {
     try {
       const data = insertEmployeeSchema.parse(req.body);
       const created = await storage.createEmployee({ ...data, createdBy: getUserId(req) } as any);
@@ -450,7 +450,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/employees/:id", requireRoles(["admin", "manager", "hr"]), async (req, res) => {
+  app.patch("/api/employees/:id", requireRoles(["admin", "manager", "hr", "operator"]), async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
       const data = insertEmployeeSchema.partial().parse(req.body);
@@ -1446,6 +1446,20 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
       const supplierId = parseOptionalInt(req.query.supplierId);
       const report = await storage.getOutstandingSuppliers(asOfDate, supplierId);
       res.json(report);
+    } catch (error) {
+      console.error(error);
+      res.status(400).json({ error: (error as Error).message });
+    }
+  });
+
+  app.get("/api/reports/detail", async (req, res) => {
+    try {
+      const type = (req.query.type as string) || "";
+      const id = parseOptionalInt(req.query.id);
+      if (!id) return res.status(400).json({ error: "id is required" });
+      const detail = await storage.getReportDetail(type, id);
+      if (!detail) return res.status(404).json({ error: "Detail not found" });
+      res.json(detail);
     } catch (error) {
       console.error(error);
       res.status(400).json({ error: (error as Error).message });

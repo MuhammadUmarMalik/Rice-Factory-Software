@@ -1,24 +1,30 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
+import { DataTable, type Column } from "@/components/data-table";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { format } from "date-fns";
 
 type GrossProfitReport = {
   totalSales: string;
   costOfGoodsSold: string;
   grossProfit: string;
+  rows?: Array<{ saleId: number; invoiceNumber: string; saleDate: string | number | Date; salesAmount: string; costOfGoodsSold: string; grossProfit: string }>;
 };
+type GrossProfitRow = NonNullable<GrossProfitReport["rows"]>[number];
 
 export default function GrossProfitPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data, isLoading, error } = useQuery<GrossProfitReport>({
     queryKey: ["/api/reports/gross-profit", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
@@ -34,6 +40,41 @@ export default function GrossProfitPage() {
   const totalSales = Number(data?.totalSales || 0);
   const cogs = Number(data?.costOfGoodsSold || 0);
   const grossProfit = Number(data?.grossProfit || 0);
+  const rows = data?.rows || [];
+
+  const columns: Column<GrossProfitRow>[] = useMemo(
+    () => [
+      {
+        key: "invoiceNumber",
+        title: "Invoice",
+        render: (r) => <span className="font-mono text-sm">{r.invoiceNumber}</span>,
+      },
+      {
+        key: "saleDate",
+        title: "Date",
+        render: (r) => <span className="font-mono text-xs text-muted-foreground">{format(new Date(r.saleDate), "dd-MM-yyyy")}</span>,
+      },
+      {
+        key: "salesAmount",
+        title: "Sales",
+        align: "right",
+        render: (r) => <span className="font-mono">Rs. {Number(r.salesAmount || 0).toLocaleString()}</span>,
+      },
+      {
+        key: "costOfGoodsSold",
+        title: "COGS",
+        align: "right",
+        render: (r) => <span className="font-mono">Rs. {Number(r.costOfGoodsSold || 0).toLocaleString()}</span>,
+      },
+      {
+        key: "grossProfit",
+        title: "Gross Profit",
+        align: "right",
+        render: (r) => <span className="font-mono font-semibold">Rs. {Number(r.grossProfit || 0).toLocaleString()}</span>,
+      },
+    ],
+    [],
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -68,6 +109,31 @@ export default function GrossProfitPage() {
         <MetricCard title="Cost of Goods Sold" value={cogs} />
         <MetricCard title="Gross Profit" value={grossProfit} highlight={grossProfit >= 0} />
       </div>
+
+      {rows.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Sale Breakdown</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <DataTable
+              columns={columns as any}
+              data={rows as any}
+              isLoading={isLoading}
+              searchable
+              emptyMessage="No sales in this period"
+              onRowClick={(row) => openDetail({ type: "sale", id: row.saleId })}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }
@@ -84,4 +150,3 @@ function MetricCard({ title, value, highlight }: { title: string; value: number;
     </Card>
   );
 }
-

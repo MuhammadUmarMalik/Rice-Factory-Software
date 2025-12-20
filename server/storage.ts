@@ -178,6 +178,7 @@ export interface IStorage {
     totalSales: string;
     costOfGoodsSold: string;
     grossProfit: string;
+    rows?: Array<{ saleId: number; invoiceNumber: string; saleDate: Date; salesAmount: string; costOfGoodsSold: string; grossProfit: string }>;
   }>;
   getDayBook(startDate: Date, endDate: Date): Promise<{
     openingBalance: string;
@@ -246,6 +247,7 @@ export interface IStorage {
   }>;
   getSalaryAccount(startDate: Date, endDate: Date): Promise<{
     rows: Array<{
+      accountId: number | null;
       employee: string;
       salaryMonth: string;
       basicSalary: string;
@@ -255,6 +257,7 @@ export interface IStorage {
     }>;
     totals: { netSalary: string };
   }>;
+  getReportDetail(referenceType: string, referenceId: number): Promise<any>;
 
   // Cash Receipts
   getReceiptVouchers(): Promise<ReceiptVoucher[]>;
@@ -349,6 +352,10 @@ function normalSideForAccountType(type: string | null | undefined): NormalSide {
   const t = String(type).toLowerCase();
   if (["supplier", "liability", "equity", "income"].includes(t)) return "CREDIT";
   return "DEBIT";
+}
+
+function ledgerSumByNormal(normal: NormalSide) {
+  return sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = ${normal === "DEBIT" ? sql`'debit'` : sql`'credit'`} THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`;
 }
 
 function toWords(n: number): string {
@@ -2601,16 +2608,14 @@ export class DatabaseStorage implements IStorage {
     const allProducts = await this.getProducts();
     const result = [];
 
-    // Optimize N+1 by fetching all IDs inside loop? No, use improved queries if possible.
-    // Drizzle doesn't support easy bulk group-by maps without raw SQL.
-    // For now, stick to loop but use COALESCE instead of IFNULL.
-    // Optimization (group by) is simpler to implement correctly in next phase if performance is still issue.
-    // Issue #8 is High, but Correctness (COALESCE) is CRITICAL.
-    
     for (const product of allProducts) {
       const [purchasedResult] = db.select({
         total: sql<string>`COALESCE(SUM(${purchaseItems.netWeightKg}), 0)`
-      }).from(purchaseItems).where(eq(purchaseItems.productId, product.id)).all();
+      })
+        .from(purchaseItems)
+        .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+        .where(and(eq(purchaseItems.productId, product.id), isNull(purchaseItems.deletedAt), isNull(purchases.deletedAt)))
+        .all();
 
       const [soldResult] = db.select({
         total: sql<string>`COALESCE(SUM(${saleItems.quantity}), 0)`
@@ -2632,26 +2637,31 @@ export class DatabaseStorage implements IStorage {
     const result = [];
 
     for (const account of allAccounts) {
-      const [debitResult] = db.select({
-        total: sql<string>`COALESCE(SUM(${ledgerEntries.amount}), 0)`
-      }).from(ledgerEntries)
-        .where(and(
-          eq(ledgerEntries.accountId, account.id),
-          eq(ledgerEntries.transactionType, "debit")
-        )).all();
+      const normal = normalSideForAccountType(account.type);
+      const [movementRow] = db
+        .select({ total: ledgerSumByNormal(normal) })
+        .from(ledgerEntries)
+        .where(eq(ledgerEntries.accountId, account.id))
+        .all();
 
-      const [creditResult] = db.select({
-        total: sql<string>`COALESCE(SUM(${ledgerEntries.amount}), 0)`
-      }).from(ledgerEntries)
-        .where(and(
-          eq(ledgerEntries.accountId, account.id),
-          eq(ledgerEntries.transactionType, "credit")
-        )).all();
+      const opening = parseAmount(account.openingBalance || "0");
+      const movement = parseAmount(movementRow?.total || "0");
+      const closing = opening + movement;
+
+      let debit = 0;
+      let credit = 0;
+      if (closing >= 0) {
+        if (normal === "DEBIT") debit = closing;
+        else credit = closing;
+      } else {
+        if (normal === "DEBIT") credit = Math.abs(closing);
+        else debit = Math.abs(closing);
+      }
 
       result.push({
         account,
-        debit: debitResult?.total || "0",
-        credit: creditResult?.total || "0",
+        debit: debit.toString(),
+        credit: credit.toString(),
       });
     }
 
@@ -2667,9 +2677,12 @@ export class DatabaseStorage implements IStorage {
     purchaseCount: number;
     saleCount: number;
   }> {
+    const from = startDate ?? new Date(0);
+    const to = endDate ? endOfDay(endDate) : new Date();
+
     const purchaseConditions = [];
-    if (startDate) purchaseConditions.push(gte(purchases.purchaseDate, startDate));
-    if (endDate) purchaseConditions.push(lte(purchases.purchaseDate, endDate));
+    if (from) purchaseConditions.push(gte(purchases.purchaseDate, from));
+    if (to) purchaseConditions.push(lte(purchases.purchaseDate, to));
 
     const purchaseQuery = db.select({
       total: sql<string>`COALESCE(SUM(${purchases.totalAmount}), 0)`,
@@ -2681,8 +2694,8 @@ export class DatabaseStorage implements IStorage {
     ).all();
 
     const saleConditions = [];
-    if (startDate) saleConditions.push(gte(sales.saleDate, startDate));
-    if (endDate) saleConditions.push(lte(sales.saleDate, endDate));
+    if (from) saleConditions.push(gte(sales.saleDate, from));
+    if (to) saleConditions.push(lte(sales.saleDate, to));
 
     const saleQuery = db.select({
       total: sql<string>`COALESCE(SUM(${sales.totalAmount}), 0)`,
@@ -2693,21 +2706,15 @@ export class DatabaseStorage implements IStorage {
       : saleQuery
     ).all();
 
-    // Filter expenes?
-    const expenseAccounts = await this.getAccounts("expense");
-    let expenseTotal = 0;
-    for (const acc of expenseAccounts) {
-      expenseTotal += parseFloat(acc.currentBalance);
-    }
-
-    const grossProfit = parseFloat(saleTotal?.total || "0") - parseFloat(purchaseTotal?.total || "0");
-    const netProfit = grossProfit - expenseTotal;
+    const gross = await this.getGrossProfit(from, to);
+    const expenseTotal = await this.sumExpenseMovements(from, to);
+    const netProfit = parseAmount(gross.grossProfit) - expenseTotal;
 
     return {
       totalPurchases: purchaseTotal?.total || "0",
-      totalSales: saleTotal?.total || "0",
+      totalSales: gross.totalSales,
       expenses: expenseTotal.toString(),
-      grossProfit: grossProfit.toString(),
+      grossProfit: gross.grossProfit,
       netProfit: netProfit.toString(),
       purchaseCount: purchaseTotal?.count ?? 0,
       saleCount: saleTotal?.count ?? 0,
@@ -2717,7 +2724,7 @@ export class DatabaseStorage implements IStorage {
   async getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number) {
     const from = startDate;
     const to = endOfDay(endDate);
-    const conditions = [gte(purchases.purchaseDate, from), lte(purchases.purchaseDate, to)];
+    const conditions = [gte(purchases.purchaseDate, from), lte(purchases.purchaseDate, to), isNull(purchases.deletedAt)];
     if (supplierId) conditions.push(eq(purchases.supplierId, supplierId));
 
     const baseRows = db
@@ -2847,32 +2854,89 @@ export class DatabaseStorage implements IStorage {
     const from = startDate;
     const to = endOfDay(endDate);
 
-    const [salesTotal] = db
+    const cogsSystemAccount = this.ensureSystemAccount(db, "Cost of Goods Sold", "cogs");
+    const incomeAccounts = db.select({ id: accounts.id }).from(accounts).where(eq(accounts.type, "income" as any)).all();
+    const cogsAccounts = db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(eq(accounts.type, "cogs" as any))
+      .all();
+    const cogsAccountIds = [...new Set([cogsSystemAccount.id, ...cogsAccounts.map((a) => a.id)])];
+    const incomeAccountIds = incomeAccounts.map((a) => a.id);
+
+    const [revenueRow] = incomeAccountIds.length
+      ? db
+          .select({ total: ledgerSumByNormal("CREDIT") })
+          .from(ledgerEntries)
+          .where(and(inArray(ledgerEntries.accountId, incomeAccountIds), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+          .all()
+      : [{ total: "0" } as any];
+
+    const [cogsRow] = cogsAccountIds.length
+      ? db
+          .select({ total: ledgerSumByNormal("DEBIT") })
+          .from(ledgerEntries)
+          .where(and(inArray(ledgerEntries.accountId, cogsAccountIds), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+          .all()
+      : [{ total: "0" } as any];
+
+    const salesRows = db
       .select({
-        total: sql<string>`COALESCE(SUM(CAST(${sales.subtotal} AS REAL)), 0)`,
+        id: sales.id,
+        invoiceNumber: sales.invoiceNumber,
+        saleDate: sales.saleDate,
+        totalAmount: sales.totalAmount,
       })
       .from(sales)
       .where(and(gte(sales.saleDate, from), lte(sales.saleDate, to)))
+      .orderBy(desc(sales.saleDate))
       .all();
 
-    const [cogsTotal] = db
-      .select({
-        total: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL) * CAST(${products.avgPurchasePrice} AS REAL)), 0)`,
-      })
-      .from(saleItems)
-      .leftJoin(sales, eq(saleItems.saleId, sales.id))
-      .leftJoin(products, eq(saleItems.productId, products.id))
-      .where(and(gte(sales.saleDate, from), lte(sales.saleDate, to)))
-      .all();
+    const cogsBySale = new Map<number, string>(
+      cogsAccountIds.length
+        ? db
+            .select({
+              saleId: ledgerEntries.referenceId,
+              amount: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+            })
+            .from(ledgerEntries)
+            .where(
+              and(
+                inArray(ledgerEntries.accountId, cogsAccountIds),
+                eq(ledgerEntries.referenceType, "sale"),
+                gte(ledgerEntries.entryDate, from),
+                lte(ledgerEntries.entryDate, to),
+              ),
+            )
+            .groupBy(ledgerEntries.referenceId)
+            .all()
+            .map((r) => [r.saleId ?? 0, r.amount])
+        : [],
+    );
 
-    const totalSales = parseAmount(salesTotal?.total || "0");
-    const costOfGoodsSold = parseAmount(cogsTotal?.total || "0");
+    const rows = salesRows.map((s) => {
+      const salesAmount = parseAmount(s.totalAmount || "0");
+      const cogs = parseAmount(cogsBySale.get(s.id) || "0");
+      const profit = salesAmount - cogs;
+      return {
+        saleId: s.id,
+        invoiceNumber: s.invoiceNumber,
+        saleDate: new Date(s.saleDate as any),
+        salesAmount: salesAmount.toString(),
+        costOfGoodsSold: cogs.toString(),
+        grossProfit: profit.toString(),
+      };
+    });
+
+    const totalSales = rows.reduce((sum, r) => sum + parseAmount(r.salesAmount), 0) || parseAmount(revenueRow?.total || "0");
+    const costOfGoodsSold = rows.reduce((sum, r) => sum + parseAmount(r.costOfGoodsSold), 0) || parseAmount(cogsRow?.total || "0");
     const grossProfit = totalSales - costOfGoodsSold;
 
     return {
       totalSales: totalSales.toString(),
       costOfGoodsSold: costOfGoodsSold.toString(),
       grossProfit: grossProfit.toString(),
+      rows,
     };
   }
 
@@ -2992,10 +3056,10 @@ export class DatabaseStorage implements IStorage {
 
   async getOutstandingCustomers(asOfDate: Date, customerId?: number) {
     const to = endOfDay(asOfDate);
-    const conditions = [lte(sales.saleDate, to)];
-    if (customerId) conditions.push(eq(sales.customerId, customerId));
+    const saleConditions = [lte(sales.saleDate, to)];
+    if (customerId) saleConditions.push(eq(sales.customerId, customerId));
 
-    const rows = db
+    const salesRows = db
       .select({
         saleId: sales.id,
         invoiceNumber: sales.invoiceNumber,
@@ -3003,32 +3067,71 @@ export class DatabaseStorage implements IStorage {
         customerId: sales.customerId,
         customerName: accounts.name,
         invoiceAmount: sales.totalAmount,
-        receivedAmount: sales.paidAmount,
       })
       .from(sales)
       .leftJoin(accounts, eq(sales.customerId, accounts.id))
-      .where(and(...conditions))
-      .orderBy(desc(sales.saleDate))
-      .all()
-      .map((r) => {
-        const invoice = parseAmount(r.invoiceAmount || "0");
-        const received = parseAmount(r.receivedAmount || "0");
-        const outstanding = Math.max(invoice - received, 0);
-        return {
-          saleId: r.saleId,
-          invoiceNumber: r.invoiceNumber,
-          saleDate: new Date(r.saleDate as any),
-          customerId: r.customerId,
-          customerName: r.customerName || "",
-          invoiceAmount: invoice.toString(),
-          receivedAmount: received.toString(),
-          outstandingAmount: outstanding.toString(),
-          dueDate: null as Date | null,
-        };
-      })
-      .filter((r) => parseAmount(r.outstandingAmount) > 0);
+      .where(and(...saleConditions))
+      .orderBy(sales.saleDate)
+      .all();
 
-    const totals = rows.reduce(
+    const customerIds = [...new Set(salesRows.map((r) => r.customerId).filter(Boolean) as number[])];
+    const ledgerByCustomer = new Map<number, LedgerEntry[]>(
+      customerIds.length
+        ? db
+            .select()
+            .from(ledgerEntries)
+            .where(and(inArray(ledgerEntries.accountId, customerIds), lte(ledgerEntries.entryDate, to)))
+            .orderBy(ledgerEntries.entryDate)
+            .all()
+            .reduce((acc, entry) => {
+              const list = (acc.get(entry.accountId) as LedgerEntry[] | undefined) || [];
+              list.push(entry as any);
+              acc.set(entry.accountId, list);
+              return acc;
+            }, new Map<number, LedgerEntry[]>())
+        : new Map(),
+    );
+
+    const rows: Array<{
+      saleId: number;
+      invoiceNumber: string;
+      customerId: number;
+      customerName: string;
+      invoiceAmount: string;
+      receivedAmount: string;
+      outstandingAmount: string;
+      dueDate: Date | null;
+      saleDate: Date;
+    }> = [];
+
+    for (const cid of customerIds) {
+      const customerSales = salesRows.filter((r) => r.customerId === cid).sort((a, b) => new Date(a.saleDate as any).getTime() - new Date(b.saleDate as any).getTime());
+      const ledger = ledgerByCustomer.get(cid) || [];
+      const totalCredits = ledger.filter((l) => l.transactionType === "credit").reduce((sum, l) => sum + parseAmount(l.amount), 0);
+      let remainingCredits = totalCredits;
+
+      for (const sale of customerSales) {
+        const invoice = parseAmount(sale.invoiceAmount || "0");
+        const applied = Math.min(invoice, remainingCredits);
+        remainingCredits -= applied;
+        const outstanding = Math.max(invoice - applied, 0);
+        rows.push({
+          saleId: sale.saleId,
+          invoiceNumber: sale.invoiceNumber,
+          saleDate: new Date(sale.saleDate as any),
+          customerId: sale.customerId,
+          customerName: sale.customerName || "",
+          invoiceAmount: invoice.toString(),
+          receivedAmount: (invoice - outstanding).toString(),
+          outstandingAmount: outstanding.toString(),
+          dueDate: null,
+        });
+      }
+    }
+
+    const filteredRows = rows.filter((r) => parseAmount(r.outstandingAmount) > 0);
+
+    const totals = filteredRows.reduce(
       (acc, r) => {
         acc.invoiceAmount += parseAmount(r.invoiceAmount);
         acc.receivedAmount += parseAmount(r.receivedAmount);
@@ -3039,7 +3142,7 @@ export class DatabaseStorage implements IStorage {
     );
 
     return {
-      rows,
+      rows: filteredRows,
       totals: {
         invoiceAmount: totals.invoiceAmount.toString(),
         receivedAmount: totals.receivedAmount.toString(),
@@ -3050,10 +3153,10 @@ export class DatabaseStorage implements IStorage {
 
   async getOutstandingSuppliers(asOfDate: Date, supplierId?: number) {
     const to = endOfDay(asOfDate);
-    const conditions = [lte(purchases.purchaseDate, to)];
+    const conditions = [lte(purchases.purchaseDate, to), isNull(purchases.deletedAt)];
     if (supplierId) conditions.push(eq(purchases.supplierId, supplierId));
 
-    const rows = db
+    const purchasesRows = db
       .select({
         purchaseId: purchases.id,
         invoiceNumber: purchases.invoiceNumber,
@@ -3061,33 +3164,72 @@ export class DatabaseStorage implements IStorage {
         supplierId: purchases.supplierId,
         supplierName: accounts.name,
         billAmount: purchases.totalAmount,
-        paidAmount: purchases.paidAmount,
         dueDate: purchases.dueDate,
       })
       .from(purchases)
       .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
       .where(and(...conditions))
-      .orderBy(desc(purchases.purchaseDate))
-      .all()
-      .map((r) => {
-        const bill = parseAmount(r.billAmount || "0");
-        const paid = parseAmount(r.paidAmount || "0");
-        const outstanding = Math.max(bill - paid, 0);
-        return {
-          purchaseId: r.purchaseId,
-          invoiceNumber: r.invoiceNumber,
-          purchaseDate: new Date(r.purchaseDate as any),
-          supplierId: r.supplierId,
-          supplierName: r.supplierName || "",
-          billAmount: bill.toString(),
-          paidAmount: paid.toString(),
-          outstandingAmount: outstanding.toString(),
-          dueDate: r.dueDate ? new Date(r.dueDate as any) : null,
-        };
-      })
-      .filter((r) => parseAmount(r.outstandingAmount) > 0);
+      .orderBy(purchases.purchaseDate)
+      .all();
 
-    const totals = rows.reduce(
+    const supplierIds = [...new Set(purchasesRows.map((r) => r.supplierId).filter(Boolean) as number[])];
+    const ledgerBySupplier = new Map<number, LedgerEntry[]>(
+      supplierIds.length
+        ? db
+            .select()
+            .from(ledgerEntries)
+            .where(and(inArray(ledgerEntries.accountId, supplierIds), lte(ledgerEntries.entryDate, to)))
+            .orderBy(ledgerEntries.entryDate)
+            .all()
+            .reduce((acc, entry) => {
+              const list = (acc.get(entry.accountId) as LedgerEntry[] | undefined) || [];
+              list.push(entry as any);
+              acc.set(entry.accountId, list);
+              return acc;
+            }, new Map<number, LedgerEntry[]>())
+        : new Map(),
+    );
+
+    const rows: Array<{
+      purchaseId: number;
+      invoiceNumber: string;
+      purchaseDate: Date;
+      supplierId: number;
+      supplierName: string;
+      billAmount: string;
+      paidAmount: string;
+      outstandingAmount: string;
+      dueDate: Date | null;
+    }> = [];
+
+    for (const sid of supplierIds) {
+      const supplierPurchases = purchasesRows.filter((r) => r.supplierId === sid).sort((a, b) => new Date(a.purchaseDate as any).getTime() - new Date(b.purchaseDate as any).getTime());
+      const ledger = ledgerBySupplier.get(sid) || [];
+      const totalDebits = ledger.filter((l) => l.transactionType === "debit").reduce((sum, l) => sum + parseAmount(l.amount), 0);
+      let remainingDebits = totalDebits;
+
+      for (const pur of supplierPurchases) {
+        const bill = parseAmount(pur.billAmount || "0");
+        const applied = Math.min(bill, remainingDebits);
+        remainingDebits -= applied;
+        const outstanding = Math.max(bill - applied, 0);
+        rows.push({
+          purchaseId: pur.purchaseId,
+          invoiceNumber: pur.invoiceNumber,
+          purchaseDate: new Date(pur.purchaseDate as any),
+          supplierId: pur.supplierId,
+          supplierName: pur.supplierName || "",
+          billAmount: bill.toString(),
+          paidAmount: (bill - outstanding).toString(),
+          outstandingAmount: outstanding.toString(),
+          dueDate: pur.dueDate ? new Date(pur.dueDate as any) : null,
+        });
+      }
+    }
+
+    const filteredRows = rows.filter((r) => parseAmount(r.outstandingAmount) > 0);
+
+    const totals = filteredRows.reduce(
       (acc, r) => {
         acc.billAmount += parseAmount(r.billAmount);
         acc.paidAmount += parseAmount(r.paidAmount);
@@ -3098,7 +3240,7 @@ export class DatabaseStorage implements IStorage {
     );
 
     return {
-      rows,
+      rows: filteredRows,
       totals: {
         billAmount: totals.billAmount.toString(),
         paidAmount: totals.paidAmount.toString(),
@@ -3343,7 +3485,9 @@ export class DatabaseStorage implements IStorage {
 
     const values: Array<{ employee: string; salaryMonth: string; net: number }> = [];
     grouped.forEach((v) => values.push(v));
+    const primarySalaryAccountId = salaryAccountIds[0] ?? null;
     const rows = values.map((r) => ({
+      accountId: primarySalaryAccountId,
       employee: r.employee,
       salaryMonth: r.salaryMonth,
       basicSalary: r.net.toString(),
@@ -3354,6 +3498,129 @@ export class DatabaseStorage implements IStorage {
 
     const totalNet = rows.reduce((sum, r) => sum + parseAmount(r.netSalary), 0);
     return { rows, totals: { netSalary: totalNet.toString() } };
+  }
+
+  async getReportDetail(referenceType: string, referenceId: number) {
+    const type = (referenceType || "").toLowerCase();
+
+    if (type === "sale") {
+      const sale = await this.getSale(referenceId);
+      if (!sale) return null;
+      const items = await this.getSaleItems(referenceId);
+      const customer = await this.getAccount(sale.customerId);
+      const ledger = db
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, referenceId)))
+        .orderBy(ledgerEntries.entryDate)
+        .all()
+        .map((le) => ({
+          ...le,
+          debit: le.transactionType === "debit" ? le.amount : "0",
+          credit: le.transactionType === "credit" ? le.amount : "0",
+        }));
+      return { type: "sale", sale, items, customer, ledgerEntries: ledger };
+    }
+
+    if (type === "purchase") {
+      const purchase = await this.getPurchaseWithDetails(referenceId);
+      if (!purchase) return null;
+      const supplier = await this.getAccount(purchase.supplierId);
+      const ledger = db
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, referenceId)))
+        .orderBy(ledgerEntries.entryDate)
+        .all()
+        .map((le) => ({
+          ...le,
+          debit: le.transactionType === "debit" ? le.amount : "0",
+          credit: le.transactionType === "credit" ? le.amount : "0",
+        }));
+      return { type: "purchase", purchase, supplier, ledgerEntries: ledger };
+    }
+
+    if (type === "product") {
+      const product = await this.getProduct(referenceId);
+      if (!product) return null;
+      const purchaseMovements =
+        db
+          .select({
+            refNo: purchases.invoiceNumber,
+            refId: purchases.id,
+            direction: sql`'in'`.as("direction"),
+            qty: purchaseItems.netWeightKg,
+            date: purchases.purchaseDate,
+            narration: purchases.notes,
+          })
+          .from(purchaseItems)
+          .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+          .where(and(eq(purchaseItems.productId, referenceId), isNull(purchaseItems.deletedAt), isNull(purchases.deletedAt)))
+          .all() || [];
+      const saleMovements =
+        db
+          .select({
+            refNo: sales.invoiceNumber,
+            refId: sales.id,
+            direction: sql`'out'`.as("direction"),
+            qty: saleItems.quantity,
+            date: sales.saleDate,
+            narration: sales.notes,
+          })
+          .from(saleItems)
+          .leftJoin(sales, eq(saleItems.saleId, sales.id))
+          .where(eq(saleItems.productId, referenceId))
+          .all() || [];
+
+      const movements = [...purchaseMovements, ...saleMovements].sort(
+        (a, b) => new Date(a.date as any).getTime() - new Date(b.date as any).getTime(),
+      );
+
+      return { type: "product", product, movements };
+    }
+
+    if (type === "account") {
+      const account = await this.getAccount(referenceId);
+      if (!account) return null;
+      const ledger = await this.getLedgerEntries(referenceId);
+      return { type: "account", account, ledgerEntries: ledger };
+    }
+
+    if (type === "receipt" || type === "payment") {
+      const voucher = await this.getReceiptVoucher(referenceId);
+      if (!voucher) return null;
+      const ledger = db
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, type), eq(ledgerEntries.referenceId, referenceId)))
+        .orderBy(ledgerEntries.entryDate)
+        .all()
+        .map((le) => ({
+          ...le,
+          debit: le.transactionType === "debit" ? le.amount : "0",
+          credit: le.transactionType === "credit" ? le.amount : "0",
+        }));
+      return { type, voucher, ledgerEntries: ledger };
+    }
+
+    if (type === "journal_voucher") {
+      const voucher = await this.getJournalVoucher(referenceId);
+      if (!voucher) return null;
+      const ledger = db
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "journal_voucher"), eq(ledgerEntries.referenceId, referenceId)))
+        .orderBy(ledgerEntries.entryDate)
+        .all()
+        .map((le) => ({
+          ...le,
+          debit: le.transactionType === "debit" ? le.amount : "0",
+          credit: le.transactionType === "credit" ? le.amount : "0",
+        }));
+      return { type: "journal_voucher", voucher, ledgerEntries: ledger };
+    }
+
+    return null;
   }
 
   async getPeriodLocks(): Promise<PeriodLock[]> {

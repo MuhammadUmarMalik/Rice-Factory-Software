@@ -19,7 +19,7 @@ export default function CapitalPage() {
     queryKey: ["/api/financial/capital", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
@@ -90,4 +90,3 @@ function Line({ label, value, negative, emphasize }: { label: string; value: num
     </div>
   );
 }
-

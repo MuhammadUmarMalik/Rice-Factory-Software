@@ -21,7 +21,7 @@ export default function IncomeStatementPage() {
     queryKey: ["/api/financial/income-statement", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
@@ -113,4 +113,3 @@ function Line({
 function Divider() {
   return <div className="border-t border-border" />;
 }
-

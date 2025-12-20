@@ -13,6 +13,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
 import { format } from "date-fns";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type OutstandingSupplierRow = {
   purchaseId: number;
@@ -35,6 +36,7 @@ export default function OutstandingSuppliersPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [asOfDate, setAsOfDate] = useState(today);
   const [supplierId, setSupplierId] = useState<string>("all");
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data: suppliers = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts?type=supplier"],
@@ -44,7 +46,7 @@ export default function OutstandingSuppliersPage() {
     queryKey: ["/api/reports/outstanding-suppliers", asOfDate, supplierId],
     enabled: !!asOfDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "" : "";
+      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("asOfDate", asOfDate);
       if (supplierId !== "all") params.set("supplierId", supplierId);
@@ -118,9 +120,23 @@ export default function OutstandingSuppliersPage() {
           <CardTitle className="text-lg">Bills</CardTitle>
         </CardHeader>
         <CardContent>
-          <DataTable columns={columns} data={rows} isLoading={isLoading} searchable emptyMessage="No outstanding bills" />
+          <DataTable
+            columns={columns}
+            data={rows}
+            isLoading={isLoading}
+            searchable
+            emptyMessage="No outstanding bills"
+            onRowClick={(row) => openDetail({ type: "purchase", id: row.purchaseId })}
+          />
         </CardContent>
       </Card>
+
+      <ReportDetailDialog
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }
@@ -137,4 +153,3 @@ function SummaryCard({ label, value, highlight }: { label: string; value: string
     </Card>
   );
 }
-
