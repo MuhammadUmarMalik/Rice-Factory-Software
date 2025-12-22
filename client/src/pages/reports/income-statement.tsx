@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type IncomeStatement = {
   period: { fromDate: string | number | Date; toDate: string | number | Date };
@@ -42,9 +44,17 @@ export default function IncomeStatementPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Income Statement</h1>
-        <p className="text-sm text-muted-foreground">Period-based statement derived from transactions.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Income Statement</h1>
+          <p className="text-sm text-muted-foreground">Period-based statement derived from transactions.</p>
+        </div>
+        <PrintActions
+          docKey={docKeys.incomeStatement}
+          params={{ fromDate: fromDate || undefined, toDate: toDate || undefined }}
+          title="Income Statement"
+          disabled={!fromDate || !toDate}
+        />
       </div>
 
       <Card>

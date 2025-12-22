@@ -18,6 +18,8 @@ import { format } from "date-fns";
 import clsx from "clsx";
 import { Link, useLocation } from "wouter";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type LedgerRow = {
   id: number;
@@ -136,10 +138,17 @@ export default function LedgerPage() {
           <h1 className="text-2xl font-semibold tracking-tight">{heading}</h1>
           <p className="text-sm text-muted-foreground">{subheading}</p>
         </div>
-        <Button variant="outline" disabled>
-          <Download className="h-4 w-4 mr-2" />
-          Export (soon)
-        </Button>
+        <PrintActions
+          docKey={docKeys.ledger}
+          params={{
+            accountId: selectedAccountId || undefined,
+            scope: scope || undefined,
+            startDate: dateFrom || undefined,
+            endDate: dateTo || undefined,
+          }}
+          title={heading}
+          disabled={!selectedAccountId}
+        />
       </div>
 
       <div className="flex items-center gap-2">
@@ -289,6 +298,7 @@ export default function LedgerPage() {
       )}
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open) => (!open ? closeDetail() : null)}
         detail={detail || null}

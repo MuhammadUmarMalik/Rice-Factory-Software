@@ -14,6 +14,8 @@ import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
 import { format } from "date-fns";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type OutstandingSupplierRow = {
   purchaseId: number;
@@ -103,9 +105,16 @@ export default function OutstandingSuppliersPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Outstanding Suppliers</h1>
-        <p className="text-sm text-muted-foreground">Outstanding = Bill Amount - Payments/Adjustments.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Outstanding Suppliers</h1>
+          <p className="text-sm text-muted-foreground">Outstanding = Bill Amount - Payments/Adjustments.</p>
+        </div>
+        <PrintActions
+          docKey={docKeys.outstandingSuppliers}
+          params={{ asOfDate: asOfDate || undefined, supplierId: supplierId !== "all" ? supplierId : undefined }}
+          title="Outstanding Suppliers"
+        />
       </div>
 
       <Card>
@@ -159,6 +168,7 @@ export default function OutstandingSuppliersPage() {
       </Card>
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open) => (!open ? closeDetail() : null)}
         detail={detail || null}

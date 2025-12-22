@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label";
 import type { Account, Product } from "@shared/schema";
 import { format } from "date-fns";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import {
   Select,
   SelectContent,
@@ -212,10 +214,17 @@ export default function PurchaseReportPage() {
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button variant="outline" data-testid="button-export">
-            <Download className="h-4 w-4" />
-            {t("export")}
-          </Button>
+          <PrintActions
+            docKey={docKeys.purchaseReport}
+            params={{
+              fromDate: dateFrom || undefined,
+              toDate: dateTo || undefined,
+              supplierId: supplierId !== "all" ? supplierId : undefined,
+              productId: productId !== "all" ? productId : undefined,
+              paymentStatus: status !== "all" ? status : undefined,
+            }}
+            title="Purchase Report"
+          />
         </div>
       </div>
 
@@ -332,6 +341,7 @@ export default function PurchaseReportPage() {
       </Card>
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open) => (!open ? closeDetail() : null)}
         detail={detail || null}

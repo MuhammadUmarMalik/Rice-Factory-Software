@@ -6,6 +6,7 @@ import { z } from "zod";
 import { format } from "date-fns";
 import { promises as fs } from "fs";
 import path from "path";
+import { registerPrintRoutes } from "./modules/print/print.routes";
 
 function getUserRole(req: any): string {
   const role = (req.headers?.["x-user-role"] as string | undefined) || "";
@@ -167,6 +168,9 @@ const settingsSchema = z.object({
   businessNameUrdu: z.string().default(""),
   phone: z.string().default(""),
   address: z.string().default(""),
+  logoUrl: z.string().optional().default(""),
+  ntn: z.string().optional().default(""),
+  strn: z.string().optional().default(""),
   language: z.enum(["en", "ur"]).default("en"),
   theme: z.enum(["light", "dark"]).default("light"),
 });
@@ -193,6 +197,7 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  registerPrintRoutes(app);
 
   // Settings
   app.get("/api/settings", async (_req, res) => {

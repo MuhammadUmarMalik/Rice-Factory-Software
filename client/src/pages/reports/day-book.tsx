@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 import { Input } from "@/components/ui/input";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type DayBookRow = {
   entryId: number;
@@ -88,9 +90,16 @@ export default function DayBookPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Day Book</h1>
-        <p className="text-sm text-muted-foreground">Posted ledger entries by date. Total debit equals total credit.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Day Book</h1>
+          <p className="text-sm text-muted-foreground">Posted ledger entries by date. Total debit equals total credit.</p>
+        </div>
+        <PrintActions
+          docKey={docKeys.dayBook}
+          params={{ fromDate: fromDate || undefined, toDate: toDate || undefined }}
+          title="Day Book"
+        />
       </div>
 
       <Card>
@@ -144,6 +153,7 @@ export default function DayBookPage() {
       </Card>
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open) => (!open ? closeDetail() : null)}
         detail={detail || null}

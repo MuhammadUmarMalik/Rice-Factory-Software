@@ -8,6 +8,8 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import type { Product } from "@shared/schema";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -213,10 +215,17 @@ export default function StockReportPage() {
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button variant="outline" data-testid="button-export">
-            <Download className="h-4 w-4" />
-            {t("export")}
-          </Button>
+          <PrintActions
+            docKey={docKeys.stockReport}
+            params={{
+              fromDate: fromDate || undefined,
+              toDate: toDate || undefined,
+              productId: productId !== "all" ? productId : undefined,
+              category: category !== "all" ? category : undefined,
+              unit: unit !== "all" ? unit : undefined,
+            }}
+            title="Stock Report"
+          />
         </div>
       </div>
 
@@ -339,6 +348,7 @@ export default function StockReportPage() {
       </Card>
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open) => (!open ? closeDetail() : null)}
         detail={detail || null}

@@ -12,6 +12,8 @@ import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import {
   Dialog,
   DialogContent,
@@ -406,7 +408,16 @@ export default function ReceiptsPage() {
                 </Button>
                 <DialogTitle>{dialogTitle}</DialogTitle>
               </div>
-              {!isReadOnly && <Button variant="ghost" onClick={startNew}>Clear</Button>}
+              <div className="flex items-center gap-2">
+                {isReadOnly && viewId && (
+                  <PrintActions
+                    docKey={docKeys.cashReceiptVoucher}
+                    params={{ voucherId: viewId }}
+                    title="Cash Receipt Voucher"
+                  />
+                )}
+                {!isReadOnly && <Button variant="ghost" onClick={startNew}>Clear</Button>}
+              </div>
             </div>
             <DialogDescription className="sr-only">
               Cash receipt voucher details

@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { DataTable, type Column } from "@/components/data-table";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 import { format } from "date-fns";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type GrossProfitReport = {
   netSales: string;
@@ -80,11 +82,19 @@ export default function GrossProfitPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Gross Profit</h1>
-        <p className="text-sm text-muted-foreground">
-          Gross Profit = Net Sales - COGS (moving average cost).
-        </p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Gross Profit</h1>
+          <p className="text-sm text-muted-foreground">
+            Gross Profit = Net Sales - COGS (moving average cost).
+          </p>
+        </div>
+        <PrintActions
+          docKey={docKeys.grossProfit}
+          params={{ fromDate: fromDate || undefined, toDate: toDate || undefined }}
+          title="Gross Profit"
+          disabled={!fromDate || !toDate}
+        />
       </div>
 
       <Card>
@@ -132,6 +142,7 @@ export default function GrossProfitPage() {
       )}
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open) => (!open ? closeDetail() : null)}
         detail={detail || null}

@@ -8,6 +8,8 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -150,10 +152,11 @@ export default function TrialBalancePage() {
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button variant="outline" data-testid="button-export">
-            <Download className="h-4 w-4" />
-            {t("export")}
-          </Button>
+          <PrintActions
+            docKey={docKeys.trialBalance}
+            params={{ asOfDate: asOfDate || undefined }}
+            title="Trial Balance"
+          />
         </div>
       </div>
 
@@ -248,6 +251,7 @@ export default function TrialBalancePage() {
       </Card>
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open: boolean) => (!open ? closeDetail() : null)}
         detail={detail || null}

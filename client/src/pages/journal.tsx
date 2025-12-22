@@ -36,6 +36,8 @@ import { format } from "date-fns";
 import { Eye, Pencil, CheckCircle, Loader2, Plus, Trash2, X } from "lucide-react";
 import type { Account } from "@shared/schema";
 import { useLanguage } from "@/contexts/language-context";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 const journalFormSchema = z
   .object({
@@ -402,9 +404,18 @@ export default function JournalVoucherPage() {
           <DialogHeader className="pb-2">
             <DialogTitle className="flex items-center justify-between text-xl">
               <span className="font-semibold">Journal Voucher</span>
-              <Badge variant={isApproved ? "default" : "secondary"} className="uppercase px-3 py-1 rounded-full">
-                {form.watch("status")}
-              </Badge>
+              <div className="flex items-center gap-2">
+                {activeId && (
+                  <PrintActions
+                    docKey={docKeys.journalVoucher}
+                    params={{ voucherId: activeId }}
+                    title="Journal Voucher"
+                  />
+                )}
+                <Badge variant={isApproved ? "default" : "secondary"} className="uppercase px-3 py-1 rounded-full">
+                  {form.watch("status")}
+                </Badge>
+              </div>
             </DialogTitle>
           </DialogHeader>
 
