@@ -208,7 +208,7 @@ export default function LedgerPage() {
               </div>
 
               {isLoading ? (
-                <div className="p-6 text-center text-muted-foreground text-sm">Loading entries…</div>
+                <div className="p-6 text-center text-muted-foreground text-sm">Loading entries...</div>
               ) : orderedEntries.length === 0 ? (
                 <div className="p-6 text-center text-muted-foreground text-sm">No entries for this range.</div>
               ) : (
@@ -248,10 +248,10 @@ export default function LedgerPage() {
                         )}
                       </div>
                       <div className="px-3 py-2 border-r text-right font-mono">
-                        {debit > 0 ? `Rs. ${debit.toLocaleString()}` : "—"}
+                        {debit > 0 ? `Rs. ${debit.toLocaleString()}` : "-"}
                       </div>
                       <div className="px-3 py-2 border-r text-right font-mono">
-                        {credit > 0 ? `Rs. ${credit.toLocaleString()}` : "—"}
+                        {credit > 0 ? `Rs. ${credit.toLocaleString()}` : "-"}
                       </div>
                       <div className="px-3 py-2 text-right font-mono font-semibold">
                         Rs. {balance.toLocaleString()}
@@ -267,10 +267,10 @@ export default function LedgerPage() {
                   <div className="px-3 py-2 border-r"></div>
                   <div className="px-3 py-2 border-r"></div>
                   <div className="px-3 py-2 border-r text-right font-mono">
-                    {netTotals.debit > 0 ? `Rs. ${netTotals.debit.toLocaleString()}` : "—"}
+                    {netTotals.debit > 0 ? `Rs. ${netTotals.debit.toLocaleString()}` : "-"}
                   </div>
                   <div className="px-3 py-2 border-r text-right font-mono">
-                    {netTotals.credit > 0 ? `Rs. ${netTotals.credit.toLocaleString()}` : "—"}
+                    {netTotals.credit > 0 ? `Rs. ${netTotals.credit.toLocaleString()}` : "-"}
                   </div>
                   <div className="px-3 py-2 text-right font-mono">Rs. {netTotals.closing.toLocaleString()}</div>
                 </div>

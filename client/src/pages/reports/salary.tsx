@@ -14,11 +14,13 @@ type SalaryRow = {
   allowances: string;
   deductions: string;
   netSalary: string;
+  paidAmount: string;
+  balanceAmount: string;
 };
 
 type SalaryReport = {
   rows: SalaryRow[];
-  totals: { netSalary: string };
+  totals: { basicSalary: string; allowances: string; deductions: string; netSalary: string; paidAmount: string; balanceAmount: string };
 };
 
 export default function SalaryAccountPage() {
@@ -44,7 +46,14 @@ export default function SalaryAccountPage() {
   });
 
   const rows = data?.rows || [];
-  const totalNet = Number(data?.totals.netSalary || 0);
+  const totals = data?.totals || {
+    basicSalary: "0",
+    allowances: "0",
+    deductions: "0",
+    netSalary: "0",
+    paidAmount: "0",
+    balanceAmount: "0",
+  };
 
   const columns: Column<SalaryRow>[] = useMemo(
     () => [
@@ -54,6 +63,8 @@ export default function SalaryAccountPage() {
       { key: "allowances", title: "Allowances", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.allowances || 0).toLocaleString()}</span> },
       { key: "deductions", title: "Deductions", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.deductions || 0).toLocaleString()}</span> },
       { key: "netSalary", title: "Net Salary", align: "right", render: (r) => <span className="font-mono font-semibold">Rs. {Number(r.netSalary || 0).toLocaleString()}</span> },
+      { key: "paidAmount", title: "Paid", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.paidAmount || 0).toLocaleString()}</span> },
+      { key: "balanceAmount", title: "Balance", align: "right", render: (r) => <span className="font-mono text-destructive">Rs. {Number(r.balanceAmount || 0).toLocaleString()}</span> },
     ],
     [],
   );
@@ -76,9 +87,15 @@ export default function SalaryAccountPage() {
               <Label>To Date</Label>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
             </div>
-            <div className="md:col-span-2 flex items-end justify-end">
-              <div className="text-sm text-muted-foreground">
-                Total Net Salary: <span className="font-mono font-semibold">{totalNet.toLocaleString()}</span>
+            <div className="md:col-span-2 flex items-end justify-end gap-6 text-sm text-muted-foreground">
+              <div>
+                Total Net Salary: <span className="font-mono font-semibold">{Number(totals.netSalary || 0).toLocaleString()}</span>
+              </div>
+              <div>
+                Paid: <span className="font-mono font-semibold">{Number(totals.paidAmount || 0).toLocaleString()}</span>
+              </div>
+              <div>
+                Balance: <span className="font-mono font-semibold text-destructive">{Number(totals.balanceAmount || 0).toLocaleString()}</span>
               </div>
             </div>
           </div>

@@ -178,7 +178,13 @@ export const employeeSalaryStructures = sqliteTable("employee_salary_structures"
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
-export const insertEmployeeSalaryStructureSchema = createInsertSchema(employeeSalaryStructures).omit({
+export const insertEmployeeSalaryStructureSchema = createInsertSchema(employeeSalaryStructures, {
+  effectiveFrom: (schema) =>
+    z.preprocess(
+      (val) => (val === null || val === undefined || val === "" ? undefined : new Date(val as any)),
+      z.date(),
+    ),
+}).omit({
   id: true,
   grossSalary: true,
   netSalary: true,

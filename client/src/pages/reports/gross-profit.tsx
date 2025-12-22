@@ -8,10 +8,11 @@ import { ReportDetailDialog, useReportDetail } from "@/components/report-detail"
 import { format } from "date-fns";
 
 type GrossProfitReport = {
-  totalSales: string;
+  netSales: string;
   costOfGoodsSold: string;
   grossProfit: string;
-  rows?: Array<{ saleId: number; invoiceNumber: string; saleDate: string | number | Date; salesAmount: string; costOfGoodsSold: string; grossProfit: string }>;
+  grossMarginPercent: string;
+  rows?: Array<{ saleId: number; invoiceNumber: string; saleDate: string | number | Date; netSales: string; costOfGoodsSold: string; grossProfit: string }>;
 };
 type GrossProfitRow = NonNullable<GrossProfitReport["rows"]>[number];
 
@@ -37,9 +38,10 @@ export default function GrossProfitPage() {
     },
   });
 
-  const totalSales = Number(data?.totalSales || 0);
+  const netSales = Number(data?.netSales || 0);
   const cogs = Number(data?.costOfGoodsSold || 0);
   const grossProfit = Number(data?.grossProfit || 0);
+  const margin = Number(data?.grossMarginPercent || 0);
   const rows = data?.rows || [];
 
   const columns: Column<GrossProfitRow>[] = useMemo(
@@ -55,10 +57,10 @@ export default function GrossProfitPage() {
         render: (r) => <span className="font-mono text-xs text-muted-foreground">{format(new Date(r.saleDate), "dd-MM-yyyy")}</span>,
       },
       {
-        key: "salesAmount",
-        title: "Sales",
+        key: "netSales",
+        title: "Net Sales",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.salesAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {Number(r.netSales || 0).toLocaleString()}</span>,
       },
       {
         key: "costOfGoodsSold",
@@ -79,9 +81,9 @@ export default function GrossProfitPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Period-wise Gross Profit</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Gross Profit</h1>
         <p className="text-sm text-muted-foreground">
-          Gross Profit = Sales – COGS (COGS estimated using current average purchase price per product).
+          Gross Profit = Net Sales - COGS (moving average cost).
         </p>
       </div>
 
@@ -97,17 +99,18 @@ export default function GrossProfitPage() {
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
             </div>
             <div className="md:col-span-2 flex items-end">
-              {isLoading && <p className="text-sm text-muted-foreground">Calculating…</p>}
+              {isLoading && <p className="text-sm text-muted-foreground">Calculating...</p>}
               {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard title="Total Sales" value={totalSales} />
+      <div className="grid gap-4 md:grid-cols-4">
+        <MetricCard title="Net Sales" value={netSales} />
         <MetricCard title="Cost of Goods Sold" value={cogs} />
         <MetricCard title="Gross Profit" value={grossProfit} highlight={grossProfit >= 0} />
+        <MetricCard title="Margin %" value={margin} suffix="%" highlight={margin >= 0} />
       </div>
 
       {rows.length > 0 && (
@@ -138,14 +141,16 @@ export default function GrossProfitPage() {
   );
 }
 
-function MetricCard({ title, value, highlight }: { title: string; value: number; highlight?: boolean }) {
+function MetricCard({ title, value, suffix, highlight }: { title: string; value: number; suffix?: string; highlight?: boolean }) {
   return (
     <Card className={highlight ? "border-primary/30 shadow-sm" : ""}>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className={`text-2xl font-bold font-mono ${highlight ? "text-primary" : ""}`}>Rs. {value.toLocaleString()}</div>
+        <div className={`text-2xl font-bold font-mono ${highlight ? "text-primary" : ""}`}>
+          {Number.isFinite(value) ? value.toLocaleString() : "0"}{suffix ? ` ${suffix}` : ""}
+        </div>
       </CardContent>
     </Card>
   );

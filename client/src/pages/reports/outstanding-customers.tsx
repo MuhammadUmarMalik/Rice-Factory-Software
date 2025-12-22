@@ -25,11 +25,24 @@ type OutstandingCustomerRow = {
   receivedAmount: string;
   outstandingAmount: string;
   dueDate: string | number | Date | null;
+  daysOutstanding: number;
+  bucket0To30: string;
+  bucket31To60: string;
+  bucket61To90: string;
+  bucket91Plus: string;
 };
 
 type OutstandingCustomersReport = {
   rows: OutstandingCustomerRow[];
-  totals: { invoiceAmount: string; receivedAmount: string; outstandingAmount: string };
+  totals: {
+    invoiceAmount: string;
+    receivedAmount: string;
+    outstandingAmount: string;
+    bucket0To30: string;
+    bucket31To60: string;
+    bucket61To90: string;
+    bucket91Plus: string;
+  };
 };
 
 export default function OutstandingCustomersPage() {
@@ -60,7 +73,15 @@ export default function OutstandingCustomersPage() {
   });
 
   const rows = data?.rows || [];
-  const totals = data?.totals || { invoiceAmount: "0", receivedAmount: "0", outstandingAmount: "0" };
+  const totals = data?.totals || {
+    invoiceAmount: "0",
+    receivedAmount: "0",
+    outstandingAmount: "0",
+    bucket0To30: "0",
+    bucket31To60: "0",
+    bucket61To90: "0",
+    bucket91Plus: "0",
+  };
 
   const columns: Column<OutstandingCustomerRow>[] = useMemo(
     () => [
@@ -70,6 +91,11 @@ export default function OutstandingCustomersPage() {
       { key: "invoiceAmount", title: "Invoice", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.invoiceAmount || 0).toLocaleString()}</span> },
       { key: "receivedAmount", title: "Received", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.receivedAmount || 0).toLocaleString()}</span> },
       { key: "outstandingAmount", title: "Outstanding", align: "right", render: (r) => <span className="font-mono font-semibold text-destructive">Rs. {Number(r.outstandingAmount || 0).toLocaleString()}</span> },
+      { key: "daysOutstanding", title: "Days", align: "right" },
+      { key: "bucket0To30", title: "0-30", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket0To30 || 0).toLocaleString()}</span> },
+      { key: "bucket31To60", title: "31-60", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket31To60 || 0).toLocaleString()}</span> },
+      { key: "bucket61To90", title: "61-90", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket61To90 || 0).toLocaleString()}</span> },
+      { key: "bucket91Plus", title: "91+", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket91Plus || 0).toLocaleString()}</span> },
       { key: "dueDate", title: "Due Date", render: (r) => (r.dueDate ? format(new Date(r.dueDate), "dd-MM-yyyy") : "-") },
     ],
     [],
@@ -79,7 +105,7 @@ export default function OutstandingCustomersPage() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Outstanding Customers</h1>
-        <p className="text-sm text-muted-foreground">Invoice outstanding = Invoice Amount − Received Amount.</p>
+        <p className="text-sm text-muted-foreground">Outstanding = Invoice Amount - Receipts/Adjustments.</p>
       </div>
 
       <Card>
@@ -109,10 +135,11 @@ export default function OutstandingCustomersPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <SummaryCard label="Invoice" value={totals.invoiceAmount} />
         <SummaryCard label="Received" value={totals.receivedAmount} />
         <SummaryCard label="Outstanding" value={totals.outstandingAmount} highlight />
+        <SummaryCard label="91+ Days" value={totals.bucket91Plus} highlight />
       </div>
 
       <Card>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Download, Calendar } from "lucide-react";
+import { Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
@@ -14,44 +14,42 @@ import {
 } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
-import { format } from "date-fns";
 import { downloadCsv } from "@/lib/export";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type PeriodSalesRow = {
-  id: number;
-  invoiceNumber: string;
-  saleDate: string | number | Date;
-  customerId: number;
-  customerName: string;
-  salesAmount: string;
-  tax: string;
-  netAmount: string;
+  period: string;
+  periodStart: string | number | Date;
+  periodEnd: string | number | Date;
+  totalAmount: string;
+  receivedAmount: string;
+  balanceAmount: string;
+  invoiceCount: number;
 };
 
 type PeriodSalesReport = {
   rows: PeriodSalesRow[];
-  totals: { salesAmount: string; tax: string; netAmount: string };
+  totals: { totalAmount: string; receivedAmount: string; balanceAmount: string; invoiceCount: number };
 };
 
 export default function PeriodSalesPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [customerId, setCustomerId] = useState<string>("all");
-  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
+  const [groupBy, setGroupBy] = useState<string>("month");
 
   const { data: customers = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts?type=customer"],
   });
 
   const { data, isLoading } = useQuery<PeriodSalesReport>({
-    queryKey: ["/api/reports/period-sales", fromDate, toDate, customerId],
+    queryKey: ["/api/reports/period-sales", fromDate, toDate, customerId, groupBy],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
       const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
+      params.set("groupBy", groupBy);
       if (customerId !== "all") params.set("customerId", customerId);
       const res = await fetch(`/api/reports/period-sales?${params.toString()}`, {
         credentials: "include",
@@ -63,44 +61,30 @@ export default function PeriodSalesPage() {
   });
 
   const rows = data?.rows || [];
-  const totals = data?.totals || { salesAmount: "0", tax: "0", netAmount: "0" };
+  const totals = data?.totals || { totalAmount: "0", receivedAmount: "0", balanceAmount: "0", invoiceCount: 0 };
 
   const columns: Column<PeriodSalesRow>[] = useMemo(
     () => [
+      { key: "period", title: "Period" },
       {
-        key: "invoiceNumber",
-        title: "Invoice #",
-        render: (r) => <span className="font-mono text-sm">{r.invoiceNumber}</span>,
-      },
-      {
-        key: "saleDate",
-        title: "Date",
-        render: (r) => (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Calendar className="h-3 w-3" />
-            <span className="font-mono">{format(new Date(r.saleDate), "dd-MM-yyyy")}</span>
-          </div>
-        ),
-      },
-      { key: "customerName", title: "Customer" },
-      {
-        key: "salesAmount",
-        title: "Sales Amount",
+        key: "totalAmount",
+        title: "Total Sales",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.salesAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {Number(r.totalAmount || 0).toLocaleString()}</span>,
       },
       {
-        key: "tax",
-        title: "Tax/Charges",
+        key: "receivedAmount",
+        title: "Received",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.tax || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {Number(r.receivedAmount || 0).toLocaleString()}</span>,
       },
       {
-        key: "netAmount",
-        title: "Net Amount",
+        key: "balanceAmount",
+        title: "Balance",
         align: "right",
-        render: (r) => <span className="font-mono font-semibold">Rs. {Number(r.netAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {Number(r.balanceAmount || 0).toLocaleString()}</span>,
       },
+      { key: "invoiceCount", title: "Invoices", align: "right" },
     ],
     [],
   );
@@ -110,7 +94,7 @@ export default function PeriodSalesPage() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Period-wise Sales</h1>
-          <p className="text-sm text-muted-foreground">Approved posting-based sales totals by customer.</p>
+          <p className="text-sm text-muted-foreground">Sales grouped by day, week, or month.</p>
         </div>
         <Button
           variant="outline"
@@ -119,12 +103,11 @@ export default function PeriodSalesPage() {
             downloadCsv(
               `period-sales_${fromDate}_${toDate}`,
               [
-                { header: "Invoice #", value: (r) => r.invoiceNumber },
-                { header: "Date", value: (r) => format(new Date(r.saleDate), "yyyy-MM-dd") },
-                { header: "Customer", value: (r) => r.customerName },
-                { header: "Sales Amount", value: (r) => r.salesAmount },
-                { header: "Tax/Charges", value: (r) => r.tax },
-                { header: "Net Amount", value: (r) => r.netAmount },
+                { header: "Period", value: (r) => r.period },
+                { header: "Total Sales", value: (r) => r.totalAmount },
+                { header: "Received", value: (r) => r.receivedAmount },
+                { header: "Balance", value: (r) => r.balanceAmount },
+                { header: "Invoices", value: (r) => r.invoiceCount.toString() },
               ],
               rows,
             )
@@ -137,7 +120,7 @@ export default function PeriodSalesPage() {
 
       <Card>
         <CardContent className="pt-6">
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <div>
               <Label>From Date</Label>
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
@@ -145,6 +128,19 @@ export default function PeriodSalesPage() {
             <div>
               <Label>To Date</Label>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            </div>
+            <div>
+              <Label>Group By</Label>
+              <Select value={groupBy} onValueChange={setGroupBy}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Month" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">Day</SelectItem>
+                  <SelectItem value="week">Week</SelectItem>
+                  <SelectItem value="month">Month</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="md:col-span-2">
               <Label>Customer</Label>
@@ -166,15 +162,16 @@ export default function PeriodSalesPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <SummaryCard label="Sales Amount" value={totals.salesAmount} />
-        <SummaryCard label="Tax/Charges" value={totals.tax} />
-        <SummaryCard label="Net Amount" value={totals.netAmount} highlight />
+      <div className="grid gap-4 md:grid-cols-4">
+        <SummaryCard label="Total Sales" value={totals.totalAmount} />
+        <SummaryCard label="Received" value={totals.receivedAmount} />
+        <SummaryCard label="Balance" value={totals.balanceAmount} />
+        <SummaryCard label="Invoices" value={totals.invoiceCount.toString()} highlight />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Transactions</CardTitle>
+          <CardTitle className="text-lg">Summary</CardTitle>
         </CardHeader>
         <CardContent>
           <DataTable
@@ -183,17 +180,9 @@ export default function PeriodSalesPage() {
             isLoading={isLoading}
             searchable
             emptyMessage="No sales found"
-            onRowClick={(row) => openDetail({ type: "sale", id: row.id })}
           />
         </CardContent>
       </Card>
-
-      <ReportDetailDialog
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
     </div>
   );
 }
@@ -204,7 +193,7 @@ function SummaryCard({ label, value, highlight }: { label: string; value: string
       <CardContent className="pt-4 space-y-1">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
         <p className={`text-2xl font-semibold font-mono ${highlight ? "text-primary" : ""}`}>
-          Rs. {Number(value || 0).toLocaleString()}
+          {Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
         </p>
       </CardContent>
     </Card>

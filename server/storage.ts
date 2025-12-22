@@ -1,6 +1,12 @@
 import { db } from "./db";
 import { eq, and, desc, sql, gte, lte, lt, isNull, inArray, or } from "drizzle-orm";
 import {
+  computeAgingBuckets,
+  computeBalanceSheetValidation,
+  computeInventoryRollForward,
+  computeTrialBalanceTotals,
+} from "./reports/calculations";
+import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
   processing, sales, saleItems, ledgerEntries,
   type User, type InsertUser, type Account, type InsertAccount,
@@ -135,66 +141,151 @@ export interface IStorage {
   getCashTransactions(): Promise<CashTransaction[]>;
 
   // Reports
-  getStockReport(): Promise<{ product: Product; totalPurchased: string; totalSold: string; currentStock: string }[]>;
-  getTrialBalance(): Promise<{ account: Account; debit: string; credit: string }[]>;
-  getProfitLoss(startDate?: Date, endDate?: Date): Promise<{
-    totalPurchases: string;
-    totalSales: string;
-    expenses: string;
-    grossProfit: string;
-    netProfit: string;
-    purchaseCount: number;
-    saleCount: number;
+  getStockReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    productId?: number;
+    category?: string;
+    unit?: string;
+  }): Promise<{
+    rows: Array<{
+      productId: number;
+      itemCode: string;
+      itemName: string;
+      category: string;
+      unit: string;
+      openingQty: string;
+      openingValue: string;
+      inQty: string;
+      inValue: string;
+      outQty: string;
+      outValue: string;
+      closingQty: string;
+      closingValue: string;
+      avgCost: string;
+      currentStock: string;
+    }>;
+    totals: { openingQty: string; inQty: string; outQty: string; closingQty: string; closingValue: string };
+    validation: { rollForwardOk: boolean; rollForwardDifference: string };
   }>;
-
-  // New Accounting Reports (derived, no duplicate data)
-  getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number): Promise<{
+  getTrialBalance(asOfDate?: Date): Promise<{
+    rows: { account: Account; debit: string; credit: string }[];
+    totals: { debit: string; credit: string };
+    validation: { balanced: boolean; difference: string };
+  }>;
+  getProfitLoss(startDate?: Date, endDate?: Date): Promise<{
+    period: { fromDate: Date; toDate: Date };
+    revenue: string;
+    costOfSales: string;
+    grossProfit: string;
+    operatingExpenses: string;
+    netProfit: string;
+  }>;
+  getPurchaseReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    supplierId?: number;
+    productId?: number;
+    paymentStatus?: "paid" | "partial" | "unpaid";
+  }): Promise<{
     rows: Array<{
       id: number;
+      invoiceNumber: string;
       purchaseDate: Date;
       supplierId: number;
       supplierName: string;
-      purchaseAmount: string;
+      subtotal: string;
+      discount: string;
       tax: string;
-      netAmount: string;
-      invoiceNumber: string;
+      otherCharges: string;
+      total: string;
+      paid: string;
+      balance: string;
     }>;
-    totals: { purchaseAmount: string; tax: string; netAmount: string };
+    totals: { subtotal: string; discount: string; tax: string; otherCharges: string; total: string; paid: string; balance: string };
   }>;
-  getPeriodSales(startDate: Date, endDate: Date, customerId?: number): Promise<{
+  getSalesReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    customerId?: number;
+    productId?: number;
+    paymentStatus?: "paid" | "partial" | "unpaid";
+  }): Promise<{
     rows: Array<{
       id: number;
+      invoiceNumber: string;
       saleDate: Date;
       customerId: number;
       customerName: string;
-      salesAmount: string;
+      subtotal: string;
+      discount: string;
       tax: string;
-      netAmount: string;
-      invoiceNumber: string;
+      otherCharges: string;
+      total: string;
+      received: string;
+      balance: string;
     }>;
-    totals: { salesAmount: string; tax: string; netAmount: string };
+    totals: { subtotal: string; discount: string; tax: string; otherCharges: string; total: string; received: string; balance: string };
+  }>;
+
+  // New Accounting Reports (derived, no duplicate data)
+  getPeriodPurchases(
+    startDate: Date,
+    endDate: Date,
+    supplierId?: number,
+    groupBy?: "day" | "week" | "month",
+  ): Promise<{
+    rows: Array<{
+      period: string;
+      periodStart: Date;
+      periodEnd: Date;
+      totalAmount: string;
+      paidAmount: string;
+      balanceAmount: string;
+      invoiceCount: number;
+    }>;
+    totals: { totalAmount: string; paidAmount: string; balanceAmount: string; invoiceCount: number };
+  }>;
+  getPeriodSales(
+    startDate: Date,
+    endDate: Date,
+    customerId?: number,
+    groupBy?: "day" | "week" | "month",
+  ): Promise<{
+    rows: Array<{
+      period: string;
+      periodStart: Date;
+      periodEnd: Date;
+      totalAmount: string;
+      receivedAmount: string;
+      balanceAmount: string;
+      invoiceCount: number;
+    }>;
+    totals: { totalAmount: string; receivedAmount: string; balanceAmount: string; invoiceCount: number };
   }>;
   getGrossProfit(startDate: Date, endDate: Date): Promise<{
-    totalSales: string;
+    netSales: string;
     costOfGoodsSold: string;
     grossProfit: string;
-    rows?: Array<{ saleId: number; invoiceNumber: string; saleDate: Date; salesAmount: string; costOfGoodsSold: string; grossProfit: string }>;
+    grossMarginPercent: string;
+    rows?: Array<{ saleId: number; invoiceNumber: string; saleDate: Date; netSales: string; costOfGoodsSold: string; grossProfit: string }>;
   }>;
   getDayBook(startDate: Date, endDate: Date): Promise<{
-    openingBalance: string;
     rows: Array<{
+      entryId: number;
       date: Date;
-      openingBalance: string;
+      accountName: string;
       voucherType: string;
       voucherNo: string;
+      narration: string;
       debit: string;
       credit: string;
-      closingBalance: string;
       referenceType?: string | null;
       referenceId?: number | null;
-      narration?: string | null;
     }>;
-    closingBalance: string;
+    totals: { debit: string; credit: string };
+    validation: { balanced: boolean; difference: string };
+    dayTotals: Array<{ date: string; debit: string; credit: string; balanced: boolean }>;
   }>;
   getOutstandingCustomers(asOfDate: Date, customerId?: number): Promise<{
     rows: Array<{
@@ -207,8 +298,21 @@ export interface IStorage {
       outstandingAmount: string;
       dueDate: Date | null;
       saleDate: Date;
+      daysOutstanding: number;
+      bucket0To30: string;
+      bucket31To60: string;
+      bucket61To90: string;
+      bucket91Plus: string;
     }>;
-    totals: { invoiceAmount: string; receivedAmount: string; outstandingAmount: string };
+    totals: {
+      invoiceAmount: string;
+      receivedAmount: string;
+      outstandingAmount: string;
+      bucket0To30: string;
+      bucket31To60: string;
+      bucket61To90: string;
+      bucket91Plus: string;
+    };
   }>;
   getOutstandingSuppliers(asOfDate: Date, supplierId?: number): Promise<{
     rows: Array<{
@@ -221,8 +325,21 @@ export interface IStorage {
       outstandingAmount: string;
       dueDate: Date | null;
       purchaseDate: Date;
+      daysOutstanding: number;
+      bucket0To30: string;
+      bucket31To60: string;
+      bucket61To90: string;
+      bucket91Plus: string;
     }>;
-    totals: { billAmount: string; paidAmount: string; outstandingAmount: string };
+    totals: {
+      billAmount: string;
+      paidAmount: string;
+      outstandingAmount: string;
+      bucket0To30: string;
+      bucket31To60: string;
+      bucket61To90: string;
+      bucket91Plus: string;
+    };
   }>;
   getIncomeStatement(startDate: Date, endDate: Date): Promise<{
     period: { fromDate: Date; toDate: Date };
@@ -238,11 +355,13 @@ export interface IStorage {
     liabilities: { payables: string; expensesPayable: string; total: string };
     equity: { capital: string; retainedEarnings: string; total: string };
     totals: { assets: string; liabilitiesAndEquity: string };
+    validation: { balanced: boolean; difference: string };
   }>;
   getCapitalStatement(startDate: Date, endDate: Date): Promise<{
     openingCapital: string;
     additionalCapital: string;
     drawings: string;
+    netProfit: string;
     closingCapital: string;
   }>;
   getSalaryAccount(startDate: Date, endDate: Date): Promise<{
@@ -254,8 +373,10 @@ export interface IStorage {
       allowances: string;
       deductions: string;
       netSalary: string;
+      paidAmount: string;
+      balanceAmount: string;
     }>;
-    totals: { netSalary: string };
+    totals: { basicSalary: string; allowances: string; deductions: string; netSalary: string; paidAmount: string; balanceAmount: string };
   }>;
   getReportDetail(referenceType: string, referenceId: number): Promise<any>;
 
@@ -344,6 +465,30 @@ function endOfMonth(d: Date): Date {
   const dt = new Date(d.getFullYear(), d.getMonth() + 1, 0);
   dt.setHours(23, 59, 59, 999);
   return dt;
+}
+
+function startOfWeek(d: Date): Date {
+  const dt = new Date(d);
+  const day = dt.getDay();
+  const diff = (day + 6) % 7; // Monday start
+  dt.setDate(dt.getDate() - diff);
+  dt.setHours(0, 0, 0, 0);
+  return dt;
+}
+
+function endOfWeek(d: Date): Date {
+  const dt = startOfWeek(d);
+  dt.setDate(dt.getDate() + 6);
+  dt.setHours(23, 59, 59, 999);
+  return dt;
+}
+
+function weekNumber(d: Date): number {
+  const yearStart = startOfWeek(new Date(d.getFullYear(), 0, 1));
+  const target = startOfWeek(d);
+  const diffMs = target.getTime() - yearStart.getTime();
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  return Math.floor(diffDays / 7) + 1;
 }
 
 type NormalSide = "DEBIT" | "CREDIT";
@@ -1429,14 +1574,17 @@ export class DatabaseStorage implements IStorage {
       const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
+      const unaccountedCharges = charges
+        .map((charge) => ({ charge, amount: parseAmount(charge.amount) }))
+        .filter(({ charge, amount }) => amount > 0 && !charge.accountId);
       const brokerCommissionPercent = parseAmount(purchase.brokerCommissionPercent || "0");
       const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
 
       const lineSubtotal = subtotal + brokerCommission;
       const taxAmount = parseAmount((purchase as any).taxAmount || 0);
       const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
-      const paidAmount = parseAmount((purchase as any).paidAmount || 0);
-      const balanceDue = grandAmount - paidAmount;
+      const paidAmount = 0;
+      const balanceDue = grandAmount;
       const amountInWords = `${toWords(Math.round(grandAmount))} only`;
 
       const newPurchase = tx.insert(purchases).values({
@@ -1494,10 +1642,10 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      // Double-entry: Dr Inventory/Expense (+Tax Input if any), Cr Supplier (AP)
+      // Double-entry: Dr Inventory/Expense (+Tax Input/charges), Cr Supplier (AP)
       const debitAccountId = purchase.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
       const supplierAccountId = purchase.supplierId;
-      const baseAmount = Math.max(grandAmount - taxAmount, 0);
+      const baseAmount = Math.max(lineSubtotal, 0);
 
       if (baseAmount > 0) {
         this.postLedgerEntry(client, {
@@ -1505,6 +1653,19 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount: baseAmount.toString(),
           description: `Purchase Invoice ${invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+      }
+
+      for (const { charge, amount } of unaccountedCharges) {
+        const entryType = charge.mode === "less" ? "credit" : "debit";
+        this.postLedgerEntry(client, {
+          accountId: debitAccountId,
+          transactionType: entryType,
+          amount: amount.toString(),
+          description: `Purchase Charge ${invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
           referenceType: "purchase",
           referenceId: newPurchase.id,
           entryDate: postingDate,
@@ -1539,6 +1700,21 @@ export class DatabaseStorage implements IStorage {
           postingDate,
           createdAt: new Date(),
         } as any).run();
+      }
+
+      for (const charge of charges) {
+        const amt = parseAmount(charge.amount);
+        if (!charge.accountId || amt <= 0) continue;
+        const entryType = charge.mode === "less" ? "credit" : "debit";
+        this.postLedgerEntry(client, {
+          accountId: charge.accountId,
+          transactionType: entryType,
+          amount: amt.toString(),
+          description: `Purchase Charge ${invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
       }
 
       this.postLedgerEntry(client, {
@@ -1622,13 +1798,16 @@ export class DatabaseStorage implements IStorage {
       const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
+      const unaccountedCharges = charges
+        .map((charge) => ({ charge, amount: parseAmount(charge.amount) }))
+        .filter(({ charge, amount }) => amount > 0 && !charge.accountId);
       const brokerCommissionPercent = parseAmount((purchase as any).brokerCommissionPercent ?? existing.brokerCommissionPercent ?? "0");
       const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
 
       const lineSubtotal = subtotal + brokerCommission;
       const taxAmount = parseAmount((purchase as any).taxAmount ?? existing.taxAmount ?? 0);
       const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
-      const paidAmount = parseAmount((purchase as any).paidAmount ?? existing.paidAmount ?? 0);
+      const paidAmount = parseAmount(existing.paidAmount ?? 0);
       const balanceDue = grandAmount - paidAmount;
       const amountInWords = `${toWords(Math.round(grandAmount))} only`;
 
@@ -1670,7 +1849,7 @@ export class DatabaseStorage implements IStorage {
       // Post fresh double-entry for updated purchase
       const debitAccountId = purchase.expenseAccountId ?? existing.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
       const supplierAccountId = purchase.supplierId ?? existing.supplierId;
-      const baseAmount = Math.max(grandAmount - taxAmount, 0);
+      const baseAmount = Math.max(lineSubtotal, 0);
 
       if (baseAmount > 0) {
         this.postLedgerEntry(client, {
@@ -1678,6 +1857,19 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount: baseAmount.toString(),
           description: `Purchase Update ${existing.invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+      }
+
+      for (const { charge, amount } of unaccountedCharges) {
+        const entryType = charge.mode === "less" ? "credit" : "debit";
+        this.postLedgerEntry(client, {
+          accountId: debitAccountId,
+          transactionType: entryType,
+          amount: amount.toString(),
+          description: `Purchase Charge ${existing.invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
           referenceType: "purchase",
           referenceId: id,
           entryDate: postingDate,
@@ -1699,6 +1891,21 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount: taxAmount.toString(),
           description: `Purchase Tax ${existing.invoiceNumber}`,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+      }
+
+      for (const charge of charges) {
+        const amt = parseAmount(charge.amount);
+        if (!charge.accountId || amt <= 0) continue;
+        const entryType = charge.mode === "less" ? "credit" : "debit";
+        this.postLedgerEntry(client, {
+          accountId: charge.accountId,
+          transactionType: entryType,
+          amount: amt.toString(),
+          description: `Purchase Charge ${existing.invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
           referenceType: "purchase",
           referenceId: id,
           entryDate: postingDate,
@@ -1737,7 +1944,7 @@ export class DatabaseStorage implements IStorage {
       const priorEntries = tx
         .select()
         .from(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id), isNull(ledgerEntries.deletedAt)))
+        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
         .all();
       for (const le of priorEntries) {
         this.postLedgerEntry(client, {
@@ -1749,10 +1956,6 @@ export class DatabaseStorage implements IStorage {
           referenceId: id,
           entryDate: postingDate,
         });
-        tx.update(ledgerEntries)
-          .set({ deletedAt: new Date(), deletedBy })
-          .where(eq(ledgerEntries.id, le.id))
-          .run();
       }
 
       // Rollback stock impact
@@ -1918,9 +2121,10 @@ export class DatabaseStorage implements IStorage {
         }
       }
 
-      const charges = parseAmount(sale.loadingCharges || "0") +
-                     parseAmount(sale.weighingCharges || "0") +
-                     parseAmount(sale.otherCharges || "0");
+      const loadingCharge = parseAmount(sale.loadingCharges || "0");
+      const weighingCharge = parseAmount(sale.weighingCharges || "0");
+      const otherCharge = parseAmount(sale.otherCharges || "0");
+      const charges = loadingCharge + weighingCharge + otherCharge;
       const taxAmount = parseAmount((sale as any).taxAmount || 0);
       const totalAmount = subtotal + charges + taxAmount;
 
@@ -1954,13 +2158,32 @@ export class DatabaseStorage implements IStorage {
       });
 
       const revenueAccount = this.ensureSystemAccount(client, "Sales Revenue", "income");
-      const baseRevenue = Math.max(totalAmount - taxAmount, 0);
+      const baseRevenue = Math.max(subtotal, 0);
       if (baseRevenue > 0) {
         this.postLedgerEntry(client, {
           accountId: revenueAccount.id,
           transactionType: "credit",
           amount: baseRevenue.toString(),
           description: `Sale Revenue ${invoiceNumber}`,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+      }
+
+      const chargeLines = [
+        { label: "Loading", amount: loadingCharge },
+        { label: "Weighing", amount: weighingCharge },
+        { label: "Other", amount: otherCharge },
+      ];
+      for (const line of chargeLines) {
+        if (line.amount === 0) continue;
+        const entryType = line.amount > 0 ? "credit" : "debit";
+        this.postLedgerEntry(client, {
+          accountId: revenueAccount.id,
+          transactionType: entryType,
+          amount: Math.abs(line.amount).toString(),
+          description: `Sale Charge ${invoiceNumber} (${line.label}, ${line.amount < 0 ? "less" : "add"})`,
           referenceType: "sale",
           referenceId: newSale.id,
           entryDate: postingDate,
@@ -2604,44 +2827,244 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Reports
-  async getStockReport(): Promise<{ product: Product; totalPurchased: string; totalSold: string; currentStock: string }[]> {
-    const allProducts = await this.getProducts();
-    const result = [];
+  async getStockReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    productId?: number;
+    category?: string;
+    unit?: string;
+  }) {
+    const from = filters?.fromDate;
+    const to = filters?.toDate ? endOfDay(filters.toDate) : undefined;
 
-    for (const product of allProducts) {
-      const [purchasedResult] = db.select({
-        total: sql<string>`COALESCE(SUM(${purchaseItems.netWeightKg}), 0)`
+    const productWhere = [];
+    if (filters?.productId) productWhere.push(eq(products.id, filters.productId));
+    if (filters?.category) productWhere.push(eq(products.productType, filters.category as any));
+    if (filters?.unit) productWhere.push(eq(products.unit, filters.unit));
+
+    const productRows = productWhere.length
+      ? db.select().from(products).where(and(...productWhere)).all()
+      : db.select().from(products).all();
+
+    const purchaseBase = [isNull(purchaseItems.deletedAt), isNull(purchases.deletedAt)];
+    const purchaseBefore = from
+      ? db
+          .select({
+            productId: purchaseItems.productId,
+            qty: sql<string>`COALESCE(SUM(CAST(${purchaseItems.netWeightKg} AS REAL)), 0)`,
+            value: sql<string>`COALESCE(SUM(CAST(${purchaseItems.amount} AS REAL)), 0)`,
+          })
+          .from(purchaseItems)
+          .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+          .where(and(...purchaseBase, lt(purchases.purchaseDate, from)))
+          .groupBy(purchaseItems.productId)
+          .all()
+      : [];
+    const purchaseIn = db
+      .select({
+        productId: purchaseItems.productId,
+        qty: sql<string>`COALESCE(SUM(CAST(${purchaseItems.netWeightKg} AS REAL)), 0)`,
+        value: sql<string>`COALESCE(SUM(CAST(${purchaseItems.amount} AS REAL)), 0)`,
       })
-        .from(purchaseItems)
-        .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
-        .where(and(eq(purchaseItems.productId, product.id), isNull(purchaseItems.deletedAt), isNull(purchases.deletedAt)))
-        .all();
+      .from(purchaseItems)
+      .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      .where(
+        and(
+          ...purchaseBase,
+          ...(from ? [gte(purchases.purchaseDate, from)] : []),
+          ...(to ? [lte(purchases.purchaseDate, to)] : []),
+        ),
+      )
+      .groupBy(purchaseItems.productId)
+      .all();
 
-      const [soldResult] = db.select({
-        total: sql<string>`COALESCE(SUM(${saleItems.quantity}), 0)`
-      }).from(saleItems).where(eq(saleItems.productId, product.id)).all();
+    const salesBefore = from
+      ? db
+          .select({
+            productId: saleItems.productId,
+            qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL)), 0)`,
+          })
+          .from(saleItems)
+          .leftJoin(sales, eq(saleItems.saleId, sales.id))
+          .where(lt(sales.saleDate, from))
+          .groupBy(saleItems.productId)
+          .all()
+      : [];
+    const salesIn = db
+      .select({
+        productId: saleItems.productId,
+        qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL)), 0)`,
+      })
+      .from(saleItems)
+      .leftJoin(sales, eq(saleItems.saleId, sales.id))
+      .where(
+        and(
+          ...(from ? [gte(sales.saleDate, from)] : []),
+          ...(to ? [lte(sales.saleDate, to)] : []),
+        ),
+      )
+      .groupBy(saleItems.productId)
+      .all();
 
-      result.push({
-        product,
-        totalPurchased: purchasedResult?.total || "0",
-        totalSold: soldResult?.total || "0",
-        currentStock: product.currentStock,
+    const processingOutBefore = from
+      ? db
+          .select({
+            productId: processing.sourceProductId,
+            qty: sql<string>`COALESCE(SUM(CAST(${processing.sourceQuantity} AS REAL)), 0)`,
+          })
+          .from(processing)
+          .where(lt(processing.startDate, from))
+          .groupBy(processing.sourceProductId)
+          .all()
+      : [];
+    const processingOutIn = db
+      .select({
+        productId: processing.sourceProductId,
+        qty: sql<string>`COALESCE(SUM(CAST(${processing.sourceQuantity} AS REAL)), 0)`,
+      })
+      .from(processing)
+      .where(
+        and(
+          ...(from ? [gte(processing.startDate, from)] : []),
+          ...(to ? [lte(processing.startDate, to)] : []),
+        ),
+      )
+      .groupBy(processing.sourceProductId)
+      .all();
+
+    const processingInBefore = from
+      ? db
+          .select({
+            productId: processing.outputProductId,
+            qty: sql<string>`COALESCE(SUM(CAST(${processing.outputQuantity} AS REAL)), 0)`,
+          })
+          .from(processing)
+          .where(
+            and(
+              sql`${processing.completedDate} IS NOT NULL`,
+              lt(processing.completedDate, from),
+            ),
+          )
+          .groupBy(processing.outputProductId)
+          .all()
+      : [];
+    const processingIn = db
+      .select({
+        productId: processing.outputProductId,
+        qty: sql<string>`COALESCE(SUM(CAST(${processing.outputQuantity} AS REAL)), 0)`,
+      })
+      .from(processing)
+      .where(
+        and(
+          sql`${processing.completedDate} IS NOT NULL`,
+          ...(from ? [gte(processing.completedDate, from)] : []),
+          ...(to ? [lte(processing.completedDate, to)] : []),
+        ),
+      )
+      .groupBy(processing.outputProductId)
+      .all();
+
+    const toQtyMap = (rows: Array<{ productId: number | null; qty: string }>) =>
+      new Map(rows.filter((r) => r.productId != null).map((r) => [r.productId as number, parseAmount(r.qty)]));
+    const toValueMap = (rows: Array<{ productId: number | null; value: string }>) =>
+      new Map(rows.filter((r) => r.productId != null).map((r) => [r.productId as number, parseAmount(r.value)]));
+
+    const purchaseBeforeQty = toQtyMap(purchaseBefore as any);
+    const purchaseBeforeValue = toValueMap(purchaseBefore as any);
+    const purchaseInQty = toQtyMap(purchaseIn as any);
+    const purchaseInValue = toValueMap(purchaseIn as any);
+    const salesBeforeQty = toQtyMap(salesBefore as any);
+    const salesInQty = toQtyMap(salesIn as any);
+    const procOutBeforeQty = toQtyMap(processingOutBefore as any);
+    const procOutInQty = toQtyMap(processingOutIn as any);
+    const procInBeforeQty = toQtyMap(processingInBefore as any);
+    const procInQty = toQtyMap(processingIn as any);
+
+    const rows = productRows.map((p) => {
+      const avgCost = parseAmount(p.avgPurchasePrice || "0");
+      const openingInQty = (purchaseBeforeQty.get(p.id) || 0) + (procInBeforeQty.get(p.id) || 0);
+      const openingOutQty = (salesBeforeQty.get(p.id) || 0) + (procOutBeforeQty.get(p.id) || 0);
+      const openingQty = openingInQty - openingOutQty;
+      const openingValue =
+        (purchaseBeforeValue.get(p.id) || 0) +
+        (procInBeforeQty.get(p.id) || 0) * avgCost -
+        ((salesBeforeQty.get(p.id) || 0) + (procOutBeforeQty.get(p.id) || 0)) * avgCost;
+
+      const inQty = (purchaseInQty.get(p.id) || 0) + (procInQty.get(p.id) || 0);
+      const inValue =
+        (purchaseInValue.get(p.id) || 0) + (procInQty.get(p.id) || 0) * avgCost;
+      const outQty = (salesInQty.get(p.id) || 0) + (procOutInQty.get(p.id) || 0);
+      const outValue = outQty * avgCost;
+
+      const roll = computeInventoryRollForward({
+        openingQty,
+        openingValue,
+        inQty,
+        inValue,
+        outQty,
+        outValue,
       });
-    }
 
-    return result;
+      return {
+        productId: p.id,
+        itemCode: String(p.id),
+        itemName: p.name,
+        category: p.productType || "",
+        unit: p.unit,
+        openingQty: openingQty.toString(),
+        openingValue: openingValue.toString(),
+        inQty: inQty.toString(),
+        inValue: inValue.toString(),
+        outQty: outQty.toString(),
+        outValue: outValue.toString(),
+        closingQty: roll.closingQty.toString(),
+        closingValue: roll.closingValue.toString(),
+        avgCost: roll.avgCost.toString(),
+        currentStock: p.currentStock,
+      };
+    });
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.openingQty += parseAmount(r.openingQty);
+        acc.inQty += parseAmount(r.inQty);
+        acc.outQty += parseAmount(r.outQty);
+        acc.closingQty += parseAmount(r.closingQty);
+        acc.closingValue += parseAmount(r.closingValue);
+        return acc;
+      },
+      { openingQty: 0, inQty: 0, outQty: 0, closingQty: 0, closingValue: 0 },
+    );
+
+    const rollForwardDifference = totals.openingQty + totals.inQty - totals.outQty - totals.closingQty;
+
+    return {
+      rows,
+      totals: {
+        openingQty: totals.openingQty.toString(),
+        inQty: totals.inQty.toString(),
+        outQty: totals.outQty.toString(),
+        closingQty: totals.closingQty.toString(),
+        closingValue: totals.closingValue.toString(),
+      },
+      validation: {
+        rollForwardOk: Math.abs(rollForwardDifference) < 0.0001,
+        rollForwardDifference: rollForwardDifference.toString(),
+      },
+    };
   }
 
-  async getTrialBalance(): Promise<{ account: Account; debit: string; credit: string }[]> {
+  async getTrialBalance(asOfDate?: Date) {
     const allAccounts = await this.getAccounts();
     const result = [];
+    const asOf = asOfDate ? endOfDay(asOfDate) : undefined;
 
     for (const account of allAccounts) {
       const normal = normalSideForAccountType(account.type);
       const [movementRow] = db
         .select({ total: ledgerSumByNormal(normal) })
         .from(ledgerEntries)
-        .where(eq(ledgerEntries.accountId, account.id))
+        .where(and(eq(ledgerEntries.accountId, account.id), ...(asOf ? [lte(ledgerEntries.entryDate, asOf)] : [])))
         .all();
 
       const opening = parseAmount(account.openingBalance || "0");
@@ -2665,136 +3088,188 @@ export class DatabaseStorage implements IStorage {
       });
     }
 
-    return result;
-  }
-
-  async getProfitLoss(startDate?: Date, endDate?: Date): Promise<{
-    totalPurchases: string;
-    totalSales: string;
-    expenses: string;
-    grossProfit: string;
-    netProfit: string;
-    purchaseCount: number;
-    saleCount: number;
-  }> {
-    const from = startDate ?? new Date(0);
-    const to = endDate ? endOfDay(endDate) : new Date();
-
-    const purchaseConditions = [];
-    if (from) purchaseConditions.push(gte(purchases.purchaseDate, from));
-    if (to) purchaseConditions.push(lte(purchases.purchaseDate, to));
-
-    const purchaseQuery = db.select({
-      total: sql<string>`COALESCE(SUM(${purchases.totalAmount}), 0)`,
-      count: sql<number>`COUNT(*)`
-    }).from(purchases);
-    const [purchaseTotal] = (purchaseConditions.length
-      ? purchaseQuery.where(and(...purchaseConditions))
-      : purchaseQuery
-    ).all();
-
-    const saleConditions = [];
-    if (from) saleConditions.push(gte(sales.saleDate, from));
-    if (to) saleConditions.push(lte(sales.saleDate, to));
-
-    const saleQuery = db.select({
-      total: sql<string>`COALESCE(SUM(${sales.totalAmount}), 0)`,
-      count: sql<number>`COUNT(*)`
-    }).from(sales);
-    const [saleTotal] = (saleConditions.length
-      ? saleQuery.where(and(...saleConditions))
-      : saleQuery
-    ).all();
-
-    const gross = await this.getGrossProfit(from, to);
-    const expenseTotal = await this.sumExpenseMovements(from, to);
-    const netProfit = parseAmount(gross.grossProfit) - expenseTotal;
+    const summary = computeTrialBalanceTotals(result);
 
     return {
-      totalPurchases: purchaseTotal?.total || "0",
-      totalSales: gross.totalSales,
-      expenses: expenseTotal.toString(),
-      grossProfit: gross.grossProfit,
-      netProfit: netProfit.toString(),
-      purchaseCount: purchaseTotal?.count ?? 0,
-      saleCount: saleTotal?.count ?? 0,
+      rows: result,
+      totals: summary.totals,
+      validation: { balanced: summary.balanced, difference: summary.difference },
     };
   }
 
-  async getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number) {
-    const from = startDate;
-    const to = endOfDay(endDate);
-    const conditions = [gte(purchases.purchaseDate, from), lte(purchases.purchaseDate, to), isNull(purchases.deletedAt)];
-    if (supplierId) conditions.push(eq(purchases.supplierId, supplierId));
+  async getProfitLoss(startDate?: Date, endDate?: Date) {
+    const from = startDate ?? new Date(0);
+    const to = endDate ? endOfDay(endDate) : endOfDay(new Date());
 
-    const baseRows = db
+    const incomeIds = db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(eq(accounts.type, "income" as any))
+      .all()
+      .map((r) => r.id);
+    const cogsIds = db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(eq(accounts.type, "cogs" as any))
+      .all()
+      .map((r) => r.id);
+
+    const [revenueRow] = incomeIds.length
+      ? db
+          .select({ total: ledgerSumByNormal("CREDIT") })
+          .from(ledgerEntries)
+          .where(and(inArray(ledgerEntries.accountId, incomeIds), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+          .all()
+      : [{ total: "0" } as any];
+
+    const [cogsRow] = cogsIds.length
+      ? db
+          .select({ total: ledgerSumByNormal("DEBIT") })
+          .from(ledgerEntries)
+          .where(and(inArray(ledgerEntries.accountId, cogsIds), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+          .all()
+      : [{ total: "0" } as any];
+
+    const operatingExpenses = await this.sumExpenseMovements(from, to);
+    const revenue = parseAmount(revenueRow?.total || "0");
+    const costOfSales = parseAmount(cogsRow?.total || "0");
+    const grossProfit = revenue - costOfSales;
+    const netProfit = grossProfit - operatingExpenses;
+
+    return {
+      period: { fromDate: from, toDate: to },
+      revenue: revenue.toString(),
+      costOfSales: costOfSales.toString(),
+      grossProfit: grossProfit.toString(),
+      operatingExpenses: operatingExpenses.toString(),
+      netProfit: netProfit.toString(),
+    };
+  }
+
+  async getPurchaseReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    supplierId?: number;
+    productId?: number;
+    paymentStatus?: "paid" | "partial" | "unpaid";
+  }) {
+    const conditions = [isNull(purchases.deletedAt)];
+    if (filters?.fromDate) conditions.push(gte(purchases.purchaseDate, filters.fromDate));
+    if (filters?.toDate) conditions.push(lte(purchases.purchaseDate, endOfDay(filters.toDate)));
+    if (filters?.supplierId) conditions.push(eq(purchases.supplierId, filters.supplierId));
+
+    if (filters?.productId) {
+      const purchaseIds = db
+        .select({ purchaseId: purchaseItems.purchaseId })
+        .from(purchaseItems)
+        .where(and(eq(purchaseItems.productId, filters.productId), isNull(purchaseItems.deletedAt)))
+        .all()
+        .map((r) => r.purchaseId);
+      if (!purchaseIds.length) {
+        return { rows: [], totals: { subtotal: "0", discount: "0", tax: "0", otherCharges: "0", total: "0", paid: "0", balance: "0" } };
+      }
+      conditions.push(inArray(purchases.id, purchaseIds));
+    }
+
+    const rows = db
       .select({
         id: purchases.id,
         invoiceNumber: purchases.invoiceNumber,
         purchaseDate: purchases.purchaseDate,
         supplierId: purchases.supplierId,
         supplierName: accounts.name,
-        purchaseAmount: purchases.subtotal,
-        netAmount: purchases.totalAmount,
+        subtotal: purchases.subtotal,
+        discount: purchases.chargesLess,
+        tax: purchases.taxAmount,
+        otherCharges: purchases.chargesAdd,
+        total: purchases.totalAmount,
+        paid: purchases.paidAmount,
       })
       .from(purchases)
       .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
       .where(and(...conditions))
       .orderBy(desc(purchases.purchaseDate))
-      .all();
+      .all()
+      .map((r) => {
+        const total = parseAmount(r.total || "0");
+        const paid = parseAmount(r.paid || "0");
+        const balance = Math.max(total - paid, 0);
+        return {
+          id: r.id,
+          invoiceNumber: r.invoiceNumber,
+          purchaseDate: new Date(r.purchaseDate as any),
+          supplierId: r.supplierId,
+          supplierName: r.supplierName || "",
+          subtotal: parseAmount(r.subtotal || "0").toString(),
+          discount: parseAmount(r.discount || "0").toString(),
+          tax: parseAmount(r.tax || "0").toString(),
+          otherCharges: parseAmount(r.otherCharges || "0").toString(),
+          total: total.toString(),
+          paid: paid.toString(),
+          balance: balance.toString(),
+        };
+      })
+      .filter((r) => {
+        if (!filters?.paymentStatus) return true;
+        const total = parseAmount(r.total);
+        const paid = parseAmount(r.paid);
+        if (filters.paymentStatus === "paid") return paid >= total && total > 0;
+        if (filters.paymentStatus === "unpaid") return paid <= 0 && total > 0;
+        return paid > 0 && paid < total;
+      });
 
-    const purchaseIds = baseRows.map((r) => r.id);
-    const taxRows = purchaseIds.length
-      ? db
-          .select({
-            purchaseId: purchaseCharges.purchaseId,
-            tax: sql<string>`COALESCE(SUM(CASE WHEN ${purchaseCharges.type} = 'market_fee' THEN CAST(${purchaseCharges.amount} AS REAL) ELSE 0 END), 0)`,
-          })
-          .from(purchaseCharges)
-          .where(inArray(purchaseCharges.purchaseId, purchaseIds))
-          .groupBy(purchaseCharges.purchaseId)
-          .all()
-      : [];
-    const taxByPurchaseId = new Map(taxRows.map((r) => [r.purchaseId, r.tax]));
-
-    let purchaseAmountTotal = 0;
-    let taxTotal = 0;
-    let netTotal = 0;
-
-    const rows = baseRows.map((r) => {
-      const tax = parseAmount(taxByPurchaseId.get(r.id) || "0");
-      const purchaseAmount = parseAmount(r.purchaseAmount || "0");
-      const netAmount = parseAmount(r.netAmount || "0");
-      purchaseAmountTotal += purchaseAmount;
-      taxTotal += tax;
-      netTotal += netAmount;
-      return {
-        id: r.id,
-        invoiceNumber: r.invoiceNumber,
-        purchaseDate: new Date(r.purchaseDate as any),
-        supplierId: r.supplierId,
-        supplierName: r.supplierName || "",
-        purchaseAmount: purchaseAmount.toString(),
-        tax: tax.toString(),
-        netAmount: netAmount.toString(),
-      };
-    });
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.subtotal += parseAmount(r.subtotal);
+        acc.discount += parseAmount(r.discount);
+        acc.tax += parseAmount(r.tax);
+        acc.otherCharges += parseAmount(r.otherCharges);
+        acc.total += parseAmount(r.total);
+        acc.paid += parseAmount(r.paid);
+        acc.balance += parseAmount(r.balance);
+        return acc;
+      },
+      { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, paid: 0, balance: 0 },
+    );
 
     return {
       rows,
       totals: {
-        purchaseAmount: purchaseAmountTotal.toString(),
-        tax: taxTotal.toString(),
-        netAmount: netTotal.toString(),
+        subtotal: totals.subtotal.toString(),
+        discount: totals.discount.toString(),
+        tax: totals.tax.toString(),
+        otherCharges: totals.otherCharges.toString(),
+        total: totals.total.toString(),
+        paid: totals.paid.toString(),
+        balance: totals.balance.toString(),
       },
     };
   }
 
-  async getPeriodSales(startDate: Date, endDate: Date, customerId?: number) {
-    const from = startDate;
-    const to = endOfDay(endDate);
-    const conditions = [gte(sales.saleDate, from), lte(sales.saleDate, to)];
-    if (customerId) conditions.push(eq(sales.customerId, customerId));
+  async getSalesReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    customerId?: number;
+    productId?: number;
+    paymentStatus?: "paid" | "partial" | "unpaid";
+  }) {
+    const conditions = [];
+    if (filters?.fromDate) conditions.push(gte(sales.saleDate, filters.fromDate));
+    if (filters?.toDate) conditions.push(lte(sales.saleDate, endOfDay(filters.toDate)));
+    if (filters?.customerId) conditions.push(eq(sales.customerId, filters.customerId));
+
+    if (filters?.productId) {
+      const saleIds = db
+        .select({ saleId: saleItems.saleId })
+        .from(saleItems)
+        .where(eq(saleItems.productId, filters.productId))
+        .all()
+        .map((r) => r.saleId);
+      if (!saleIds.length) {
+        return { rows: [], totals: { subtotal: "0", discount: "0", tax: "0", otherCharges: "0", total: "0", received: "0", balance: "0" } };
+      }
+      conditions.push(inArray(sales.id, saleIds));
+    }
 
     const rows = db
       .select({
@@ -2803,11 +3278,13 @@ export class DatabaseStorage implements IStorage {
         saleDate: sales.saleDate,
         customerId: sales.customerId,
         customerName: accounts.name,
-        salesAmount: sales.subtotal,
-        netAmount: sales.totalAmount,
+        subtotal: sales.subtotal,
+        tax: sales.taxAmount,
         loading: sales.loadingCharges,
         weighing: sales.weighingCharges,
         other: sales.otherCharges,
+        total: sales.totalAmount,
+        received: sales.paidAmount,
       })
       .from(sales)
       .leftJoin(accounts, eq(sales.customerId, accounts.id))
@@ -2815,37 +3292,238 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(sales.saleDate))
       .all()
       .map((r) => {
-        const salesAmount = parseAmount(r.salesAmount || "0");
-        const tax = parseAmount(r.loading || "0") + parseAmount(r.weighing || "0") + parseAmount(r.other || "0");
-        const netAmount = parseAmount(r.netAmount || "0");
+        const total = parseAmount(r.total || "0");
+        const received = parseAmount(r.received || "0");
+        const balance = Math.max(total - received, 0);
+        const otherCharges = parseAmount(r.loading || "0") + parseAmount(r.weighing || "0") + parseAmount(r.other || "0");
         return {
           id: r.id,
           invoiceNumber: r.invoiceNumber,
           saleDate: new Date(r.saleDate as any),
           customerId: r.customerId,
           customerName: r.customerName || "",
-          salesAmount: salesAmount.toString(),
-          tax: tax.toString(),
-          netAmount: netAmount.toString(),
+          subtotal: parseAmount(r.subtotal || "0").toString(),
+          discount: "0",
+          tax: parseAmount(r.tax || "0").toString(),
+          otherCharges: otherCharges.toString(),
+          total: total.toString(),
+          received: received.toString(),
+          balance: balance.toString(),
         };
+      })
+      .filter((r) => {
+        if (!filters?.paymentStatus) return true;
+        const total = parseAmount(r.total);
+        const received = parseAmount(r.received);
+        if (filters.paymentStatus === "paid") return received >= total && total > 0;
+        if (filters.paymentStatus === "unpaid") return received <= 0 && total > 0;
+        return received > 0 && received < total;
       });
 
     const totals = rows.reduce(
       (acc, r) => {
-        acc.salesAmount += parseAmount(r.salesAmount);
+        acc.subtotal += parseAmount(r.subtotal);
+        acc.discount += parseAmount(r.discount);
         acc.tax += parseAmount(r.tax);
-        acc.netAmount += parseAmount(r.netAmount);
+        acc.otherCharges += parseAmount(r.otherCharges);
+        acc.total += parseAmount(r.total);
+        acc.received += parseAmount(r.received);
+        acc.balance += parseAmount(r.balance);
         return acc;
       },
-      { salesAmount: 0, tax: 0, netAmount: 0 },
+      { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, received: 0, balance: 0 },
     );
 
     return {
       rows,
       totals: {
-        salesAmount: totals.salesAmount.toString(),
+        subtotal: totals.subtotal.toString(),
+        discount: totals.discount.toString(),
         tax: totals.tax.toString(),
-        netAmount: totals.netAmount.toString(),
+        otherCharges: totals.otherCharges.toString(),
+        total: totals.total.toString(),
+        received: totals.received.toString(),
+        balance: totals.balance.toString(),
+      },
+    };
+  }
+
+  async getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number, groupBy: "day" | "week" | "month" = "month") {
+    const from = startDate;
+    const to = endOfDay(endDate);
+    const conditions = [gte(purchases.purchaseDate, from), lte(purchases.purchaseDate, to), isNull(purchases.deletedAt)];
+    if (supplierId) conditions.push(eq(purchases.supplierId, supplierId));
+
+    const baseRows = db
+      .select({
+        purchaseDate: purchases.purchaseDate,
+        totalAmount: purchases.totalAmount,
+        paidAmount: purchases.paidAmount,
+      })
+      .from(purchases)
+      .where(and(...conditions))
+      .orderBy(purchases.purchaseDate)
+      .all();
+
+    const grouped = new Map<string, { periodStart: Date; periodEnd: Date; totalAmount: number; paidAmount: number; balanceAmount: number; invoiceCount: number }>();
+
+    for (const row of baseRows) {
+      const dt = new Date(row.purchaseDate as any);
+      const periodStart =
+        groupBy === "day"
+          ? new Date(dt.getFullYear(), dt.getMonth(), dt.getDate())
+          : groupBy === "week"
+            ? startOfWeek(dt)
+            : startOfMonth(dt);
+      const periodEnd =
+        groupBy === "day" ? endOfDay(periodStart) : groupBy === "week" ? endOfWeek(dt) : endOfMonth(dt);
+
+      const key =
+        groupBy === "day"
+          ? periodStart.toISOString().slice(0, 10)
+          : groupBy === "week"
+            ? `${periodStart.getFullYear()}-W${String(weekNumber(periodStart)).padStart(2, "0")}`
+            : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, "0")}`;
+
+      const totalAmount = parseAmount(row.totalAmount || "0");
+      const paidAmount = parseAmount(row.paidAmount || "0");
+      const balanceAmount = Math.max(totalAmount - paidAmount, 0);
+
+      const current = grouped.get(key) || {
+        periodStart,
+        periodEnd,
+        totalAmount: 0,
+        paidAmount: 0,
+        balanceAmount: 0,
+        invoiceCount: 0,
+      };
+      current.totalAmount += totalAmount;
+      current.paidAmount += paidAmount;
+      current.balanceAmount += balanceAmount;
+      current.invoiceCount += 1;
+      grouped.set(key, current);
+    }
+
+    const rows = Array.from(grouped.entries())
+      .map(([period, data]) => ({
+        period,
+        periodStart: data.periodStart,
+        periodEnd: data.periodEnd,
+        totalAmount: data.totalAmount.toString(),
+        paidAmount: data.paidAmount.toString(),
+        balanceAmount: data.balanceAmount.toString(),
+        invoiceCount: data.invoiceCount,
+      }))
+      .sort((a, b) => new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime());
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.totalAmount += parseAmount(r.totalAmount);
+        acc.paidAmount += parseAmount(r.paidAmount);
+        acc.balanceAmount += parseAmount(r.balanceAmount);
+        acc.invoiceCount += r.invoiceCount;
+        return acc;
+      },
+      { totalAmount: 0, paidAmount: 0, balanceAmount: 0, invoiceCount: 0 },
+    );
+
+    return {
+      rows,
+      totals: {
+        totalAmount: totals.totalAmount.toString(),
+        paidAmount: totals.paidAmount.toString(),
+        balanceAmount: totals.balanceAmount.toString(),
+        invoiceCount: totals.invoiceCount,
+      },
+    };
+  }
+
+  async getPeriodSales(startDate: Date, endDate: Date, customerId?: number, groupBy: "day" | "week" | "month" = "month") {
+    const from = startDate;
+    const to = endOfDay(endDate);
+    const conditions = [gte(sales.saleDate, from), lte(sales.saleDate, to)];
+    if (customerId) conditions.push(eq(sales.customerId, customerId));
+
+    const baseRows = db
+      .select({
+        saleDate: sales.saleDate,
+        totalAmount: sales.totalAmount,
+        paidAmount: sales.paidAmount,
+      })
+      .from(sales)
+      .where(and(...conditions))
+      .orderBy(sales.saleDate)
+      .all();
+
+    const grouped = new Map<string, { periodStart: Date; periodEnd: Date; totalAmount: number; receivedAmount: number; balanceAmount: number; invoiceCount: number }>();
+
+    for (const row of baseRows) {
+      const dt = new Date(row.saleDate as any);
+      const periodStart =
+        groupBy === "day"
+          ? new Date(dt.getFullYear(), dt.getMonth(), dt.getDate())
+          : groupBy === "week"
+            ? startOfWeek(dt)
+            : startOfMonth(dt);
+      const periodEnd =
+        groupBy === "day" ? endOfDay(periodStart) : groupBy === "week" ? endOfWeek(dt) : endOfMonth(dt);
+
+      const key =
+        groupBy === "day"
+          ? periodStart.toISOString().slice(0, 10)
+          : groupBy === "week"
+            ? `${periodStart.getFullYear()}-W${String(weekNumber(periodStart)).padStart(2, "0")}`
+            : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, "0")}`;
+
+      const totalAmount = parseAmount(row.totalAmount || "0");
+      const receivedAmount = parseAmount(row.paidAmount || "0");
+      const balanceAmount = Math.max(totalAmount - receivedAmount, 0);
+
+      const current = grouped.get(key) || {
+        periodStart,
+        periodEnd,
+        totalAmount: 0,
+        receivedAmount: 0,
+        balanceAmount: 0,
+        invoiceCount: 0,
+      };
+      current.totalAmount += totalAmount;
+      current.receivedAmount += receivedAmount;
+      current.balanceAmount += balanceAmount;
+      current.invoiceCount += 1;
+      grouped.set(key, current);
+    }
+
+    const rows = Array.from(grouped.entries())
+      .map(([period, data]) => ({
+        period,
+        periodStart: data.periodStart,
+        periodEnd: data.periodEnd,
+        totalAmount: data.totalAmount.toString(),
+        receivedAmount: data.receivedAmount.toString(),
+        balanceAmount: data.balanceAmount.toString(),
+        invoiceCount: data.invoiceCount,
+      }))
+      .sort((a, b) => new Date(a.periodStart).getTime() - new Date(b.periodStart).getTime());
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.totalAmount += parseAmount(r.totalAmount);
+        acc.receivedAmount += parseAmount(r.receivedAmount);
+        acc.balanceAmount += parseAmount(r.balanceAmount);
+        acc.invoiceCount += r.invoiceCount;
+        return acc;
+      },
+      { totalAmount: 0, receivedAmount: 0, balanceAmount: 0, invoiceCount: 0 },
+    );
+
+    return {
+      rows,
+      totals: {
+        totalAmount: totals.totalAmount.toString(),
+        receivedAmount: totals.receivedAmount.toString(),
+        balanceAmount: totals.balanceAmount.toString(),
+        invoiceCount: totals.invoiceCount,
       },
     };
   }
@@ -2854,15 +3532,10 @@ export class DatabaseStorage implements IStorage {
     const from = startDate;
     const to = endOfDay(endDate);
 
-    const cogsSystemAccount = this.ensureSystemAccount(db, "Cost of Goods Sold", "cogs");
     const incomeAccounts = db.select({ id: accounts.id }).from(accounts).where(eq(accounts.type, "income" as any)).all();
-    const cogsAccounts = db
-      .select({ id: accounts.id })
-      .from(accounts)
-      .where(eq(accounts.type, "cogs" as any))
-      .all();
-    const cogsAccountIds = [...new Set([cogsSystemAccount.id, ...cogsAccounts.map((a) => a.id)])];
+    const cogsAccounts = db.select({ id: accounts.id }).from(accounts).where(eq(accounts.type, "cogs" as any)).all();
     const incomeAccountIds = incomeAccounts.map((a) => a.id);
+    const cogsAccountIds = cogsAccounts.map((a) => a.id);
 
     const [revenueRow] = incomeAccountIds.length
       ? db
@@ -2885,7 +3558,9 @@ export class DatabaseStorage implements IStorage {
         id: sales.id,
         invoiceNumber: sales.invoiceNumber,
         saleDate: sales.saleDate,
+        subtotal: sales.subtotal,
         totalAmount: sales.totalAmount,
+        taxAmount: sales.taxAmount,
       })
       .from(sales)
       .where(and(gte(sales.saleDate, from), lte(sales.saleDate, to)))
@@ -2915,142 +3590,169 @@ export class DatabaseStorage implements IStorage {
     );
 
     const rows = salesRows.map((s) => {
-      const salesAmount = parseAmount(s.totalAmount || "0");
+      const netSales = Math.max(parseAmount(s.totalAmount || "0") - parseAmount(s.taxAmount || "0"), 0);
       const cogs = parseAmount(cogsBySale.get(s.id) || "0");
-      const profit = salesAmount - cogs;
+      const profit = netSales - cogs;
       return {
         saleId: s.id,
         invoiceNumber: s.invoiceNumber,
         saleDate: new Date(s.saleDate as any),
-        salesAmount: salesAmount.toString(),
+        netSales: netSales.toString(),
         costOfGoodsSold: cogs.toString(),
         grossProfit: profit.toString(),
       };
     });
 
-    const totalSales = rows.reduce((sum, r) => sum + parseAmount(r.salesAmount), 0) || parseAmount(revenueRow?.total || "0");
+    const netSales = rows.reduce((sum, r) => sum + parseAmount(r.netSales), 0) || parseAmount(revenueRow?.total || "0");
     const costOfGoodsSold = rows.reduce((sum, r) => sum + parseAmount(r.costOfGoodsSold), 0) || parseAmount(cogsRow?.total || "0");
-    const grossProfit = totalSales - costOfGoodsSold;
+    const grossProfit = netSales - costOfGoodsSold;
+    const margin = netSales !== 0 ? (grossProfit / netSales) * 100 : 0;
 
     return {
-      totalSales: totalSales.toString(),
+      netSales: netSales.toString(),
       costOfGoodsSold: costOfGoodsSold.toString(),
       grossProfit: grossProfit.toString(),
+      grossMarginPercent: margin.toFixed(2),
       rows,
     };
   }
 
   async getDayBook(startDate: Date, endDate: Date) {
-    const cash = await this.ensureCashAccountInternal(db);
     const from = startDate;
     const to = endOfDay(endDate);
 
-    const [movementBefore] = db
+    const entries = db
       .select({
-        movement: sql<string>`COALESCE(SUM(CASE WHEN ${cashTransactions.transactionType} = 'DEBIT' THEN CAST(${cashTransactions.amount} AS REAL) ELSE -CAST(${cashTransactions.amount} AS REAL) END), 0)`,
+        id: ledgerEntries.id,
+        entryDate: ledgerEntries.entryDate,
+        transactionType: ledgerEntries.transactionType,
+        amount: ledgerEntries.amount,
+        description: ledgerEntries.description,
+        referenceType: ledgerEntries.referenceType,
+        referenceId: ledgerEntries.referenceId,
+        accountName: accounts.name,
       })
-      .from(cashTransactions)
-      .where(and(eq(cashTransactions.accountId, cash.id), lt(cashTransactions.transactionDate, from)))
+      .from(ledgerEntries)
+      .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
+      .where(and(gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+      .orderBy(ledgerEntries.entryDate)
       .all();
 
-    const opening = parseAmount(cash.openingBalance || "0") + parseAmount(movementBefore?.movement || "0");
-
-    const txs = db
-      .select()
-      .from(cashTransactions)
-      .where(and(eq(cashTransactions.accountId, cash.id), gte(cashTransactions.transactionDate, from), lte(cashTransactions.transactionDate, to)))
-      .orderBy(cashTransactions.transactionDate)
-      .all();
-
-    const purchaseIds = txs.filter((t) => t.referenceType === "purchase" && t.referenceId).map((t) => t.referenceId!) as number[];
-    const saleIds = txs.filter((t) => t.referenceType === "sale" && t.referenceId).map((t) => t.referenceId!) as number[];
-    const receiptIds = txs.filter((t) => t.referenceType === "receipt" && t.referenceId).map((t) => t.referenceId!) as number[];
-    const journalIds = txs.filter((t) => t.referenceType === "journal_voucher" && t.referenceId).map((t) => t.referenceId!) as number[];
+    const byType = entries.reduce(
+      (acc, e) => {
+        if (!e.referenceType || !e.referenceId) return acc;
+        const list = acc[e.referenceType] || [];
+        list.push(e.referenceId);
+        acc[e.referenceType] = list;
+        return acc;
+      },
+      {} as Record<string, number[]>,
+    );
 
     const purchaseNoById = new Map<number, string>(
-      purchaseIds.length
+      byType.purchase?.length
         ? db
             .select({ id: purchases.id, no: purchases.invoiceNumber })
             .from(purchases)
-            .where(inArray(purchases.id, purchaseIds))
+            .where(inArray(purchases.id, byType.purchase))
             .all()
             .map((r) => [r.id, r.no])
         : [],
     );
     const saleNoById = new Map<number, string>(
-      saleIds.length
+      byType.sale?.length
         ? db
             .select({ id: sales.id, no: sales.invoiceNumber })
             .from(sales)
-            .where(inArray(sales.id, saleIds))
+            .where(inArray(sales.id, byType.sale))
             .all()
             .map((r) => [r.id, r.no])
         : [],
     );
-    const receiptById = new Map<number, { voucherNumber: string; voucherType: string }>(
-      receiptIds.length
+    const receiptNoById = new Map<number, string>(
+      byType.receipt?.length
         ? db
-            .select({ id: receiptVouchers.id, voucherNumber: receiptVouchers.voucherNumber, voucherType: receiptVouchers.voucherType })
+            .select({ id: receiptVouchers.id, no: receiptVouchers.voucherNumber })
             .from(receiptVouchers)
-            .where(inArray(receiptVouchers.id, receiptIds))
+            .where(inArray(receiptVouchers.id, byType.receipt))
             .all()
-            .map((r) => [r.id, { voucherNumber: r.voucherNumber, voucherType: r.voucherType }])
+            .map((r) => [r.id, r.no])
+        : [],
+    );
+    const paymentNoById = new Map<number, string>(
+      byType.payment?.length
+        ? db
+            .select({ id: receiptVouchers.id, no: receiptVouchers.voucherNumber })
+            .from(receiptVouchers)
+            .where(inArray(receiptVouchers.id, byType.payment))
+            .all()
+            .map((r) => [r.id, r.no])
         : [],
     );
     const journalNoById = new Map<number, string>(
-      journalIds.length
+      byType.journal_voucher?.length
         ? db
             .select({ id: journalVouchers.id, no: journalVouchers.voucherNo })
             .from(journalVouchers)
-            .where(inArray(journalVouchers.id, journalIds))
+            .where(inArray(journalVouchers.id, byType.journal_voucher))
             .all()
             .map((r) => [r.id, r.no])
         : [],
     );
 
-    let running = opening;
-    const rows = txs.map((t) => {
-      const rowOpening = running;
-      const amt = parseAmount(t.amount);
-      if (t.transactionType === "DEBIT") running += amt;
-      else running -= amt;
-
-      let voucherType = t.referenceType || "";
-      let voucherNo = `${t.referenceType || ""}#${t.referenceId || ""}`;
-
-      if (t.referenceType === "purchase" && t.referenceId) {
-        voucherType = "PUR";
-        voucherNo = purchaseNoById.get(t.referenceId) || voucherNo;
-      } else if (t.referenceType === "sale" && t.referenceId) {
-        voucherType = "SAL";
-        voucherNo = saleNoById.get(t.referenceId) || voucherNo;
-      } else if (t.referenceType === "receipt" && t.referenceId) {
-        const rv = receiptById.get(t.referenceId);
-        voucherType = rv?.voucherType || "RCPT";
-        voucherNo = rv?.voucherNumber || voucherNo;
-      } else if (t.referenceType === "journal_voucher" && t.referenceId) {
-        voucherType = "JV";
-        voucherNo = journalNoById.get(t.referenceId) || voucherNo;
+    const rows = entries.map((e) => {
+      let voucherNo = "-";
+      if (e.referenceType && e.referenceId) {
+        if (e.referenceType === "purchase") voucherNo = purchaseNoById.get(e.referenceId) || "-";
+        else if (e.referenceType === "sale") voucherNo = saleNoById.get(e.referenceId) || "-";
+        else if (e.referenceType === "receipt") voucherNo = receiptNoById.get(e.referenceId) || "-";
+        else if (e.referenceType === "payment") voucherNo = paymentNoById.get(e.referenceId) || "-";
+        else if (e.referenceType === "journal_voucher") voucherNo = journalNoById.get(e.referenceId) || "-";
+        else voucherNo = `${e.referenceType.toUpperCase()}-${e.referenceId}`;
       }
-
       return {
-        date: new Date(t.transactionDate as any),
-        openingBalance: rowOpening.toString(),
-        voucherType,
+        entryId: e.id,
+        date: new Date(e.entryDate as any),
+        accountName: e.accountName || "",
+        voucherType: (e.referenceType || "").toUpperCase(),
         voucherNo,
-        debit: t.transactionType === "DEBIT" ? amt.toString() : "0",
-        credit: t.transactionType === "CREDIT" ? amt.toString() : "0",
-        closingBalance: running.toString(),
-        referenceType: t.referenceType,
-        referenceId: t.referenceId,
-        narration: t.narration,
+        narration: e.description || "",
+        debit: e.transactionType === "debit" ? e.amount : "0",
+        credit: e.transactionType === "credit" ? e.amount : "0",
+        referenceType: e.referenceType,
+        referenceId: e.referenceId,
       };
     });
 
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.debit += parseAmount(r.debit);
+        acc.credit += parseAmount(r.credit);
+        return acc;
+      },
+      { debit: 0, credit: 0 },
+    );
+
+    const dayMap = new Map<string, { debit: number; credit: number }>();
+    for (const r of rows) {
+      const key = new Date(r.date).toISOString().slice(0, 10);
+      const current = dayMap.get(key) || { debit: 0, credit: 0 };
+      current.debit += parseAmount(r.debit);
+      current.credit += parseAmount(r.credit);
+      dayMap.set(key, current);
+    }
+    const dayTotals = Array.from(dayMap.entries()).map(([date, values]) => ({
+      date,
+      debit: values.debit.toString(),
+      credit: values.credit.toString(),
+      balanced: Math.abs(values.debit - values.credit) < 0.0001,
+    }));
+
     return {
-      openingBalance: opening.toString(),
       rows,
-      closingBalance: running.toString(),
+      totals: { debit: totals.debit.toString(), credit: totals.credit.toString() },
+      validation: { balanced: Math.abs(totals.debit - totals.credit) < 0.0001, difference: Math.abs(totals.debit - totals.credit).toString() },
+      dayTotals,
     };
   }
 
@@ -3074,7 +3776,8 @@ export class DatabaseStorage implements IStorage {
       .orderBy(sales.saleDate)
       .all();
 
-    const customerIds = [...new Set(salesRows.map((r) => r.customerId).filter(Boolean) as number[])];
+    const customerIds = (salesRows.map((r) => r.customerId).filter(Boolean) as number[])
+      .filter((id, index, arr) => arr.indexOf(id) === index);
     const ledgerByCustomer = new Map<number, LedgerEntry[]>(
       customerIds.length
         ? db
@@ -3102,6 +3805,11 @@ export class DatabaseStorage implements IStorage {
       outstandingAmount: string;
       dueDate: Date | null;
       saleDate: Date;
+      daysOutstanding: number;
+      bucket0To30: string;
+      bucket31To60: string;
+      bucket61To90: string;
+      bucket91Plus: string;
     }> = [];
 
     for (const cid of customerIds) {
@@ -3115,16 +3823,28 @@ export class DatabaseStorage implements IStorage {
         const applied = Math.min(invoice, remainingCredits);
         remainingCredits -= applied;
         const outstanding = Math.max(invoice - applied, 0);
+        const saleDate = new Date(sale.saleDate as any);
+        const dueDate = saleDate;
+        const daysOutstanding = Math.max(
+          Math.floor((to.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)),
+          0,
+        );
+        const aging = computeAgingBuckets(outstanding, daysOutstanding);
         rows.push({
           saleId: sale.saleId,
           invoiceNumber: sale.invoiceNumber,
-          saleDate: new Date(sale.saleDate as any),
+          saleDate,
           customerId: sale.customerId,
           customerName: sale.customerName || "",
           invoiceAmount: invoice.toString(),
           receivedAmount: (invoice - outstanding).toString(),
           outstandingAmount: outstanding.toString(),
-          dueDate: null,
+          dueDate,
+          daysOutstanding,
+          bucket0To30: aging.buckets["0-30"].toString(),
+          bucket31To60: aging.buckets["31-60"].toString(),
+          bucket61To90: aging.buckets["61-90"].toString(),
+          bucket91Plus: aging.buckets["91+"].toString(),
         });
       }
     }
@@ -3136,9 +3856,13 @@ export class DatabaseStorage implements IStorage {
         acc.invoiceAmount += parseAmount(r.invoiceAmount);
         acc.receivedAmount += parseAmount(r.receivedAmount);
         acc.outstandingAmount += parseAmount(r.outstandingAmount);
+        acc.bucket0To30 += parseAmount(r.bucket0To30);
+        acc.bucket31To60 += parseAmount(r.bucket31To60);
+        acc.bucket61To90 += parseAmount(r.bucket61To90);
+        acc.bucket91Plus += parseAmount(r.bucket91Plus);
         return acc;
       },
-      { invoiceAmount: 0, receivedAmount: 0, outstandingAmount: 0 },
+      { invoiceAmount: 0, receivedAmount: 0, outstandingAmount: 0, bucket0To30: 0, bucket31To60: 0, bucket61To90: 0, bucket91Plus: 0 },
     );
 
     return {
@@ -3147,6 +3871,10 @@ export class DatabaseStorage implements IStorage {
         invoiceAmount: totals.invoiceAmount.toString(),
         receivedAmount: totals.receivedAmount.toString(),
         outstandingAmount: totals.outstandingAmount.toString(),
+        bucket0To30: totals.bucket0To30.toString(),
+        bucket31To60: totals.bucket31To60.toString(),
+        bucket61To90: totals.bucket61To90.toString(),
+        bucket91Plus: totals.bucket91Plus.toString(),
       },
     };
   }
@@ -3172,7 +3900,8 @@ export class DatabaseStorage implements IStorage {
       .orderBy(purchases.purchaseDate)
       .all();
 
-    const supplierIds = [...new Set(purchasesRows.map((r) => r.supplierId).filter(Boolean) as number[])];
+    const supplierIds = (purchasesRows.map((r) => r.supplierId).filter(Boolean) as number[])
+      .filter((id, index, arr) => arr.indexOf(id) === index);
     const ledgerBySupplier = new Map<number, LedgerEntry[]>(
       supplierIds.length
         ? db
@@ -3200,6 +3929,11 @@ export class DatabaseStorage implements IStorage {
       paidAmount: string;
       outstandingAmount: string;
       dueDate: Date | null;
+      daysOutstanding: number;
+      bucket0To30: string;
+      bucket31To60: string;
+      bucket61To90: string;
+      bucket91Plus: string;
     }> = [];
 
     for (const sid of supplierIds) {
@@ -3213,16 +3947,28 @@ export class DatabaseStorage implements IStorage {
         const applied = Math.min(bill, remainingDebits);
         remainingDebits -= applied;
         const outstanding = Math.max(bill - applied, 0);
+        const purchaseDate = new Date(pur.purchaseDate as any);
+        const dueDate = pur.dueDate ? new Date(pur.dueDate as any) : purchaseDate;
+        const daysOutstanding = Math.max(
+          Math.floor((to.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)),
+          0,
+        );
+        const aging = computeAgingBuckets(outstanding, daysOutstanding);
         rows.push({
           purchaseId: pur.purchaseId,
           invoiceNumber: pur.invoiceNumber,
-          purchaseDate: new Date(pur.purchaseDate as any),
+          purchaseDate,
           supplierId: pur.supplierId,
           supplierName: pur.supplierName || "",
           billAmount: bill.toString(),
           paidAmount: (bill - outstanding).toString(),
           outstandingAmount: outstanding.toString(),
-          dueDate: pur.dueDate ? new Date(pur.dueDate as any) : null,
+          dueDate,
+          daysOutstanding,
+          bucket0To30: aging.buckets["0-30"].toString(),
+          bucket31To60: aging.buckets["31-60"].toString(),
+          bucket61To90: aging.buckets["61-90"].toString(),
+          bucket91Plus: aging.buckets["91+"].toString(),
         });
       }
     }
@@ -3234,9 +3980,13 @@ export class DatabaseStorage implements IStorage {
         acc.billAmount += parseAmount(r.billAmount);
         acc.paidAmount += parseAmount(r.paidAmount);
         acc.outstandingAmount += parseAmount(r.outstandingAmount);
+        acc.bucket0To30 += parseAmount(r.bucket0To30);
+        acc.bucket31To60 += parseAmount(r.bucket31To60);
+        acc.bucket61To90 += parseAmount(r.bucket61To90);
+        acc.bucket91Plus += parseAmount(r.bucket91Plus);
         return acc;
       },
-      { billAmount: 0, paidAmount: 0, outstandingAmount: 0 },
+      { billAmount: 0, paidAmount: 0, outstandingAmount: 0, bucket0To30: 0, bucket31To60: 0, bucket61To90: 0, bucket91Plus: 0 },
     );
 
     return {
@@ -3245,6 +3995,10 @@ export class DatabaseStorage implements IStorage {
         billAmount: totals.billAmount.toString(),
         paidAmount: totals.paidAmount.toString(),
         outstandingAmount: totals.outstandingAmount.toString(),
+        bucket0To30: totals.bucket0To30.toString(),
+        bucket31To60: totals.bucket31To60.toString(),
+        bucket61To90: totals.bucket61To90.toString(),
+        bucket91Plus: totals.bucket91Plus.toString(),
       },
     };
   }
@@ -3273,25 +4027,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getIncomeStatement(startDate: Date, endDate: Date) {
-    const gross = await this.getGrossProfit(startDate, endDate);
-    const operatingExpenses = await this.sumExpenseMovements(startDate, endDate);
-    const netProfit = parseAmount(gross.grossProfit) - operatingExpenses;
-
-    const [revenueRow] = db
-      .select({
-        total: sql<string>`COALESCE(SUM(CAST(${sales.subtotal} AS REAL)), 0)`,
-      })
-      .from(sales)
-      .where(and(gte(sales.saleDate, startDate), lte(sales.saleDate, endOfDay(endDate))))
-      .all();
-
+    const summary = await this.getProfitLoss(startDate, endDate);
     return {
-      period: { fromDate: startDate, toDate: endDate },
-      revenue: parseAmount(revenueRow?.total || "0").toString(),
-      costOfSales: gross.costOfGoodsSold,
-      grossProfit: gross.grossProfit,
-      operatingExpenses: operatingExpenses.toString(),
-      netProfit: netProfit.toString(),
+      period: summary.period,
+      revenue: summary.revenue,
+      costOfSales: summary.costOfSales,
+      grossProfit: summary.grossProfit,
+      operatingExpenses: summary.operatingExpenses,
+      netProfit: summary.netProfit,
     };
   }
 
@@ -3328,44 +4071,17 @@ export class DatabaseStorage implements IStorage {
       .from(cashTransactions)
       .where(and(eq(cashTransactions.accountId, cash.id), lte(cashTransactions.transactionDate, asOf)))
       .all();
-    const cashBalance = parseAmount(cash.openingBalance || "0") + parseAmount(cashMovement?.movement || "0");
+    const cashBalanceRaw = parseAmount(cash.openingBalance || "0") + parseAmount(cashMovement?.movement || "0");
 
-    const bankBalance = await this.sumLedgerBalancesAsOf(asOfDate, "bank", "DEBIT");
-    const receivables = await this.sumLedgerBalancesAsOf(asOfDate, "customer", "DEBIT");
-    const payables = await this.sumLedgerBalancesAsOf(asOfDate, "supplier", "CREDIT");
-    const employeePayables = await this.sumLedgerBalancesAsOf(asOfDate, "employee", "CREDIT");
+    const bankBalanceRaw = await this.sumLedgerBalancesAsOf(asOfDate, "bank", "DEBIT");
+    const receivablesRaw = await this.sumLedgerBalancesAsOf(asOfDate, "customer", "DEBIT");
+    const payablesRaw = await this.sumLedgerBalancesAsOf(asOfDate, "supplier", "CREDIT");
+    const employeePayablesRaw = await this.sumLedgerBalancesAsOf(asOfDate, "employee", "CREDIT");
 
-    const purchased = db
-      .select({
-        productId: purchaseItems.productId,
-        qty: sql<string>`COALESCE(SUM(CAST(${purchaseItems.netWeightKg} AS REAL)), 0)`,
-      })
-      .from(purchaseItems)
-      .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
-      .where(lte(purchases.purchaseDate, asOf))
-      .groupBy(purchaseItems.productId)
-      .all();
-    const sold = db
-      .select({
-        productId: saleItems.productId,
-        qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL)), 0)`,
-      })
-      .from(saleItems)
-      .leftJoin(sales, eq(saleItems.saleId, sales.id))
-      .where(lte(sales.saleDate, asOf))
-      .groupBy(saleItems.productId)
-      .all();
+    const stockReport = await this.getStockReport({ toDate: asOfDate });
+    const inventoryValueRaw = stockReport.totals.closingValue ? parseAmount(stockReport.totals.closingValue) : 0;
 
-    const purchasedByProduct = new Map(purchased.map((r) => [r.productId, parseAmount(r.qty)]));
-    const soldByProduct = new Map(sold.map((r) => [r.productId, parseAmount(r.qty)]));
-    const allProducts = await this.getProducts();
-    const inventoryValue = allProducts.reduce((sum, p) => {
-      const inQty = (purchasedByProduct.get(p.id) || 0) - (soldByProduct.get(p.id) || 0);
-      const price = parseAmount(p.avgPurchasePrice || "0");
-      return sum + Math.max(inQty, 0) * price;
-    }, 0);
-
-    const retainedEarnings = parseAmount((await this.getIncomeStatement(new Date(0), asOfDate)).netProfit);
+    const retainedEarningsRaw = parseAmount((await this.getIncomeStatement(new Date(0), asOfDate)).netProfit);
     const capitalAccount = await this.ensureSystemAccount(db, "Capital", "equity");
 
     const [capMovements] = db
@@ -3375,35 +4091,51 @@ export class DatabaseStorage implements IStorage {
       .from(ledgerEntries)
       .where(and(eq(ledgerEntries.accountId, capitalAccount.id), lte(ledgerEntries.entryDate, asOf)))
       .all();
-    const capitalBalance = parseAmount(capitalAccount.openingBalance || "0") + parseAmount(capMovements?.total || "0");
+    const capitalBalanceRaw =
+      parseAmount(capitalAccount.openingBalance || "0") + parseAmount(capMovements?.total || "0");
 
-    const assetsTotal = cashBalance + bankBalance + receivables + inventoryValue;
-    const liabilitiesTotal = payables + employeePayables;
-    const equityTotal = capitalBalance + retainedEarnings;
+    const toCents = (value: number) => Math.round(value * 100);
+    const fromCents = (value: number) => (value / 100).toFixed(2);
+
+    const cashCents = toCents(cashBalanceRaw);
+    const bankCents = toCents(bankBalanceRaw);
+    const receivablesCents = toCents(receivablesRaw);
+    const inventoryCents = toCents(inventoryValueRaw);
+    const payablesCents = toCents(payablesRaw);
+    const employeePayablesCents = toCents(employeePayablesRaw);
+    const capitalCents = toCents(capitalBalanceRaw);
+    const retainedCents = toCents(retainedEarningsRaw);
+
+    const assetsTotalCents = cashCents + bankCents + receivablesCents + inventoryCents;
+    const liabilitiesTotalCents = payablesCents + employeePayablesCents;
+    const equityTotalCents = capitalCents + retainedCents;
+
+    const validation = computeBalanceSheetValidation(fromCents(assetsTotalCents), fromCents(liabilitiesTotalCents + equityTotalCents));
 
     return {
       asOfDate,
       assets: {
-        cash: cashBalance.toString(),
-        bank: bankBalance.toString(),
-        receivables: receivables.toString(),
-        inventory: inventoryValue.toString(),
-        total: assetsTotal.toString(),
+        cash: fromCents(cashCents),
+        bank: fromCents(bankCents),
+        receivables: fromCents(receivablesCents),
+        inventory: fromCents(inventoryCents),
+        total: fromCents(assetsTotalCents),
       },
       liabilities: {
-        payables: payables.toString(),
-        expensesPayable: employeePayables.toString(),
-        total: liabilitiesTotal.toString(),
+        payables: fromCents(payablesCents),
+        expensesPayable: fromCents(employeePayablesCents),
+        total: fromCents(liabilitiesTotalCents),
       },
       equity: {
-        capital: capitalBalance.toString(),
-        retainedEarnings: retainedEarnings.toString(),
-        total: equityTotal.toString(),
+        capital: fromCents(capitalCents),
+        retainedEarnings: fromCents(retainedCents),
+        total: fromCents(equityTotalCents),
       },
       totals: {
-        assets: assetsTotal.toString(),
-        liabilitiesAndEquity: (liabilitiesTotal + equityTotal).toString(),
+        assets: fromCents(assetsTotalCents),
+        liabilitiesAndEquity: fromCents(liabilitiesTotalCents + equityTotalCents),
       },
+      validation: { balanced: validation.balanced, difference: validation.difference },
     };
   }
 
@@ -3441,12 +4173,14 @@ export class DatabaseStorage implements IStorage {
       .all();
     const drawingsAmount = Math.max(parseAmount(drawDuring?.total || "0"), 0);
 
-    const closingCapital = openingCapital + additionalCapital - drawingsAmount;
+    const netProfit = parseAmount((await this.getProfitLoss(startDate, endDate)).netProfit);
+    const closingCapital = openingCapital + additionalCapital + netProfit - drawingsAmount;
 
     return {
       openingCapital: openingCapital.toString(),
       additionalCapital: additionalCapital.toString(),
       drawings: drawingsAmount.toString(),
+      netProfit: netProfit.toString(),
       closingCapital: closingCapital.toString(),
     };
   }
@@ -3455,49 +4189,64 @@ export class DatabaseStorage implements IStorage {
     const from = startDate;
     const to = endOfDay(endDate);
 
-    const salaryAccounts = db.select({ id: accounts.id }).from(accounts).where(eq(accounts.type, "salary" as any)).all();
-    const salaryAccountIds = salaryAccounts.map((a) => a.id);
-    if (salaryAccountIds.length === 0) return { rows: [], totals: { netSalary: "0" } };
-
-    const entries = db
+    const rows = db
       .select({
-        entryDate: ledgerEntries.entryDate,
-        amount: ledgerEntries.amount,
-        description: ledgerEntries.description,
+        payrollMonth: payrolls.payrollMonth,
+        basicSalary: payrolls.basicSalary,
+        allowances: payrolls.allowances,
+        deductions: payrolls.deductions,
+        netSalary: payrolls.netSalary,
+        paymentStatus: payrolls.paymentStatus,
+        employeeName: employees.name,
+        accountId: employees.accountId,
       })
-      .from(ledgerEntries)
-      .where(and(inArray(ledgerEntries.accountId, salaryAccountIds), gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
-      .orderBy(ledgerEntries.entryDate)
+      .from(payrolls)
+      .leftJoin(employees, eq(payrolls.employeeId, employees.id))
+      .where(and(gte(payrolls.createdAt, from), lte(payrolls.createdAt, to)))
+      .orderBy(payrolls.payrollMonth)
       .all();
 
-    const grouped = new Map<string, { employee: string; salaryMonth: string; net: number }>();
-    for (const e of entries) {
-      const dt = new Date(e.entryDate as any);
-      const salaryMonth = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
-      const raw = (e.description || "").trim();
-      const employee = raw.includes(":") ? raw.split(":").slice(1).join(":").trim() : "Employee";
-      const net = parseAmount(e.amount);
-      const key = `${salaryMonth}||${employee}`;
-      const prev = grouped.get(key) || { employee, salaryMonth, net: 0 };
-      prev.net += net;
-      grouped.set(key, prev);
-    }
+    const mapped = rows.map((r) => {
+      const net = parseAmount(r.netSalary || "0");
+      const paid = r.paymentStatus === "Paid" ? net : 0;
+      const balance = Math.max(net - paid, 0);
+      return {
+        accountId: r.accountId ?? null,
+        employee: r.employeeName || "Employee",
+        salaryMonth: r.payrollMonth,
+        basicSalary: parseAmount(r.basicSalary || "0").toString(),
+        allowances: parseAmount(r.allowances || "0").toString(),
+        deductions: parseAmount(r.deductions || "0").toString(),
+        netSalary: net.toString(),
+        paidAmount: paid.toString(),
+        balanceAmount: balance.toString(),
+      };
+    });
 
-    const values: Array<{ employee: string; salaryMonth: string; net: number }> = [];
-    grouped.forEach((v) => values.push(v));
-    const primarySalaryAccountId = salaryAccountIds[0] ?? null;
-    const rows = values.map((r) => ({
-      accountId: primarySalaryAccountId,
-      employee: r.employee,
-      salaryMonth: r.salaryMonth,
-      basicSalary: r.net.toString(),
-      allowances: "0",
-      deductions: "0",
-      netSalary: r.net.toString(),
-    }));
+    const totals = mapped.reduce(
+      (acc, r) => {
+        acc.basicSalary += parseAmount(r.basicSalary);
+        acc.allowances += parseAmount(r.allowances);
+        acc.deductions += parseAmount(r.deductions);
+        acc.netSalary += parseAmount(r.netSalary);
+        acc.paidAmount += parseAmount(r.paidAmount);
+        acc.balanceAmount += parseAmount(r.balanceAmount);
+        return acc;
+      },
+      { basicSalary: 0, allowances: 0, deductions: 0, netSalary: 0, paidAmount: 0, balanceAmount: 0 },
+    );
 
-    const totalNet = rows.reduce((sum, r) => sum + parseAmount(r.netSalary), 0);
-    return { rows, totals: { netSalary: totalNet.toString() } };
+    return {
+      rows: mapped,
+      totals: {
+        basicSalary: totals.basicSalary.toString(),
+        allowances: totals.allowances.toString(),
+        deductions: totals.deductions.toString(),
+        netSalary: totals.netSalary.toString(),
+        paidAmount: totals.paidAmount.toString(),
+        balanceAmount: totals.balanceAmount.toString(),
+      },
+    };
   }
 
   async getReportDetail(referenceType: string, referenceId: number) {
@@ -3509,8 +4258,19 @@ export class DatabaseStorage implements IStorage {
       const items = await this.getSaleItems(referenceId);
       const customer = await this.getAccount(sale.customerId);
       const ledger = db
-        .select()
+        .select({
+          id: ledgerEntries.id,
+          entryDate: ledgerEntries.entryDate,
+          transactionType: ledgerEntries.transactionType,
+          amount: ledgerEntries.amount,
+          description: ledgerEntries.description,
+          referenceType: ledgerEntries.referenceType,
+          referenceId: ledgerEntries.referenceId,
+          accountId: ledgerEntries.accountId,
+          accountName: accounts.name,
+        })
         .from(ledgerEntries)
+        .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
         .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, referenceId)))
         .orderBy(ledgerEntries.entryDate)
         .all()
@@ -3527,8 +4287,19 @@ export class DatabaseStorage implements IStorage {
       if (!purchase) return null;
       const supplier = await this.getAccount(purchase.supplierId);
       const ledger = db
-        .select()
+        .select({
+          id: ledgerEntries.id,
+          entryDate: ledgerEntries.entryDate,
+          transactionType: ledgerEntries.transactionType,
+          amount: ledgerEntries.amount,
+          description: ledgerEntries.description,
+          referenceType: ledgerEntries.referenceType,
+          referenceId: ledgerEntries.referenceId,
+          accountId: ledgerEntries.accountId,
+          accountName: accounts.name,
+        })
         .from(ledgerEntries)
+        .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
         .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, referenceId)))
         .orderBy(ledgerEntries.entryDate)
         .all()
@@ -3572,7 +4343,35 @@ export class DatabaseStorage implements IStorage {
           .where(eq(saleItems.productId, referenceId))
           .all() || [];
 
-      const movements = [...purchaseMovements, ...saleMovements].sort(
+      const processingOut =
+        db
+          .select({
+            refNo: processing.batchNumber,
+            refId: processing.id,
+            direction: sql`'out'`.as("direction"),
+            qty: processing.sourceQuantity,
+            date: processing.startDate,
+            narration: processing.notes,
+          })
+          .from(processing)
+          .where(eq(processing.sourceProductId, referenceId))
+          .all() || [];
+
+      const processingIn =
+        db
+          .select({
+            refNo: processing.batchNumber,
+            refId: processing.id,
+            direction: sql`'in'`.as("direction"),
+            qty: processing.outputQuantity,
+            date: processing.completedDate,
+            narration: processing.notes,
+          })
+          .from(processing)
+          .where(and(eq(processing.outputProductId, referenceId), sql`${processing.completedDate} IS NOT NULL`))
+          .all() || [];
+
+      const movements = [...purchaseMovements, ...saleMovements, ...processingOut, ...processingIn].sort(
         (a, b) => new Date(a.date as any).getTime() - new Date(b.date as any).getTime(),
       );
 
@@ -3582,7 +4381,10 @@ export class DatabaseStorage implements IStorage {
     if (type === "account") {
       const account = await this.getAccount(referenceId);
       if (!account) return null;
-      const ledger = await this.getLedgerEntries(referenceId);
+      const ledger = (await this.getLedgerEntries(referenceId)).map((entry) => ({
+        ...entry,
+        accountName: account.name,
+      }));
       return { type: "account", account, ledgerEntries: ledger };
     }
 
@@ -3590,8 +4392,19 @@ export class DatabaseStorage implements IStorage {
       const voucher = await this.getReceiptVoucher(referenceId);
       if (!voucher) return null;
       const ledger = db
-        .select()
+        .select({
+          id: ledgerEntries.id,
+          entryDate: ledgerEntries.entryDate,
+          transactionType: ledgerEntries.transactionType,
+          amount: ledgerEntries.amount,
+          description: ledgerEntries.description,
+          referenceType: ledgerEntries.referenceType,
+          referenceId: ledgerEntries.referenceId,
+          accountId: ledgerEntries.accountId,
+          accountName: accounts.name,
+        })
         .from(ledgerEntries)
+        .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
         .where(and(eq(ledgerEntries.referenceType, type), eq(ledgerEntries.referenceId, referenceId)))
         .orderBy(ledgerEntries.entryDate)
         .all()
@@ -3607,8 +4420,19 @@ export class DatabaseStorage implements IStorage {
       const voucher = await this.getJournalVoucher(referenceId);
       if (!voucher) return null;
       const ledger = db
-        .select()
+        .select({
+          id: ledgerEntries.id,
+          entryDate: ledgerEntries.entryDate,
+          transactionType: ledgerEntries.transactionType,
+          amount: ledgerEntries.amount,
+          description: ledgerEntries.description,
+          referenceType: ledgerEntries.referenceType,
+          referenceId: ledgerEntries.referenceId,
+          accountId: ledgerEntries.accountId,
+          accountName: accounts.name,
+        })
         .from(ledgerEntries)
+        .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
         .where(and(eq(ledgerEntries.referenceType, "journal_voucher"), eq(ledgerEntries.referenceId, referenceId)))
         .orderBy(ledgerEntries.entryDate)
         .all()

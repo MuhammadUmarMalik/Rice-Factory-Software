@@ -8,13 +8,12 @@ import { Label } from "@/components/ui/label";
 import { useState } from "react";
 
 type ProfitLossResponse = {
-  totalPurchases: string;
-  totalSales: string;
-  expenses: string;
-  grossProfit: string; // Sales - Purchases
-  netProfit: string; // Gross - Expenses
-  purchaseCount: number;
-  saleCount: number;
+  period: { fromDate: string | number | Date; toDate: string | number | Date };
+  revenue: string;
+  costOfSales: string;
+  grossProfit: string;
+  operatingExpenses: string;
+  netProfit: string;
 };
 
 export default function ProfitLossPage() {
@@ -38,11 +37,11 @@ export default function ProfitLossPage() {
     },
   });
 
-  const totalPurchases = parseFloat(profitLoss?.totalPurchases || "0");
-  const totalSales = parseFloat(profitLoss?.totalSales || "0");
-  const totalExpenses = parseFloat(profitLoss?.expenses || "0");
+  const revenue = parseFloat(profitLoss?.revenue || "0");
+  const costOfSales = parseFloat(profitLoss?.costOfSales || "0");
+  const operatingExpenses = parseFloat(profitLoss?.operatingExpenses || "0");
   const grossProfit = parseFloat(profitLoss?.grossProfit || "0");
-  const netProfit = parseFloat(profitLoss?.netProfit || grossProfit.toString());
+  const netProfit = parseFloat(profitLoss?.netProfit || "0");
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
@@ -50,7 +49,7 @@ export default function ProfitLossPage() {
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("profitLoss")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "نفع و نقصان کا بیان" : "Profit & Loss statement"}
+            {language === "ur" ? "Profit & Loss statement" : "Profit & Loss statement"}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -65,26 +64,12 @@ export default function ProfitLossPage() {
         <CardContent className="pt-6">
           <div className={`grid gap-4 md:grid-cols-4 ${isRTL ? "direction-rtl" : ""}`}>
             <div>
-              <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "تاریخ سے" : "From Date"}
-              </Label>
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                data-testid="input-date-from"
-              />
+              <Label className={isRTL ? "font-urdu" : ""}>From Date</Label>
+              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             </div>
             <div>
-              <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "تاریخ تک" : "To Date"}
-              </Label>
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                data-testid="input-date-to"
-              />
+              <Label className={isRTL ? "font-urdu" : ""}>To Date</Label>
+              <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </div>
           </div>
         </CardContent>
@@ -95,7 +80,7 @@ export default function ProfitLossPage() {
           <CardHeader className={`border-b ${isRTL ? "text-right" : ""}`}>
             <CardTitle className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
               <TrendingUp className="h-5 w-5 text-primary" />
-              {language === "ur" ? "آمدنی" : "Revenue"}
+              {language === "ur" ? "Revenue" : "Revenue"}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-6">
@@ -106,23 +91,14 @@ export default function ProfitLossPage() {
                     <TrendingUp className="h-4 w-4 text-primary" />
                   </div>
                   <div className={isRTL ? "text-right" : ""}>
-                    <p className="font-medium">{t("totalSales")}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {profitLoss?.saleCount ?? 0} {language === "ur" ? "ٹرانزیکشنز" : "transactions"}
-                    </p>
+                    <p className="font-medium">Net Sales</p>
+                    <p className="text-sm text-muted-foreground">Revenue from ledger</p>
                   </div>
                 </div>
                 <span className="text-xl font-bold font-mono text-primary">
-                  Rs. {totalSales.toLocaleString()}
+                  Rs. {revenue.toLocaleString()}
                 </span>
               </div>
-            </div>
-
-            <div className={`mt-6 pt-4 border-t flex justify-between items-center ${isRTL ? "flex-row-reverse" : ""}`}>
-              <span className="font-semibold">{language === "ur" ? "کل آمدنی" : "Total Revenue"}</span>
-              <span className="text-2xl font-bold font-mono text-primary">
-                Rs. {totalSales.toLocaleString()}
-              </span>
             </div>
           </CardContent>
         </Card>
@@ -131,7 +107,7 @@ export default function ProfitLossPage() {
           <CardHeader className={`border-b ${isRTL ? "text-right" : ""}`}>
             <CardTitle className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
               <TrendingDown className="h-5 w-5 text-destructive" />
-              {language === "ur" ? "اخراجات" : "Expenditure"}
+              {language === "ur" ? "Expenditure" : "Expenditure"}
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-6">
@@ -142,14 +118,12 @@ export default function ProfitLossPage() {
                     <Package className="h-4 w-4 text-chart-2" />
                   </div>
                   <div className={isRTL ? "text-right" : ""}>
-                    <p className="font-medium">{t("purchases")}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {profitLoss?.purchaseCount ?? 0} {language === "ur" ? "ٹرانزیکشنز" : "transactions"}
-                    </p>
+                    <p className="font-medium">COGS</p>
+                    <p className="text-sm text-muted-foreground">Inventory cost of sales</p>
                   </div>
                 </div>
                 <span className="text-xl font-bold font-mono">
-                  Rs. {totalPurchases.toLocaleString()}
+                  Rs. {costOfSales.toLocaleString()}
                 </span>
               </div>
 
@@ -159,23 +133,14 @@ export default function ProfitLossPage() {
                     <DollarSign className="h-4 w-4 text-chart-3" />
                   </div>
                   <div className={isRTL ? "text-right" : ""}>
-                    <p className="font-medium">{t("expenses")}</p>
-                    <p className="text-sm text-muted-foreground">
-                      1 {language === "ur" ? "زمرہ جات" : "category"}
-                    </p>
+                    <p className="font-medium">Operating Expenses</p>
+                    <p className="text-sm text-muted-foreground">Expense and salary accounts</p>
                   </div>
                 </div>
                 <span className="text-xl font-bold font-mono">
-                  Rs. {totalExpenses.toLocaleString()}
+                  Rs. {operatingExpenses.toLocaleString()}
                 </span>
               </div>
-            </div>
-
-            <div className={`mt-6 pt-4 border-t flex justify-between items-center ${isRTL ? "flex-row-reverse" : ""}`}>
-              <span className="font-semibold">{language === "ur" ? "کل اخراجات" : "Total Expenditure"}</span>
-              <span className="text-2xl font-bold font-mono">
-                Rs. {(totalPurchases + totalExpenses).toLocaleString()}
-              </span>
             </div>
           </CardContent>
         </Card>
@@ -195,21 +160,14 @@ export default function ProfitLossPage() {
                 )}
               </div>
               <div className={isRTL ? "text-right" : ""}>
-                <p className="text-lg font-semibold">
-                  {language === "ur" ? "مجموعی نفع/نقصان" : "Gross Profit/Loss"}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {language === "ur" ? "فروخت - خریداری" : "Sales - Purchases"}
-                </p>
+                <p className="text-lg font-semibold">Gross Profit/Loss</p>
+                <p className="text-sm text-muted-foreground">Net Sales - COGS</p>
               </div>
             </div>
             <span className={`text-3xl font-bold font-mono ${
               grossProfit >= 0 ? "text-primary" : "text-destructive"
             }`}>
               Rs. {Math.abs(grossProfit).toLocaleString()}
-              <span className="text-lg ml-2">
-                {grossProfit >= 0 ? (language === "ur" ? "(نفع)" : "(Profit)") : (language === "ur" ? "(نقصان)" : "(Loss)")}
-              </span>
             </span>
           </div>
         </CardContent>
@@ -225,21 +183,14 @@ export default function ProfitLossPage() {
                 <DollarSign className="h-7 w-7" />
               </div>
               <div className={isRTL ? "text-right" : ""}>
-                <p className="text-xl font-bold">
-                  {language === "ur" ? "خالص نفع/نقصان" : "Net Profit/Loss"}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {language === "ur" ? "مجموعی نفع - اخراجات" : "Gross Profit - Expenses"}
-                </p>
+                <p className="text-xl font-bold">Net Profit/Loss</p>
+                <p className="text-sm text-muted-foreground">Gross Profit - Operating Expenses</p>
               </div>
             </div>
             <span className={`text-4xl font-bold font-mono ${
               netProfit >= 0 ? "text-primary" : "text-destructive"
             }`}>
               Rs. {Math.abs(netProfit).toLocaleString()}
-              <span className="text-xl ml-2">
-                {netProfit >= 0 ? (language === "ur" ? "(نفع)" : "(Profit)") : (language === "ur" ? "(نقصان)" : "(Loss)")}
-              </span>
             </span>
           </div>
         </CardContent>
