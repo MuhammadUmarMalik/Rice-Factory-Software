@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Download, Calendar } from "lucide-react";
+import { Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
@@ -14,44 +14,42 @@ import {
 } from "@/components/ui/select";
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
-import { format } from "date-fns";
 import { downloadCsv } from "@/lib/export";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 
 type PeriodPurchaseRow = {
-  id: number;
-  invoiceNumber: string;
-  purchaseDate: string | number | Date;
-  supplierId: number;
-  supplierName: string;
-  purchaseAmount: string;
-  tax: string;
-  netAmount: string;
+  period: string;
+  periodStart: string | number | Date;
+  periodEnd: string | number | Date;
+  totalAmount: string;
+  paidAmount: string;
+  balanceAmount: string;
+  invoiceCount: number;
 };
 
 type PeriodPurchaseReport = {
   rows: PeriodPurchaseRow[];
-  totals: { purchaseAmount: string; tax: string; netAmount: string };
+  totals: { totalAmount: string; paidAmount: string; balanceAmount: string; invoiceCount: number };
 };
 
 export default function PeriodPurchasesPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [supplierId, setSupplierId] = useState<string>("all");
-  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
+  const [groupBy, setGroupBy] = useState<string>("month");
 
   const { data: suppliers = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts?type=supplier"],
   });
 
   const { data, isLoading } = useQuery<PeriodPurchaseReport>({
-    queryKey: ["/api/reports/period-purchases", fromDate, toDate, supplierId],
+    queryKey: ["/api/reports/period-purchases", fromDate, toDate, supplierId, groupBy],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
       const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
+      params.set("groupBy", groupBy);
       if (supplierId !== "all") params.set("supplierId", supplierId);
       const res = await fetch(`/api/reports/period-purchases?${params.toString()}`, {
         credentials: "include",
@@ -63,44 +61,30 @@ export default function PeriodPurchasesPage() {
   });
 
   const rows = data?.rows || [];
-  const totals = data?.totals || { purchaseAmount: "0", tax: "0", netAmount: "0" };
+  const totals = data?.totals || { totalAmount: "0", paidAmount: "0", balanceAmount: "0", invoiceCount: 0 };
 
   const columns: Column<PeriodPurchaseRow>[] = useMemo(
     () => [
+      { key: "period", title: "Period" },
       {
-        key: "invoiceNumber",
-        title: "Invoice #",
-        render: (r) => <span className="font-mono text-sm">{r.invoiceNumber}</span>,
-      },
-      {
-        key: "purchaseDate",
-        title: "Date",
-        render: (r) => (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Calendar className="h-3 w-3" />
-            <span className="font-mono">{format(new Date(r.purchaseDate), "dd-MM-yyyy")}</span>
-          </div>
-        ),
-      },
-      { key: "supplierName", title: "Supplier" },
-      {
-        key: "purchaseAmount",
-        title: "Purchase Amount",
+        key: "totalAmount",
+        title: "Total Purchases",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.purchaseAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {Number(r.totalAmount || 0).toLocaleString()}</span>,
       },
       {
-        key: "tax",
-        title: "Tax/Fees",
+        key: "paidAmount",
+        title: "Paid",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.tax || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {Number(r.paidAmount || 0).toLocaleString()}</span>,
       },
       {
-        key: "netAmount",
-        title: "Net Amount",
+        key: "balanceAmount",
+        title: "Balance",
         align: "right",
-        render: (r) => <span className="font-mono font-semibold">Rs. {Number(r.netAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {Number(r.balanceAmount || 0).toLocaleString()}</span>,
       },
+      { key: "invoiceCount", title: "Invoices", align: "right" },
     ],
     [],
   );
@@ -110,7 +94,7 @@ export default function PeriodPurchasesPage() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Period-wise Purchases</h1>
-          <p className="text-sm text-muted-foreground">Approved posting-based purchase totals by supplier.</p>
+          <p className="text-sm text-muted-foreground">Purchases grouped by day, week, or month.</p>
         </div>
         <Button
           variant="outline"
@@ -119,12 +103,11 @@ export default function PeriodPurchasesPage() {
             downloadCsv(
               `period-purchases_${fromDate}_${toDate}`,
               [
-                { header: "Invoice #", value: (r) => r.invoiceNumber },
-                { header: "Date", value: (r) => format(new Date(r.purchaseDate), "yyyy-MM-dd") },
-                { header: "Supplier", value: (r) => r.supplierName },
-                { header: "Purchase Amount", value: (r) => r.purchaseAmount },
-                { header: "Tax/Fees", value: (r) => r.tax },
-                { header: "Net Amount", value: (r) => r.netAmount },
+                { header: "Period", value: (r) => r.period },
+                { header: "Total Purchases", value: (r) => r.totalAmount },
+                { header: "Paid", value: (r) => r.paidAmount },
+                { header: "Balance", value: (r) => r.balanceAmount },
+                { header: "Invoices", value: (r) => r.invoiceCount.toString() },
               ],
               rows,
             )
@@ -137,7 +120,7 @@ export default function PeriodPurchasesPage() {
 
       <Card>
         <CardContent className="pt-6">
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <div>
               <Label>From Date</Label>
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
@@ -145,6 +128,19 @@ export default function PeriodPurchasesPage() {
             <div>
               <Label>To Date</Label>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            </div>
+            <div>
+              <Label>Group By</Label>
+              <Select value={groupBy} onValueChange={setGroupBy}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Month" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="day">Day</SelectItem>
+                  <SelectItem value="week">Week</SelectItem>
+                  <SelectItem value="month">Month</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="md:col-span-2">
               <Label>Supplier</Label>
@@ -166,15 +162,16 @@ export default function PeriodPurchasesPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <SummaryCard label="Purchase Amount" value={totals.purchaseAmount} />
-        <SummaryCard label="Tax/Fees" value={totals.tax} />
-        <SummaryCard label="Net Amount" value={totals.netAmount} highlight />
+      <div className="grid gap-4 md:grid-cols-4">
+        <SummaryCard label="Total Purchases" value={totals.totalAmount} />
+        <SummaryCard label="Paid" value={totals.paidAmount} />
+        <SummaryCard label="Balance" value={totals.balanceAmount} />
+        <SummaryCard label="Invoices" value={totals.invoiceCount.toString()} highlight />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Transactions</CardTitle>
+          <CardTitle className="text-lg">Summary</CardTitle>
         </CardHeader>
         <CardContent>
           <DataTable
@@ -183,17 +180,9 @@ export default function PeriodPurchasesPage() {
             isLoading={isLoading}
             searchable
             emptyMessage="No purchases found"
-            onRowClick={(row) => openDetail({ type: "purchase", id: row.id })}
           />
         </CardContent>
       </Card>
-
-      <ReportDetailDialog
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
     </div>
   );
 }
@@ -204,7 +193,7 @@ function SummaryCard({ label, value, highlight }: { label: string; value: string
       <CardContent className="pt-4 space-y-1">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
         <p className={`text-2xl font-semibold font-mono ${highlight ? "text-primary" : ""}`}>
-          Rs. {Number(value || 0).toLocaleString()}
+          {Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
         </p>
       </CardContent>
     </Card>

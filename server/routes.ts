@@ -222,15 +222,18 @@ export async function registerRoutes(
   app.get("/api/dashboard/stats", async (req, res) => {
     try {
       const profitLoss = await storage.getProfitLoss();
+      const [purchases, sales] = await Promise.all([storage.getPurchases(), storage.getSales()]);
+      const totalPurchases = purchases.reduce((sum, p) => sum + parseFloat(p.totalAmount || "0"), 0);
+      const totalSales = sales.reduce((sum, s) => sum + parseFloat(s.totalAmount || "0"), 0);
       const products = await storage.getProducts();
       const stockValue = products.reduce((sum, p) => 
         sum + (parseFloat(p.currentStock) * parseFloat(p.avgPurchasePrice)), 0);
 
       res.json({
-        totalPurchases: `Rs. ${parseFloat(profitLoss.totalPurchases).toLocaleString()}`,
-        totalSales: `Rs. ${parseFloat(profitLoss.totalSales).toLocaleString()}`,
+        totalPurchases: `Rs. ${totalPurchases.toLocaleString()}`,
+        totalSales: `Rs. ${totalSales.toLocaleString()}`,
         stockValue: `Rs. ${stockValue.toLocaleString()}`,
-        totalProfit: `Rs. ${parseFloat((profitLoss as any).netProfit ?? profitLoss.grossProfit).toLocaleString()}`,
+        totalProfit: `Rs. ${parseFloat(profitLoss.netProfit).toLocaleString()}`,
       });
     } catch (error) {
       console.error(error);
@@ -478,7 +481,11 @@ export async function registerRoutes(
   app.post("/api/employees/:id/salary-structures", requireRoles(["admin", "manager", "hr"]), async (req, res) => {
     try {
       const employeeId = parseInt(req.params.id, 10);
-      const body = insertEmployeeSalaryStructureSchema.omit({ employeeId: true }).parse(req.body);
+      // Coerce date strings coming from the client into Date before validation
+      const body = insertEmployeeSalaryStructureSchema.omit({ employeeId: true }).parse({
+        ...req.body,
+        effectiveFrom: req.body?.effectiveFrom ? new Date(req.body.effectiveFrom) : undefined,
+      });
       const created = await storage.createEmployeeSalaryStructure({
         ...body,
         employeeId,
@@ -1312,7 +1319,12 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   // Reports
   app.get("/api/reports/stock", async (req, res) => {
     try {
-      const report = await storage.getStockReport();
+      const fromDate = parseOptionalDate(req.query.fromDate);
+      const toDate = parseOptionalDate(req.query.toDate);
+      const productId = parseOptionalInt(req.query.productId);
+      const category = typeof req.query.category === "string" ? req.query.category : undefined;
+      const unit = typeof req.query.unit === "string" ? req.query.unit : undefined;
+      const report = await storage.getStockReport({ fromDate, toDate, productId, category, unit });
       res.json(report);
     } catch (error) {
       console.error(error);
@@ -1322,7 +1334,8 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
 
   app.get("/api/reports/trial-balance", async (req, res) => {
     try {
-      const report = await storage.getTrialBalance();
+      const asOfDate = parseOptionalDate(req.query.asOfDate);
+      const report = await storage.getTrialBalance(asOfDate);
       res.json(report);
     } catch (error) {
       console.error(error);
@@ -1344,16 +1357,19 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
 
   app.get("/api/reports/purchases", async (req, res) => {
     try {
-      const purchases = await storage.getPurchases();
-      const purchasesWithDetails = await Promise.all(
-        purchases.map(async (purchase) => {
-          const items = await storage.getPurchaseItems(purchase.id);
-          const charges = await storage.getPurchaseCharges(purchase.id);
-          const supplier = await storage.getAccount(purchase.supplierId);
-          return { ...purchase, items, charges, supplier };
-        })
-      );
-      res.json(purchasesWithDetails);
+      const fromDate = parseOptionalDate(req.query.fromDate);
+      const toDate = parseOptionalDate(req.query.toDate);
+      const supplierId = parseOptionalInt(req.query.supplierId);
+      const productId = parseOptionalInt(req.query.productId);
+      const status = typeof req.query.paymentStatus === "string" ? req.query.paymentStatus : undefined;
+      const report = await storage.getPurchaseReport({
+        fromDate,
+        toDate,
+        supplierId,
+        productId,
+        paymentStatus: status as any,
+      });
+      res.json(report);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to fetch purchase report" });
@@ -1362,15 +1378,19 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
 
   app.get("/api/reports/sales", async (req, res) => {
     try {
-      const sales = await storage.getSales();
-      const salesWithDetails = await Promise.all(
-        sales.map(async (sale) => {
-          const items = await storage.getSaleItems(sale.id);
-          const customer = await storage.getAccount(sale.customerId);
-          return { ...sale, items, customer };
-        })
-      );
-      res.json(salesWithDetails);
+      const fromDate = parseOptionalDate(req.query.fromDate);
+      const toDate = parseOptionalDate(req.query.toDate);
+      const customerId = parseOptionalInt(req.query.customerId);
+      const productId = parseOptionalInt(req.query.productId);
+      const status = typeof req.query.paymentStatus === "string" ? req.query.paymentStatus : undefined;
+      const report = await storage.getSalesReport({
+        fromDate,
+        toDate,
+        customerId,
+        productId,
+        paymentStatus: status as any,
+      });
+      res.json(report);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to fetch sales report" });
@@ -1383,7 +1403,8 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
       const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
       const toDate = parseRequiredDate(req.query.toDate, "toDate");
       const supplierId = parseOptionalInt(req.query.supplierId);
-      const report = await storage.getPeriodPurchases(fromDate, toDate, supplierId);
+      const groupBy = typeof req.query.groupBy === "string" ? (req.query.groupBy as any) : "month";
+      const report = await storage.getPeriodPurchases(fromDate, toDate, supplierId, groupBy);
       res.json(report);
     } catch (error) {
       console.error(error);
@@ -1396,7 +1417,8 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
       const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
       const toDate = parseRequiredDate(req.query.toDate, "toDate");
       const customerId = parseOptionalInt(req.query.customerId);
-      const report = await storage.getPeriodSales(fromDate, toDate, customerId);
+      const groupBy = typeof req.query.groupBy === "string" ? (req.query.groupBy as any) : "month";
+      const report = await storage.getPeriodSales(fromDate, toDate, customerId, groupBy);
       res.json(report);
     } catch (error) {
       console.error(error);

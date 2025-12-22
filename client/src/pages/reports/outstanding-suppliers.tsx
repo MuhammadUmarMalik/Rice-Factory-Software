@@ -25,11 +25,24 @@ type OutstandingSupplierRow = {
   paidAmount: string;
   outstandingAmount: string;
   dueDate: string | number | Date | null;
+  daysOutstanding: number;
+  bucket0To30: string;
+  bucket31To60: string;
+  bucket61To90: string;
+  bucket91Plus: string;
 };
 
 type OutstandingSuppliersReport = {
   rows: OutstandingSupplierRow[];
-  totals: { billAmount: string; paidAmount: string; outstandingAmount: string };
+  totals: {
+    billAmount: string;
+    paidAmount: string;
+    outstandingAmount: string;
+    bucket0To30: string;
+    bucket31To60: string;
+    bucket61To90: string;
+    bucket91Plus: string;
+  };
 };
 
 export default function OutstandingSuppliersPage() {
@@ -60,16 +73,29 @@ export default function OutstandingSuppliersPage() {
   });
 
   const rows = data?.rows || [];
-  const totals = data?.totals || { billAmount: "0", paidAmount: "0", outstandingAmount: "0" };
+  const totals = data?.totals || {
+    billAmount: "0",
+    paidAmount: "0",
+    outstandingAmount: "0",
+    bucket0To30: "0",
+    bucket31To60: "0",
+    bucket61To90: "0",
+    bucket91Plus: "0",
+  };
 
   const columns: Column<OutstandingSupplierRow>[] = useMemo(
     () => [
-      { key: "invoiceNumber", title: "Invoice #", render: (r) => <span className="font-mono">{r.invoiceNumber}</span> },
+      { key: "invoiceNumber", title: "Bill #", render: (r) => <span className="font-mono">{r.invoiceNumber}</span> },
       { key: "purchaseDate", title: "Date", render: (r) => <span className="font-mono">{format(new Date(r.purchaseDate), "dd-MM-yyyy")}</span> },
       { key: "supplierName", title: "Supplier" },
       { key: "billAmount", title: "Bill", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.billAmount || 0).toLocaleString()}</span> },
       { key: "paidAmount", title: "Paid", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.paidAmount || 0).toLocaleString()}</span> },
       { key: "outstandingAmount", title: "Outstanding", align: "right", render: (r) => <span className="font-mono font-semibold text-destructive">Rs. {Number(r.outstandingAmount || 0).toLocaleString()}</span> },
+      { key: "daysOutstanding", title: "Days", align: "right" },
+      { key: "bucket0To30", title: "0-30", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket0To30 || 0).toLocaleString()}</span> },
+      { key: "bucket31To60", title: "31-60", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket31To60 || 0).toLocaleString()}</span> },
+      { key: "bucket61To90", title: "61-90", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket61To90 || 0).toLocaleString()}</span> },
+      { key: "bucket91Plus", title: "91+", align: "right", render: (r) => <span className="font-mono">Rs. {Number(r.bucket91Plus || 0).toLocaleString()}</span> },
       { key: "dueDate", title: "Due Date", render: (r) => (r.dueDate ? format(new Date(r.dueDate), "dd-MM-yyyy") : "-") },
     ],
     [],
@@ -79,7 +105,7 @@ export default function OutstandingSuppliersPage() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Outstanding Suppliers</h1>
-        <p className="text-sm text-muted-foreground">Outstanding = Bill Amount − Paid Amount.</p>
+        <p className="text-sm text-muted-foreground">Outstanding = Bill Amount - Payments/Adjustments.</p>
       </div>
 
       <Card>
@@ -109,10 +135,11 @@ export default function OutstandingSuppliersPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <SummaryCard label="Bill" value={totals.billAmount} />
+      <div className="grid gap-4 md:grid-cols-4">
+        <SummaryCard label="Bills" value={totals.billAmount} />
         <SummaryCard label="Paid" value={totals.paidAmount} />
         <SummaryCard label="Outstanding" value={totals.outstandingAmount} highlight />
+        <SummaryCard label="91+ Days" value={totals.bucket91Plus} highlight />
       </div>
 
       <Card>

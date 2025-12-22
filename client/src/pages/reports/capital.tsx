@@ -8,6 +8,7 @@ type CapitalStatement = {
   openingCapital: string;
   additionalCapital: string;
   drawings: string;
+  netProfit: string;
   closingCapital: string;
 };
 
@@ -35,6 +36,7 @@ export default function CapitalPage() {
   const opening = Number(data?.openingCapital || 0);
   const add = Number(data?.additionalCapital || 0);
   const drawings = Number(data?.drawings || 0);
+  const netProfit = Number(data?.netProfit || 0);
   const closing = Number(data?.closingCapital || 0);
 
   return (
@@ -70,6 +72,7 @@ export default function CapitalPage() {
         <CardContent className="space-y-3">
           <Line label="Opening Capital" value={opening} />
           <Line label="Additional Capital" value={add} />
+          <Line label="Net Profit" value={netProfit} />
           <Line label="Drawings" value={drawings} negative />
           <div className="border-t border-border" />
           <Line label="Closing Capital" value={closing} emphasize />

@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Plus, Eye, Truck, Calculator, ArrowLeft, Edit, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -53,7 +52,6 @@ const purchaseFormSchema = z.object({
   vehicleNumber: z.string().optional(),
   brokerId: z.string().optional(),
   brokerCommissionPercent: z.string().default("0"),
-  paidAmount: z.string().default("0"),
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
@@ -135,7 +133,6 @@ export default function PurchasesPage() {
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
-      paidAmount: "0",
       notes: "",
       items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
       charges: defaultCharges,
@@ -152,10 +149,10 @@ export default function PurchasesPage() {
     name: "charges",
   });
 
-  const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
-    // Use report endpoint to include supplier/charges details for display
-    queryKey: ["/api/reports/purchases"],
+  const { data: purchasesData, isLoading } = useQuery<Purchase[]>({
+    queryKey: ["/api/purchases"],
   });
+  const purchases = Array.isArray(purchasesData) ? purchasesData : [];
 
   const { data: suppliers = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts?type=supplier"],
@@ -255,6 +252,7 @@ export default function PurchasesPage() {
         supplierId: parseInt(data.supplierId),
         purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
         brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
+        paidAmount: "0",
         moundBaseKg: moundBaseKg.toString(),
         items: data.items.map((item, idx) => ({
           productId: parseInt(item.productId),
@@ -294,6 +292,7 @@ export default function PurchasesPage() {
         supplierId: parseInt(payload.data.supplierId),
         purchaseDate: payload.data.purchaseDate ? new Date(payload.data.purchaseDate) : undefined,
         brokerId: payload.data.brokerId && payload.data.brokerId !== "none" ? parseInt(payload.data.brokerId) : null,
+        paidAmount: "0",
         moundBaseKg: moundBaseKg.toString(),
         items: payload.data.items.map((item, idx) => ({
           productId: parseInt(item.productId),
@@ -336,16 +335,16 @@ export default function PurchasesPage() {
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => apiRequest("DELETE", `/api/purchases/${id}`),
     onMutate: async (id: number) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/reports/purchases"] });
-      const prev = queryClient.getQueryData<(Purchase & { supplier?: Account })[]>(["/api/reports/purchases"]);
-      queryClient.setQueryData<(Purchase & { supplier?: Account })[]>(["/api/reports/purchases"], (old) =>
+      await queryClient.cancelQueries({ queryKey: ["/api/purchases"] });
+      const prev = queryClient.getQueryData<Purchase[]>(["/api/purchases"]);
+      queryClient.setQueryData<Purchase[]>(["/api/purchases"], (old) =>
         old ? old.filter((p) => p.id !== id) : old
       );
       return { prev };
     },
     onError: (_err, id, ctx) => {
       if (ctx?.prev) {
-        queryClient.setQueryData(["/api/reports/purchases"], ctx.prev);
+        queryClient.setQueryData(["/api/purchases"], ctx.prev);
       }
       toast({ title: `Delete failed for purchase ${id}`, variant: "destructive" });
     },
@@ -371,7 +370,6 @@ export default function PurchasesPage() {
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
-      paidAmount: "0",
       notes: "",
       items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
       charges: defaultCharges,
@@ -418,27 +416,42 @@ export default function PurchasesPage() {
       vehicleNumber: purchase.vehicleNumber || "",
       brokerId: purchase.brokerId ? String(purchase.brokerId) : "none",
       brokerCommissionPercent: purchase.brokerCommissionPercent || "0",
-      paidAmount: purchase.paidAmount || "0",
       notes: purchase.notes || "",
       items: normalizedItems,
       charges: normalizedCharges,
     });
   };
 
-  const handleEdit = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
-    setMode("edit");
-    setCurrentPurchase(purchase as any);
-    setCurrentPurchaseId(purchase.id);
-    populateFormFromPurchase(purchase);
-    openDialog("purchaseForm");
+  const loadPurchaseDetail = async (purchaseId: number) => {
+    const res = await apiRequest("GET", `/api/purchases/${purchaseId}`);
+    if (!res.ok) throw new Error("Failed to load purchase detail");
+    return res.json();
   };
 
-  const handleView = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
-    setMode("view");
-    setCurrentPurchase(purchase as any);
-    setCurrentPurchaseId(purchase.id);
-    populateFormFromPurchase(purchase);
-    openDialog("purchaseForm");
+  const handleEdit = async (purchase: Purchase) => {
+    try {
+      const detail = await loadPurchaseDetail(purchase.id);
+      setMode("edit");
+      setCurrentPurchase(detail as any);
+      setCurrentPurchaseId(purchase.id);
+      populateFormFromPurchase(detail);
+      openDialog("purchaseForm");
+    } catch (err: any) {
+      toast({ title: "Failed to load purchase detail", description: err?.message || "Unknown error", variant: "destructive" });
+    }
+  };
+
+  const handleView = async (purchase: Purchase) => {
+    try {
+      const detail = await loadPurchaseDetail(purchase.id);
+      setMode("view");
+      setCurrentPurchase(detail as any);
+      setCurrentPurchaseId(purchase.id);
+      populateFormFromPurchase(detail);
+      openDialog("purchaseForm");
+    } catch (err: any) {
+      toast({ title: "Failed to load purchase detail", description: err?.message || "Unknown error", variant: "destructive" });
+    }
   };
   const handleCloseDialog = () => {
     closeDialog("purchaseForm");
@@ -489,8 +502,6 @@ export default function PurchasesPage() {
   const watchItems = form.watch("items");
   const watchCharges = form.watch("charges");
   const watchCommission = form.watch("brokerCommissionPercent");
-  const watchPaidAmount = form.watch("paidAmount");
-
   const moundBaseKg = parseFloat(form.watch("moundBaseKg") || "40") || 40;
   const computedItems = watchItems.map((item) => {
     const bags = parseFloat(item.bags) || 0;
@@ -532,7 +543,6 @@ export default function PurchasesPage() {
     { chargesAdd: 0, chargesLess: 0 }
   );
   const grandAmount = lineSubtotal + chargesAdd - chargesLess;
-  const balanceDue = grandAmount - (parseFloat(watchPaidAmount || "0") || 0);
   const totalBags = watchItems.reduce((sum, i) => sum + (parseFloat(i.bags) || 0), 0);
   const totalGross = computedItems.reduce((sum, i) => sum + i.grossWeight, 0);
   const totalNet = computedItems.reduce((sum, i) => sum + i.netWeight, 0);
@@ -593,24 +603,6 @@ export default function PurchasesPage() {
           Rs. {parseFloat(item.totalAmount || "0").toLocaleString()}
         </span>
       ),
-    },
-    {
-      key: "paidAmount",
-      title: "Paid",
-      align: "right",
-      render: (item) => {
-        const total = parseFloat(item.totalAmount || "0");
-        const paid = parseFloat(item.paidAmount || "0");
-        const isPaid = paid >= total;
-        return (
-          <div className={`flex items-center gap-2 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
-            <span className="font-mono text-sm">Rs. {paid.toLocaleString()}</span>
-            <Badge variant={isPaid ? "default" : "secondary"} className="text-xs">
-              {isPaid ? (language === "ur" ? "Paid" : "Paid") : (language === "ur" ? "Due" : "Due")}
-            </Badge>
-          </div>
-        );
-      },
     },
     {
       key: "actions",
@@ -713,7 +705,7 @@ export default function PurchasesPage() {
               </div>
             </div>
             <DialogDescription className="sr-only">
-              Create or edit a purchase by selecting supplier, entering items, charges, and payment details.
+              Create or edit a purchase by selecting supplier, entering items, charges, and notes.
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -851,7 +843,7 @@ export default function PurchasesPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="brokerCommissionPercent"
@@ -860,19 +852,6 @@ export default function PurchasesPage() {
                       <FormLabel>{t("brokerCommission")} (%)</FormLabel>
                       <FormControl>
                         <Input {...field} type="number" step="0.01" data-testid="input-commission" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="paidAmount"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("paidAmount")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-paid" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -1198,10 +1177,6 @@ export default function PurchasesPage() {
                         <span>Grand Amount</span>
                         <span className="font-mono">Rs. {grandAmount.toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Balance Due</span>
-                        <span className="font-mono">Rs. {balanceDue.toLocaleString()}</span>
-                      </div>
                       <div className="text-muted-foreground text-xs">In words: {amountInWords}</div>
                     </div>
                   </div>
@@ -1289,15 +1264,6 @@ export default function PurchasesPage() {
                       <div>
                         <p className="text-xs text-muted-foreground">Total Amount</p>
                         <p className="font-mono font-semibold">Rs. {Number(currentPurchase.totalAmount || 0).toLocaleString()}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground">Paid</p>
-                        <div className="flex items-center justify-end gap-2">
-                          <span className="font-mono font-semibold">Rs. {Number(currentPurchase.paidAmount || 0).toLocaleString()}</span>
-                          <Badge variant={Number(currentPurchase.paidAmount || 0) >= Number(currentPurchase.totalAmount || 0) ? "default" : "secondary"}>
-                            {Number(currentPurchase.paidAmount || 0) >= Number(currentPurchase.totalAmount || 0) ? "Paid" : "Due"}
-                          </Badge>
-                        </div>
                       </div>
                     </div>
                   </CardContent>
