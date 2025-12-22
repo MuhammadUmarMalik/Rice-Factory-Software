@@ -15,6 +15,8 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
 import { downloadCsv } from "@/lib/export";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type PeriodSalesRow = {
   period: string;
@@ -96,26 +98,39 @@ export default function PeriodSalesPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Period-wise Sales</h1>
           <p className="text-sm text-muted-foreground">Sales grouped by day, week, or month.</p>
         </div>
-        <Button
-          variant="outline"
-          disabled={!rows.length}
-          onClick={() =>
-            downloadCsv(
-              `period-sales_${fromDate}_${toDate}`,
-              [
-                { header: "Period", value: (r) => r.period },
-                { header: "Total Sales", value: (r) => r.totalAmount },
-                { header: "Received", value: (r) => r.receivedAmount },
-                { header: "Balance", value: (r) => r.balanceAmount },
-                { header: "Invoices", value: (r) => r.invoiceCount.toString() },
-              ],
-              rows,
-            )
-          }
-        >
-          <Download className="h-4 w-4 mr-2" />
-          Export CSV
-        </Button>
+        <div className="flex gap-2">
+          <PrintActions
+            docKey={docKeys.periodSales}
+            params={{
+              fromDate: fromDate || undefined,
+              toDate: toDate || undefined,
+              customerId: customerId !== "all" ? customerId : undefined,
+              groupBy,
+            }}
+            title="Period-wise Sales"
+            disabled={!fromDate || !toDate}
+          />
+          <Button
+            variant="outline"
+            disabled={!rows.length}
+            onClick={() =>
+              downloadCsv(
+                `period-sales_${fromDate}_${toDate}`,
+                [
+                  { header: "Period", value: (r) => r.period },
+                  { header: "Total Sales", value: (r) => r.totalAmount },
+                  { header: "Received", value: (r) => r.receivedAmount },
+                  { header: "Balance", value: (r) => r.balanceAmount },
+                  { header: "Invoices", value: (r) => r.invoiceCount.toString() },
+                ],
+                rows,
+              )
+            }
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       <Card>

@@ -25,6 +25,9 @@ type SettingsPayload = {
   businessNameUrdu: string;
   phone: string;
   address: string;
+  logoUrl?: string;
+  ntn?: string;
+  strn?: string;
   language: "en" | "ur";
   theme: "light" | "dark";
 };
@@ -34,6 +37,9 @@ const defaultSettings: SettingsPayload = {
   businessNameUrdu: "چاول مل ادارہ",
   phone: "+92 300 1234567",
   address: "Industrial Area, Lahore",
+  logoUrl: "",
+  ntn: "",
+  strn: "",
   language: "en",
   theme: "light",
 };
@@ -47,6 +53,9 @@ export default function SettingsPage() {
   const [businessNameUrdu, setBusinessNameUrdu] = useState(defaultSettings.businessNameUrdu);
   const [phone, setPhone] = useState(defaultSettings.phone);
   const [address, setAddress] = useState(defaultSettings.address);
+  const [logoUrl, setLogoUrl] = useState(defaultSettings.logoUrl || "");
+  const [ntn, setNtn] = useState(defaultSettings.ntn || "");
+  const [strn, setStrn] = useState(defaultSettings.strn || "");
 
   const { data: settingsData, isLoading } = useQuery<SettingsPayload>({
     queryKey: ["/api/settings"],
@@ -58,6 +67,9 @@ export default function SettingsPage() {
       setBusinessNameUrdu(settingsData.businessNameUrdu || "");
       setPhone(settingsData.phone || "");
       setAddress(settingsData.address || "");
+      setLogoUrl(settingsData.logoUrl || "");
+      setNtn(settingsData.ntn || "");
+      setStrn(settingsData.strn || "");
       setTheme(settingsData.theme || "light");
     }
   }, [settingsData, setTheme]);
@@ -69,6 +81,9 @@ export default function SettingsPage() {
         businessNameUrdu,
         phone,
         address,
+        logoUrl,
+        ntn,
+        strn,
         language,
         theme,
       };
@@ -154,6 +169,41 @@ export default function SettingsPage() {
                 data-testid="input-address"
                 disabled={isLoading || saveMutation.isPending}
               />
+            </div>
+            <div>
+              <Label className={isRTL ? "font-urdu" : ""}>
+                {language === "ur" ? "Logo URL" : "Logo URL"}
+              </Label>
+              <Input 
+                value={logoUrl} 
+                onChange={(e) => setLogoUrl(e.target.value)}
+                data-testid="input-logo-url"
+                disabled={isLoading || saveMutation.isPending}
+              />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <Label className={isRTL ? "font-urdu" : ""}>
+                  {language === "ur" ? "NTN" : "NTN"}
+                </Label>
+                <Input 
+                  value={ntn} 
+                  onChange={(e) => setNtn(e.target.value)}
+                  data-testid="input-ntn"
+                  disabled={isLoading || saveMutation.isPending}
+                />
+              </div>
+              <div>
+                <Label className={isRTL ? "font-urdu" : ""}>
+                  {language === "ur" ? "STRN" : "STRN"}
+                </Label>
+                <Input 
+                  value={strn} 
+                  onChange={(e) => setStrn(e.target.value)}
+                  data-testid="input-strn"
+                  disabled={isLoading || saveMutation.isPending}
+                />
+              </div>
             </div>
           </CardContent>
         </Card>

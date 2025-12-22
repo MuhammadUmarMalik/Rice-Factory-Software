@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type SalaryRow = {
   accountId: number | null;
@@ -71,9 +73,17 @@ export default function SalaryAccountPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Salary Account</h1>
-        <p className="text-sm text-muted-foreground">Salary expense ledger summarized by month and employee.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Salary Account</h1>
+          <p className="text-sm text-muted-foreground">Salary expense ledger summarized by month and employee.</p>
+        </div>
+        <PrintActions
+          docKey={docKeys.salary}
+          params={{ fromDate: fromDate || undefined, toDate: toDate || undefined }}
+          title="Salary Account"
+          disabled={!fromDate || !toDate}
+        />
       </div>
 
       <Card>
@@ -121,6 +131,7 @@ export default function SalaryAccountPage() {
       </Card>
 
       <ReportDetailDialog
+        reference={reference}
         open={!!reference}
         onOpenChange={(open) => (!open ? closeDetail() : null)}
         detail={detail || null}

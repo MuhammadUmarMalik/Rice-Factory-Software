@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useState } from "react";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type ProfitLossResponse = {
   period: { fromDate: string | number | Date; toDate: string | number | Date };
@@ -53,10 +55,12 @@ export default function ProfitLossPage() {
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button variant="outline" data-testid="button-export">
-            <Download className="h-4 w-4" />
-            {t("export")}
-          </Button>
+          <PrintActions
+            docKey={docKeys.profitLoss}
+            params={{ startDate: dateFrom || undefined, endDate: dateTo || undefined }}
+            title="Profit & Loss"
+            disabled={!dateFrom || !dateTo}
+          />
         </div>
       </div>
 

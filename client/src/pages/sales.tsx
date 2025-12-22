@@ -8,6 +8,7 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 import {
   Dialog,
   DialogContent,
@@ -58,6 +59,7 @@ export default function SalesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const form = useForm<SaleFormData>({
     resolver: zodResolver(saleFormSchema),
@@ -274,7 +276,12 @@ export default function SalesPage() {
       align: "center",
       render: (item) => (
         <div className={`flex gap-1 justify-center ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button size="icon" variant="ghost" data-testid={`button-view-${item.id}`}>
+          <Button
+            size="icon"
+            variant="ghost"
+            data-testid={`button-view-${item.id}`}
+            onClick={() => openDetail({ type: "sale", id: item.id })}
+          >
             <Eye className="h-4 w-4" />
           </Button>
         </div>
@@ -560,6 +567,14 @@ export default function SalesPage() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      <ReportDetailDialog
+        reference={reference}
+        open={!!reference}
+        onOpenChange={(open) => (!open ? closeDetail() : null)}
+        detail={detail || null}
+        isLoading={isDetailLoading}
+      />
     </div>
   );
 }

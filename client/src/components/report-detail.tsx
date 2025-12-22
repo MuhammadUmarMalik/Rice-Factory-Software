@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from "date-fns";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 export type ReportReference = { type: string; id: number };
 
@@ -386,17 +388,41 @@ export function ReportDetailDialog({
   onOpenChange,
   detail,
   isLoading,
+  reference,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   detail: ReportDetail;
   isLoading?: boolean;
+  reference?: ReportReference | null;
 }) {
+  const printConfig =
+    reference?.type === "sale"
+      ? { docKey: docKeys.salesInvoice, params: { saleId: reference.id }, title: "Sales Invoice" }
+      : reference?.type === "purchase"
+        ? { docKey: docKeys.purchaseInvoice, params: { purchaseId: reference.id }, title: "Purchase Invoice" }
+        : reference?.type === "receipt"
+          ? { docKey: docKeys.cashReceiptVoucher, params: { voucherId: reference.id }, title: "Cash Receipt Voucher" }
+          : reference?.type === "payment"
+            ? { docKey: docKeys.cashPaymentVoucher, params: { voucherId: reference.id }, title: "Cash Payment Voucher" }
+            : reference?.type === "journal_voucher"
+              ? { docKey: docKeys.journalVoucher, params: { voucherId: reference.id }, title: "Journal Voucher" }
+              : null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl">
         <DialogHeader>
-          <DialogTitle>Details</DialogTitle>
+          <div className="flex items-center justify-between gap-4">
+            <DialogTitle>Details</DialogTitle>
+            {printConfig && (
+              <PrintActions
+                docKey={printConfig.docKey}
+                params={printConfig.params}
+                title={printConfig.title}
+              />
+            )}
+          </div>
         </DialogHeader>
         {isLoading ? (
           <div className="space-y-3 py-4">

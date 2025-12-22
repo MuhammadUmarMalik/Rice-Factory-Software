@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useQuery } from "@tanstack/react-query";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 
 type BalanceSheet = {
   asOfDate: string | number | Date;
@@ -131,6 +133,13 @@ export default function BalanceSheetPage() {
                   {isLoading && <span>Loading...</span>}
                   {error && <span className="text-destructive">{(error as Error).message}</span>}
                 </div>
+              </div>
+              <div className="md:col-span-2">
+                <PrintActions
+                  docKey={docKeys.balanceSheet}
+                  params={{ asOfDate: asOfDate || undefined }}
+                  title="Balance Sheet"
+                />
               </div>
             </div>
           </div>

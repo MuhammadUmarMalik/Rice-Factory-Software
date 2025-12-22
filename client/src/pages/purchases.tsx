@@ -9,6 +9,8 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import {
   Dialog,
   DialogContent,
@@ -703,6 +705,13 @@ export default function PurchasesPage() {
                       : (language === "ur" ? "New Purchase" : "New Purchase")}
                 </DialogTitle>
               </div>
+              {purchaseMode === "view" && currentPurchase?.id && (
+                <PrintActions
+                  docKey={docKeys.purchaseInvoice}
+                  params={{ purchaseId: currentPurchase.id }}
+                  title="Purchase Invoice"
+                />
+              )}
             </div>
             <DialogDescription className="sr-only">
               Create or edit a purchase by selecting supplier, entering items, charges, and notes.
