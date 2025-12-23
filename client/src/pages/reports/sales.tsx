@@ -54,7 +54,9 @@ export default function SalesReportPage() {
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [customerId, setCustomerId] = useState<string>("all");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [productId, setProductId] = useState<string>("all");
+  const [productSearch, setProductSearch] = useState("");
   const [status, setStatus] = useState<string>("all");
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
@@ -65,6 +67,21 @@ export default function SalesReportPage() {
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+
+  const customerQuery = customerSearch.trim().toLowerCase();
+  const filteredCustomers = customerQuery
+    ? customers.filter((c) => c.name.toLowerCase().includes(customerQuery))
+    : customers;
+  const productQuery = productSearch.trim().toLowerCase();
+  const filteredProducts = productQuery
+    ? products.filter((p) => {
+        const haystack = [p.name, p.nameUrdu, p.unit]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(productQuery);
+      })
+    : products;
 
   const { data, isLoading } = useQuery<SalesReport>({
     queryKey: ["/api/reports/sales", dateFrom, dateTo, customerId, productId, status],
@@ -246,8 +263,17 @@ export default function SalesReportPage() {
                   <SelectValue placeholder="All customers" />
                 </SelectTrigger>
                 <SelectContent>
+                  <div className="px-2 pb-2">
+                    <Input
+                      value={customerSearch}
+                      onChange={(e) => setCustomerSearch(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="Search customers"
+                      className="h-8"
+                    />
+                  </div>
                   <SelectItem value="all">All</SelectItem>
-                  {customers.map((c) => (
+                  {filteredCustomers.map((c) => (
                     <SelectItem key={c.id} value={c.id.toString()}>
                       {c.name}
                     </SelectItem>
@@ -262,8 +288,17 @@ export default function SalesReportPage() {
                   <SelectValue placeholder="All items" />
                 </SelectTrigger>
                 <SelectContent>
+                  <div className="px-2 pb-2">
+                    <Input
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="Search items"
+                      className="h-8"
+                    />
+                  </div>
                   <SelectItem value="all">All</SelectItem>
-                  {products.map((p) => (
+                  {filteredProducts.map((p) => (
                     <SelectItem key={p.id} value={p.id.toString()}>
                       {p.name}
                     </SelectItem>

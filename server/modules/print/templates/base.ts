@@ -83,7 +83,9 @@ function renderTable(payload: PrintableDocumentPayload) {
           ${table.columns
             .map((c) => {
               const val = row[c.key];
-              return `<td class="${alignClass(c)}">${escapeHtml(val ?? "")}</td>`;
+              const escaped = escapeHtml(val ?? "");
+              const htmlVal = escaped.replace(/\n/g, "<br/>");
+              return `<td class="${alignClass(c)}">${htmlVal}</td>`;
             })
             .join("")}
         </tr>
@@ -185,4 +187,3 @@ export function renderDocumentHtml(payload: PrintableDocumentPayload) {
 </html>
 `;
 }
-

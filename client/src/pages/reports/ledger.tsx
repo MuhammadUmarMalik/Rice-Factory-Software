@@ -1,5 +1,4 @@
-import { useMemo, useState } from "react";
-import { Download, Calendar } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/language-context";
@@ -21,21 +20,25 @@ import { ReportDetailDialog, useReportDetail } from "@/components/report-detail"
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 
-type LedgerRow = {
+type LedgerReportRow = {
   id: number;
-  accountId: number;
-  transactionType: "debit" | "credit";
-  amount: string;
-  balance?: string;
-  description: string;
-  descriptionUrdu?: string;
-  referenceType?: string;
-  referenceId?: number;
   entryDate: string | number | Date;
-  openingBalance?: string;
-  debit?: string;
-  credit?: string;
-  runningBalance?: string;
+  narration: string;
+  vchType: string;
+  vchNo: string;
+  debit: string;
+  credit: string;
+  runningBalance: string;
+  referenceType?: string | null;
+  referenceId?: number | null;
+};
+
+type LedgerReport = {
+  account: Account;
+  openingBalance: string;
+  rows: LedgerReportRow[];
+  totals: { debit: string; credit: string; closingBalance: string };
+  validation?: { closingMatchesLastRow?: boolean; closingMatchesTotals?: boolean };
 };
 
 export default function LedgerPage() {
@@ -44,6 +47,8 @@ export default function LedgerPage() {
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
+  const [voucherType, setVoucherType] = useState<string>("all");
+  const [narrationSearch, setNarrationSearch] = useState<string>("");
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const path = typeof window !== "undefined" ? window.location.pathname : location;
@@ -51,22 +56,62 @@ export default function LedgerPage() {
     ? "sales"
     : path.includes("ledger-purchases")
       ? "purchases"
-      : undefined;
+      : path.includes("ledger-journal")
+        ? "journal"
+        : path.includes("ledger-expenses")
+          ? "expenses"
+          : path.includes("ledger-payroll")
+            ? "payroll"
+            : path.includes("ledger-employee")
+              ? "employee"
+              : path.includes("ledger-cash")
+                ? "cash"
+                : path.includes("ledger-bank")
+                  ? "bank"
+                  : undefined;
   const heading =
-    scope === "sales" ? "Sales Ledger" : scope === "purchases" ? "Purchase Ledger" : t("ledger");
+    scope === "sales"
+      ? t("salesLedger")
+      : scope === "purchases"
+        ? t("purchaseLedger")
+        : scope === "journal"
+          ? t("journalLedger")
+          : scope === "expenses"
+            ? t("expenseLedger")
+            : scope === "payroll"
+              ? t("payrollLedger")
+              : scope === "employee"
+                ? t("employeePayLedger")
+                : scope === "cash"
+                  ? t("cashLedger")
+                  : scope === "bank"
+                    ? t("bankLedger")
+                    : t("ledger");
   const subheading =
     scope === "sales"
       ? "Customer account ledger (sales entries only)"
       : scope === "purchases"
         ? "Supplier account ledger (purchase entries only)"
-        : "Classic ledger layout with running balances.";
+        : scope === "journal"
+          ? "Journal voucher ledger with audit-ready narration."
+          : scope === "expenses"
+            ? "Expense ledger with pay-from impact."
+            : scope === "payroll"
+              ? "Salary expense and payroll postings."
+              : scope === "employee"
+                ? "Employee payable ledger with pay details."
+                : scope === "cash"
+                  ? "System cash ledger with running balance."
+                  : scope === "bank"
+                    ? "Bank account ledger with register-style flow."
+                    : "Classic ledger layout with running balances.";
 
   const { data: accounts = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts"],
   });
 
-  const { data: ledgerEntries = [], isLoading } = useQuery<LedgerRow[]>({
-    queryKey: ["/api/ledger", selectedAccountId, scope, dateFrom, dateTo],
+  const { data: ledgerReport, isLoading } = useQuery<LedgerReport>({
+    queryKey: ["/api/ledger", selectedAccountId, scope, dateFrom, dateTo, voucherType, narrationSearch],
     enabled: !!selectedAccountId,
     queryFn: async () => {
       const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
@@ -75,6 +120,8 @@ export default function LedgerPage() {
       if (scope) params.set("scope", scope);
       if (dateFrom) params.set("startDate", dateFrom);
       if (dateTo) params.set("endDate", dateTo);
+      if (voucherType && voucherType !== "all") params.set("voucherType", voucherType);
+      if (narrationSearch) params.set("narration", narrationSearch);
       const res = await fetch(`/api/ledger?${params.toString()}`, {
         credentials: "include",
         headers: role ? { "x-user-role": role } : {},
@@ -87,49 +134,58 @@ export default function LedgerPage() {
   const accountChoices = useMemo(() => {
     if (scope === "sales") return accounts.filter((a) => a.type === "customer");
     if (scope === "purchases") return accounts.filter((a) => a.type === "supplier");
+    if (scope === "expenses") return accounts.filter((a) => a.type === "expense");
+    if (scope === "payroll") return accounts.filter((a) => a.type === "salary");
+    if (scope === "employee") return accounts.filter((a) => a.type === "employee");
+    if (scope === "bank") return accounts.filter((a) => a.type === "bank");
+    if (scope === "cash") return accounts.filter((a) => a.isSystemAccount && a.name === "Cash in Hand");
     return accounts;
   }, [accounts, scope]);
 
   const selectedAccount = accountChoices.find((a) => a.id.toString() === selectedAccountId);
-
-  const orderedEntries = useMemo(
-    () => [...ledgerEntries].sort((a, b) => new Date(a.entryDate).getTime() - new Date(b.entryDate).getTime()),
-    [ledgerEntries],
-  );
-
-  const rangeOpening = orderedEntries.length
-    ? parseFloat(orderedEntries[0].openingBalance || selectedAccount?.openingBalance || "0")
-    : parseFloat(selectedAccount?.openingBalance || "0");
-
-  const totals = orderedEntries.reduce(
-    (acc, e) => {
-      const debitVal = parseFloat(e.debit || (e.transactionType === "debit" ? e.amount : "0"));
-      const creditVal = parseFloat(e.credit || (e.transactionType === "credit" ? e.amount : "0"));
-      acc.debit += Number.isFinite(debitVal) ? debitVal : 0;
-      acc.credit += Number.isFinite(creditVal) ? creditVal : 0;
-      acc.closing = Number.isFinite(parseFloat(e.runningBalance || e.balance || "0"))
-        ? parseFloat(e.runningBalance || e.balance || "0")
-        : acc.closing;
-      return acc;
-    },
-    {
-      debit: 0,
-      credit: 0,
-      closing: rangeOpening,
-    },
-  );
-  const netMovement = totals.debit - totals.credit;
-  const netTotals = {
-    debit: netMovement > 0 ? netMovement : 0,
-    credit: netMovement < 0 ? Math.abs(netMovement) : 0,
-    closing: totals.closing,
+  const ledgerRows = ledgerReport?.rows || [];
+  const openingBalance = ledgerReport?.openingBalance || selectedAccount?.openingBalance || "0";
+  const totals = ledgerReport?.totals || {
+    debit: "0",
+    credit: "0",
+    closingBalance: openingBalance,
   };
-
+  const validation = ledgerReport?.validation;
+  const voucherChoices = [
+    { label: "All", value: "all" },
+    { label: "Sale", value: "sale" },
+    { label: "Purchase", value: "purchase" },
+    { label: "Journal Voucher", value: "journal_voucher" },
+    { label: "Receipt", value: "receipt" },
+    { label: "Payment", value: "payment" },
+    { label: "Expense", value: "expense" },
+  ];
+  const formatAmount = (value?: string | number) => {
+    const num = typeof value === "number" ? value : parseFloat(value || "0");
+    if (!Number.isFinite(num)) return "0.00";
+    return num.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
   const tabs = [
     { label: "General", href: "/reports/ledger", active: scope === undefined },
     { label: "Sales", href: "/reports/ledger-sales", active: scope === "sales" },
     { label: "Purchases", href: "/reports/ledger-purchases", active: scope === "purchases" },
+    { label: "Journal", href: "/reports/ledger-journal", active: scope === "journal" },
+    { label: "Expenses", href: "/reports/ledger-expenses", active: scope === "expenses" },
+    { label: "Payroll", href: "/reports/ledger-payroll", active: scope === "payroll" },
+    { label: "Employee Pay", href: "/reports/ledger-employee", active: scope === "employee" },
+    { label: "Cash", href: "/reports/ledger-cash", active: scope === "cash" },
+    { label: "Bank", href: "/reports/ledger-bank", active: scope === "bank" },
   ];
+
+  useEffect(() => {
+    if (scope === "journal" || scope === "payroll") {
+      setVoucherType("journal_voucher");
+    } else if (scope === "expenses") {
+      setVoucherType("expense");
+    } else {
+      setVoucherType("all");
+    }
+  }, [scope]);
 
   return (
     <div className="p-6 space-y-6">
@@ -145,6 +201,9 @@ export default function LedgerPage() {
             scope: scope || undefined,
             startDate: dateFrom || undefined,
             endDate: dateTo || undefined,
+            voucherType: voucherType !== "all" ? voucherType : undefined,
+            narration: narrationSearch || undefined,
+            language: isRTL ? "ur" : "en",
           }}
           title={heading}
           disabled={!selectedAccountId}
@@ -166,7 +225,7 @@ export default function LedgerPage() {
 
       <Card>
         <CardContent className="pt-6">
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-6">
             <div className="md:col-span-2">
               <Label>Select Account</Label>
               <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
@@ -190,6 +249,29 @@ export default function LedgerPage() {
               <Label>To Date</Label>
               <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </div>
+            <div>
+              <Label>Voucher Type</Label>
+              <Select value={voucherType} onValueChange={setVoucherType}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All vouchers" />
+                </SelectTrigger>
+                <SelectContent>
+                  {voucherChoices.map((choice) => (
+                    <SelectItem key={choice.value} value={choice.value}>
+                      {choice.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Search Narration</Label>
+              <Input
+                placeholder="Purchase, freight, loading..."
+                value={narrationSearch}
+                onChange={(e) => setNarrationSearch(e.target.value)}
+              />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -202,86 +284,107 @@ export default function LedgerPage() {
               {selectedAccount.name}
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Opening balance: Rs. {rangeOpening.toLocaleString()}
+              Opening balance: Rs. {formatAmount(openingBalance)}
             </p>
+            {(dateFrom || dateTo) && (
+              <p className="text-xs text-muted-foreground">
+                {dateFrom ? format(new Date(dateFrom), "dd MMM yyyy") : "Start"} — {dateTo ? format(new Date(dateTo), "dd MMM yyyy") : "Today"}
+              </p>
+            )}
+            {validation && (!validation.closingMatchesLastRow || !validation.closingMatchesTotals) && (
+              <p className="text-xs text-destructive">
+                Ledger check failed; totals or closing balance are out of sync.
+              </p>
+            )}
           </CardHeader>
           <CardContent className="overflow-auto">
-            <div className="min-w-[900px] border rounded-lg bg-white">
-              <div className="grid grid-cols-[50px,120px,1fr,140px,140px,140px] bg-muted/60 text-xs font-semibold uppercase tracking-wide border-b">
-                <div className="px-3 py-2 border-r">No.</div>
-                <div className="px-3 py-2 border-r">Date</div>
-                <div className="px-3 py-2 border-r">Particulars</div>
-                <div className="px-3 py-2 border-r text-right">Debit</div>
-                <div className="px-3 py-2 border-r text-right">Credit</div>
-                <div className="px-3 py-2 text-right">Balance</div>
+            <div className="min-w-[780px] border rounded-lg bg-white">
+              <div className="grid grid-cols-[90px,1fr,120px,120px,120px] bg-muted/60 text-[11px] font-semibold uppercase tracking-wide border-b">
+                <div className="px-3 py-2 border-r">{isRTL ? "تاریخ" : "Date"}</div>
+                <div className="px-3 py-2 border-r">{isRTL ? "تفصیل" : "NARATION"}</div>
+                <div className="px-3 py-2 border-r text-right">{isRTL ? "ڈیبٹ" : "Debit"}</div>
+                <div className="px-3 py-2 border-r text-right">{isRTL ? "کریڈٹ" : "Credit"}</div>
+                <div className="px-3 py-2 text-right">{isRTL ? "بقایا" : "Balance"}</div>
               </div>
 
               {isLoading ? (
                 <div className="p-6 text-center text-muted-foreground text-sm">Loading entries...</div>
-              ) : orderedEntries.length === 0 ? (
-                <div className="p-6 text-center text-muted-foreground text-sm">No entries for this range.</div>
               ) : (
-                orderedEntries.map((entry, idx) => {
-                  const debit = parseFloat(entry.debit || (entry.transactionType === "debit" ? entry.amount : "0"));
-                  const credit = parseFloat(entry.credit || (entry.transactionType === "credit" ? entry.amount : "0"));
-                  const balance = parseFloat(entry.runningBalance || entry.balance || "0");
-                  const allowedTypes = ["purchase", "sale", "receipt", "payment", "journal_voucher"];
-                  const clickable = entry.referenceType && entry.referenceId && allowedTypes.includes(entry.referenceType);
-                  return (
-                    <div
-                      key={entry.id}
-                      className={clsx(
-                        "grid grid-cols-[50px,120px,1fr,140px,140px,140px] text-sm border-b last:border-b-0",
-                        clickable ? "cursor-pointer hover:bg-muted/40 transition-colors" : "",
-                        idx % 2 === 0 ? "bg-white" : "bg-muted/30",
-                      )}
-                      onClick={() =>
-                        clickable && entry.referenceType
-                          ? openDetail({ type: entry.referenceType as any, id: Number(entry.referenceId) })
-                          : undefined
-                      }
-                    >
-                      <div className="px-3 py-2 border-r text-muted-foreground">{idx + 1}</div>
-                      <div className="px-3 py-2 border-r">
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Calendar className="h-3 w-3" />
-                          <span className="font-mono">{format(new Date(entry.entryDate), "dd-MM-yyyy")}</span>
-                        </div>
-                      </div>
-                      <div className="px-3 py-2 border-r">
-                        <div className="font-medium">{entry.description}</div>
-                        {entry.referenceType && (
-                          <div className="text-xs text-muted-foreground">
-                            Ref: {entry.referenceType} #{entry.referenceId}
-                          </div>
-                        )}
-                      </div>
-                      <div className="px-3 py-2 border-r text-right font-mono">
-                        {debit > 0 ? `Rs. ${debit.toLocaleString()}` : "-"}
-                      </div>
-                      <div className="px-3 py-2 border-r text-right font-mono">
-                        {credit > 0 ? `Rs. ${credit.toLocaleString()}` : "-"}
-                      </div>
-                      <div className="px-3 py-2 text-right font-mono font-semibold">
-                        Rs. {balance.toLocaleString()}
-                      </div>
+                <>
+                  <div className="grid grid-cols-[90px,1fr,120px,120px,120px] text-sm border-b bg-muted/10">
+                    <div className="px-3 py-2 border-r text-xs text-muted-foreground">
+                      {dateFrom ? format(new Date(dateFrom), "dd-MM-yy") : ""}
                     </div>
-                  );
-                })
+                    <div className="px-3 py-2 border-r font-medium">
+                      {isRTL ? "ابتدائی بقایا" : "Opening Balance"}
+                    </div>
+                    <div className="px-3 py-2 border-r text-right font-mono tabular-nums">-</div>
+                    <div className="px-3 py-2 border-r text-right font-mono tabular-nums">-</div>
+                    <div className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
+                      Rs. {formatAmount(openingBalance)}
+                    </div>
+                  </div>
+                  {ledgerRows.length === 0 ? (
+                    <div className="px-3 py-3 text-center text-muted-foreground text-sm border-b">
+                      No entries for this range.
+                    </div>
+                  ) : (
+                    ledgerRows.map((entry, idx) => {
+                      const debit = parseFloat(entry.debit || "0");
+                      const credit = parseFloat(entry.credit || "0");
+                      const balance = parseFloat(entry.runningBalance || "0");
+                      const allowedTypes = ["purchase", "sale", "receipt", "payment", "journal_voucher", "expense"];
+                      const clickable = entry.referenceType && entry.referenceId && allowedTypes.includes(entry.referenceType);
+                      const narration = entry.narration || "";
+                      return (
+                        <div
+                          key={entry.id}
+                          className={clsx(
+                            "grid grid-cols-[90px,1fr,120px,120px,120px] text-sm border-b last:border-b-0",
+                            clickable ? "cursor-pointer hover:bg-muted/30 transition-colors" : "",
+                            idx % 2 === 0 ? "bg-white" : "bg-muted/20",
+                          )}
+                          onClick={() =>
+                            clickable && entry.referenceType
+                              ? openDetail({ type: entry.referenceType as any, id: Number(entry.referenceId) })
+                              : undefined
+                          }
+                        >
+                          <div className="px-3 py-2 border-r text-xs text-muted-foreground font-mono">
+                            {format(new Date(entry.entryDate), "dd-MM-yy")}
+                          </div>
+                          <div className="px-3 py-2 border-r">
+                            <div className="text-sm font-medium leading-5">{narration}</div>
+                          </div>
+                          <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                            {debit > 0 ? `Rs. ${formatAmount(debit)}` : "-"}
+                          </div>
+                          <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                            {credit > 0 ? `Rs. ${formatAmount(credit)}` : "-"}
+                          </div>
+                          <div className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
+                            Rs. {formatAmount(balance)}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </>
               )}
 
-              {orderedEntries.length > 0 && (
-                <div className="grid grid-cols-[50px,120px,1fr,140px,140px,140px] bg-muted/80 text-sm font-semibold border-t">
-                  <div className="px-3 py-2 border-r">Total</div>
+              {ledgerRows.length > 0 && (
+                <div className="grid grid-cols-[90px,1fr,120px,120px,120px] bg-muted/80 text-sm font-semibold border-t">
                   <div className="px-3 py-2 border-r"></div>
-                  <div className="px-3 py-2 border-r"></div>
-                  <div className="px-3 py-2 border-r text-right font-mono">
-                    {netTotals.debit > 0 ? `Rs. ${netTotals.debit.toLocaleString()}` : "-"}
+                  <div className="px-3 py-2 border-r">{isRTL ? "کل" : "Totals"}</div>
+                  <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                    {Number(totals.debit || 0) > 0 ? `Rs. ${formatAmount(totals.debit)}` : "-"}
                   </div>
-                  <div className="px-3 py-2 border-r text-right font-mono">
-                    {netTotals.credit > 0 ? `Rs. ${netTotals.credit.toLocaleString()}` : "-"}
+                  <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                    {Number(totals.credit || 0) > 0 ? `Rs. ${formatAmount(totals.credit)}` : "-"}
                   </div>
-                  <div className="px-3 py-2 text-right font-mono">Rs. {netTotals.closing.toLocaleString()}</div>
+                  <div className="px-3 py-2 text-right font-mono tabular-nums">
+                    Rs. {formatAmount(totals.closingBalance)}
+                  </div>
                 </div>
               )}
             </div>

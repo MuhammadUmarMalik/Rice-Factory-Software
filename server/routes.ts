@@ -1288,12 +1288,47 @@ const receiptHeaderSchema = insertReceiptVoucherSchema.extend({
   app.get("/api/ledger", async (req, res) => {
     try {
       const accountId = req.query.accountId ? parseInt(req.query.accountId as string) : undefined;
+      if (!accountId) {
+        return res.status(400).json({ error: "accountId is required" });
+      }
       const scope = (req.query.scope as string) || "";
-      const referenceType = scope === "sales" ? "sale" : scope === "purchases" ? "purchase" : undefined;
+      const voucherTypeRaw = typeof req.query.voucherType === "string" ? req.query.voucherType : undefined;
+      const narration = typeof req.query.narration === "string" ? req.query.narration : undefined;
+      const normalizeVoucherType = (value?: string) => {
+        if (!value) return undefined;
+        const v = value.trim().toLowerCase();
+        if (v === "sale" || v === "sales") return "sale";
+        if (v === "purchase" || v === "purchases") return "purchase";
+        if (v === "journal" || v === "jv" || v === "journal_voucher") return "journal_voucher";
+        if (v === "receipt" || v === "crv" || v === "brv") return "receipt";
+        if (v === "payment" || v === "cpv" || v === "bpv") return "payment";
+        if (v === "expense" || v === "exp") return "expense";
+        return undefined;
+      };
+      const scopeRef =
+        scope === "sales"
+          ? "sale"
+          : scope === "purchases"
+            ? "purchase"
+            : scope === "journal"
+              ? "journal_voucher"
+              : scope === "expenses"
+                ? "expense"
+                : scope === "payroll"
+                  ? "journal_voucher"
+                  : undefined;
+      const voucherRef = normalizeVoucherType(voucherTypeRaw);
+      const referenceType = voucherRef || scopeRef;
       const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
       const endDate = req.query.endDate ? new Date(req.query.endDate as string) : undefined;
-      const entries = await storage.getLedgerEntries(accountId, referenceType, startDate, endDate);
-      res.json(entries);
+      const report = await storage.getLedgerReport({
+        accountId,
+        referenceType,
+        startDate,
+        endDate,
+        narration,
+      });
+      res.json(report);
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: "Failed to fetch ledger entries" });
