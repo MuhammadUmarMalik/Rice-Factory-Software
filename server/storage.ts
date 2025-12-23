@@ -53,6 +53,25 @@ type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
 type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
 type JournalEntryInput = Omit<InsertJournalVoucherEntry, "id" | "journalVoucherId">;
 type CashTxInput = Omit<InsertCashTransaction, "id" | "createdAt">;
+type LedgerReportRow = {
+  id: number;
+  entryDate: Date | number;
+  narration: string;
+  vchType: string;
+  vchNo: string;
+  debit: string;
+  credit: string;
+  runningBalance: string;
+  referenceType?: string | null;
+  referenceId?: number | null;
+};
+type LedgerReport = {
+  account: Account;
+  openingBalance: string;
+  rows: LedgerReportRow[];
+  totals: { debit: string; credit: string; closingBalance: string };
+  validation: { closingMatchesLastRow: boolean; closingMatchesTotals: boolean };
+};
 
 export interface IStorage {
   // Users
@@ -134,6 +153,13 @@ export interface IStorage {
 
   // Ledger
   getLedgerEntries(accountId?: number, referenceType?: string, startDate?: Date, endDate?: Date): Promise<LedgerEntry[]>;
+  getLedgerReport(params: {
+    accountId: number;
+    referenceType?: string;
+    startDate?: Date;
+    endDate?: Date;
+    narration?: string;
+  }): Promise<LedgerReport>;
   createLedgerEntry(entry: InsertLedgerEntry): Promise<LedgerEntry>;
   getOrCreateCashAccount(): Promise<Account>;
   recordCashTransaction(tx: CashTxInput): Promise<CashTransaction>;
@@ -1271,6 +1297,22 @@ export class DatabaseStorage implements IStorage {
 
     return newEntry as any;
   }
+
+  private postBalancedLedgerEntries(client: DbClient, entries: Omit<InsertLedgerEntry, "balance">[], context: string) {
+    let debitTotal = 0;
+    let creditTotal = 0;
+    for (const entry of entries) {
+      const amount = parseAmount(entry.amount || "0");
+      if (entry.transactionType === "debit") debitTotal += amount;
+      if (entry.transactionType === "credit") creditTotal += amount;
+    }
+    if (Math.abs(debitTotal - creditTotal) > 0.0001) {
+      throw new Error(`${context} ledger postings are not balanced (debit ${debitTotal} vs credit ${creditTotal})`);
+    }
+    for (const entry of entries) {
+      this.postLedgerEntry(client, entry);
+    }
+  }
   private ensureCashAccountInternal(client: DbClient): Account {
     const existing = client.select().from(accounts)
       .where(and(eq(accounts.name, "Cash in Hand"), eq(accounts.isSystemAccount, true as any)))
@@ -1574,9 +1616,6 @@ export class DatabaseStorage implements IStorage {
       const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
-      const unaccountedCharges = charges
-        .map((charge) => ({ charge, amount: parseAmount(charge.amount) }))
-        .filter(({ charge, amount }) => amount > 0 && !charge.accountId);
       const brokerCommissionPercent = parseAmount(purchase.brokerCommissionPercent || "0");
       const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
 
@@ -1642,30 +1681,85 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      // Double-entry: Dr Inventory/Expense (+Tax Input/charges), Cr Supplier (AP)
+      // Double-entry: split purchase into base/tax/charge lines so ledgers show each impact.
       const debitAccountId = purchase.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
       const supplierAccountId = purchase.supplierId;
       const baseAmount = Math.max(lineSubtotal, 0);
+      const ledgerLines: Omit<InsertLedgerEntry, "balance">[] = [];
+      const purchaseBaseLabel = `PURCHASE ${invoiceNumber}`;
+
+      const pushLine = (line: Omit<InsertLedgerEntry, "balance">) => ledgerLines.push(line);
 
       if (baseAmount > 0) {
-        this.postLedgerEntry(client, {
+        const amount = baseAmount.toString();
+        pushLine({
           accountId: debitAccountId,
           transactionType: "debit",
-          amount: baseAmount.toString(),
-          description: `Purchase Invoice ${invoiceNumber}`,
+          amount,
+          description: purchaseBaseLabel,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: "credit",
+          amount,
+          description: purchaseBaseLabel,
           referenceType: "purchase",
           referenceId: newPurchase.id,
           entryDate: postingDate,
         });
       }
 
-      for (const { charge, amount } of unaccountedCharges) {
+      const chargeLabel = (type: string) => {
+        switch (type) {
+          case "weight":
+            return "WEIGHT ADD";
+          case "freight":
+            return "FREIGHT";
+          case "loading_filling":
+            return "LOADING/FILLING";
+          case "market_fee":
+            return "MARKET FEE";
+          case "mitha_sukri":
+            return "MITHA SUKRI";
+          case "phone_analysis":
+            return "PHONE/ANALYSIS";
+          case "brokerage":
+            return "BROKERAGE";
+          case "commission":
+            return "COMMISSION";
+          case "bardana":
+            return "BARDANA";
+          case "broken_allowance":
+            return "BROKEN ALLOWANCE";
+          case "other":
+          default:
+            return "OTHER";
+        }
+      };
+
+      for (const charge of charges) {
+        const amt = parseAmount(charge.amount);
+        if (amt <= 0) continue;
         const entryType = charge.mode === "less" ? "credit" : "debit";
-        this.postLedgerEntry(client, {
-          accountId: debitAccountId,
+        const label = chargeLabel(charge.type);
+        const targetAccountId = charge.accountId ?? debitAccountId;
+        pushLine({
+          accountId: targetAccountId,
           transactionType: entryType,
-          amount: amount.toString(),
-          description: `Purchase Charge ${invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
+          amount: amt.toString(),
+          description: label,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: entryType === "debit" ? "credit" : "debit",
+          amount: amt.toString(),
+          description: label,
           referenceType: "purchase",
           referenceId: newPurchase.id,
           entryDate: postingDate,
@@ -1682,11 +1776,21 @@ export class DatabaseStorage implements IStorage {
         } else {
           taxAccountId = this.ensureSystemAccount(client, "Tax Input", "asset").id;
         }
-        this.postLedgerEntry(client, {
+        const taxLabel = "TAX";
+        pushLine({
           accountId: taxAccountId,
           transactionType: "debit",
           amount: taxAmount.toString(),
-          description: `Purchase Tax ${invoiceNumber}`,
+          description: taxLabel,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: "credit",
+          amount: taxAmount.toString(),
+          description: taxLabel,
           referenceType: "purchase",
           referenceId: newPurchase.id,
           entryDate: postingDate,
@@ -1702,30 +1806,7 @@ export class DatabaseStorage implements IStorage {
         } as any).run();
       }
 
-      for (const charge of charges) {
-        const amt = parseAmount(charge.amount);
-        if (!charge.accountId || amt <= 0) continue;
-        const entryType = charge.mode === "less" ? "credit" : "debit";
-        this.postLedgerEntry(client, {
-          accountId: charge.accountId,
-          transactionType: entryType,
-          amount: amt.toString(),
-          description: `Purchase Charge ${invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
-          entryDate: postingDate,
-        });
-      }
-
-      this.postLedgerEntry(client, {
-        accountId: supplierAccountId,
-        transactionType: "credit",
-        amount: grandAmount.toString(),
-        description: `Purchase Invoice ${invoiceNumber}`,
-        referenceType: "purchase",
-        referenceId: newPurchase.id,
-        entryDate: postingDate,
-      });
+      this.postBalancedLedgerEntries(client, ledgerLines, `purchase ${invoiceNumber}`);
 
       return newPurchase;
     });
@@ -1798,9 +1879,6 @@ export class DatabaseStorage implements IStorage {
       const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
-      const unaccountedCharges = charges
-        .map((charge) => ({ charge, amount: parseAmount(charge.amount) }))
-        .filter(({ charge, amount }) => amount > 0 && !charge.accountId);
       const brokerCommissionPercent = parseAmount((purchase as any).brokerCommissionPercent ?? existing.brokerCommissionPercent ?? "0");
       const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
 
@@ -1846,30 +1924,85 @@ export class DatabaseStorage implements IStorage {
         }).run();
       }
 
-      // Post fresh double-entry for updated purchase
+      // Post fresh double-entry for updated purchase with split charge lines.
       const debitAccountId = purchase.expenseAccountId ?? existing.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
       const supplierAccountId = purchase.supplierId ?? existing.supplierId;
       const baseAmount = Math.max(lineSubtotal, 0);
+      const ledgerLines: Omit<InsertLedgerEntry, "balance">[] = [];
+      const purchaseBaseLabel = `PURCHASE ${existing.invoiceNumber}`;
+
+      const pushLine = (line: Omit<InsertLedgerEntry, "balance">) => ledgerLines.push(line);
 
       if (baseAmount > 0) {
-        this.postLedgerEntry(client, {
+        const amount = baseAmount.toString();
+        pushLine({
           accountId: debitAccountId,
           transactionType: "debit",
-          amount: baseAmount.toString(),
-          description: `Purchase Update ${existing.invoiceNumber}`,
+          amount,
+          description: purchaseBaseLabel,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: "credit",
+          amount,
+          description: purchaseBaseLabel,
           referenceType: "purchase",
           referenceId: id,
           entryDate: postingDate,
         });
       }
 
-      for (const { charge, amount } of unaccountedCharges) {
+      const chargeLabel = (type: string) => {
+        switch (type) {
+          case "weight":
+            return "WEIGHT ADD";
+          case "freight":
+            return "FREIGHT";
+          case "loading_filling":
+            return "LOADING/FILLING";
+          case "market_fee":
+            return "MARKET FEE";
+          case "mitha_sukri":
+            return "MITHA SUKRI";
+          case "phone_analysis":
+            return "PHONE/ANALYSIS";
+          case "brokerage":
+            return "BROKERAGE";
+          case "commission":
+            return "COMMISSION";
+          case "bardana":
+            return "BARDANA";
+          case "broken_allowance":
+            return "BROKEN ALLOWANCE";
+          case "other":
+          default:
+            return "OTHER";
+        }
+      };
+
+      for (const charge of charges) {
+        const amt = parseAmount(charge.amount);
+        if (amt <= 0) continue;
         const entryType = charge.mode === "less" ? "credit" : "debit";
-        this.postLedgerEntry(client, {
-          accountId: debitAccountId,
+        const label = chargeLabel(charge.type);
+        const targetAccountId = charge.accountId ?? debitAccountId;
+        pushLine({
+          accountId: targetAccountId,
           transactionType: entryType,
-          amount: amount.toString(),
-          description: `Purchase Charge ${existing.invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
+          amount: amt.toString(),
+          description: label,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: entryType === "debit" ? "credit" : "debit",
+          amount: amt.toString(),
+          description: label,
           referenceType: "purchase",
           referenceId: id,
           entryDate: postingDate,
@@ -1886,41 +2019,28 @@ export class DatabaseStorage implements IStorage {
         } else {
           taxAccountId = this.ensureSystemAccount(client, "Tax Input", "asset").id;
         }
-        this.postLedgerEntry(client, {
+        const taxLabel = "TAX";
+        pushLine({
           accountId: taxAccountId,
           transactionType: "debit",
           amount: taxAmount.toString(),
-          description: `Purchase Tax ${existing.invoiceNumber}`,
+          description: taxLabel,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: "credit",
+          amount: taxAmount.toString(),
+          description: taxLabel,
           referenceType: "purchase",
           referenceId: id,
           entryDate: postingDate,
         });
       }
 
-      for (const charge of charges) {
-        const amt = parseAmount(charge.amount);
-        if (!charge.accountId || amt <= 0) continue;
-        const entryType = charge.mode === "less" ? "credit" : "debit";
-        this.postLedgerEntry(client, {
-          accountId: charge.accountId,
-          transactionType: entryType,
-          amount: amt.toString(),
-          description: `Purchase Charge ${existing.invoiceNumber} (${charge.type}, ${charge.mode === "less" ? "less" : "add"})`,
-          referenceType: "purchase",
-          referenceId: id,
-          entryDate: postingDate,
-        });
-      }
-
-      this.postLedgerEntry(client, {
-        accountId: supplierAccountId,
-        transactionType: "credit",
-        amount: grandAmount.toString(),
-        description: `Purchase Update ${existing.invoiceNumber}`,
-        referenceType: "purchase",
-        referenceId: id,
-        entryDate: postingDate,
-      });
+      this.postBalancedLedgerEntries(client, ledgerLines, `purchase ${existing.invoiceNumber}`);
 
       return updatedPurchase;
     });
@@ -2146,25 +2266,29 @@ export class DatabaseStorage implements IStorage {
         this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
       }
 
-      // Double-entry: Dr Customer (AR), Cr Revenue (+ tax output), record COGS/Inventory
-      this.postLedgerEntry(client, {
-        accountId: sale.customerId,
-        transactionType: "debit",
-        amount: totalAmount.toString(),
-        description: `Sale Invoice ${invoiceNumber}`,
-        referenceType: "sale",
-        referenceId: newSale.id,
-        entryDate: postingDate,
-      });
-
+      // Double-entry: split sale into base/tax/charge lines so ledgers show each impact.
+      const ledgerLines: Omit<InsertLedgerEntry, "balance">[] = [];
       const revenueAccount = this.ensureSystemAccount(client, "Sales Revenue", "income");
+      const saleBaseLabel = `SALE ${invoiceNumber}`;
+      const pushLine = (line: Omit<InsertLedgerEntry, "balance">) => ledgerLines.push(line);
+
       const baseRevenue = Math.max(subtotal, 0);
       if (baseRevenue > 0) {
-        this.postLedgerEntry(client, {
+        const amount = baseRevenue.toString();
+        pushLine({
+          accountId: sale.customerId,
+          transactionType: "debit",
+          amount,
+          description: saleBaseLabel,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+        pushLine({
           accountId: revenueAccount.id,
           transactionType: "credit",
-          amount: baseRevenue.toString(),
-          description: `Sale Revenue ${invoiceNumber}`,
+          amount,
+          description: saleBaseLabel,
           referenceType: "sale",
           referenceId: newSale.id,
           entryDate: postingDate,
@@ -2172,18 +2296,28 @@ export class DatabaseStorage implements IStorage {
       }
 
       const chargeLines = [
-        { label: "Loading", amount: loadingCharge },
-        { label: "Weighing", amount: weighingCharge },
-        { label: "Other", amount: otherCharge },
+        { label: "LOADING", amount: loadingCharge },
+        { label: "WEIGHING", amount: weighingCharge },
+        { label: "OTHER", amount: otherCharge },
       ];
       for (const line of chargeLines) {
         if (line.amount === 0) continue;
         const entryType = line.amount > 0 ? "credit" : "debit";
-        this.postLedgerEntry(client, {
+        const amount = Math.abs(line.amount).toString();
+        pushLine({
           accountId: revenueAccount.id,
           transactionType: entryType,
-          amount: Math.abs(line.amount).toString(),
-          description: `Sale Charge ${invoiceNumber} (${line.label}, ${line.amount < 0 ? "less" : "add"})`,
+          amount,
+          description: line.label,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: sale.customerId,
+          transactionType: entryType === "credit" ? "debit" : "credit",
+          amount,
+          description: line.label,
           referenceType: "sale",
           referenceId: newSale.id,
           entryDate: postingDate,
@@ -2200,11 +2334,21 @@ export class DatabaseStorage implements IStorage {
         } else {
           taxAccountId = this.ensureSystemAccount(client, "Tax Output", "liability").id;
         }
-        this.postLedgerEntry(client, {
+        const taxLabel = "TAX";
+        pushLine({
           accountId: taxAccountId,
           transactionType: "credit",
           amount: taxAmount.toString(),
-          description: `Sales Tax ${invoiceNumber}`,
+          description: taxLabel,
+          referenceType: "sale",
+          referenceId: newSale.id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: sale.customerId,
+          transactionType: "debit",
+          amount: taxAmount.toString(),
+          description: taxLabel,
           referenceType: "sale",
           referenceId: newSale.id,
           entryDate: postingDate,
@@ -2219,6 +2363,8 @@ export class DatabaseStorage implements IStorage {
           createdAt: new Date(),
         } as any).run();
       }
+
+      this.postBalancedLedgerEntries(client, ledgerLines, `sale ${invoiceNumber}`);
 
       // COGS: use current avgPurchasePrice * qty
       const inventoryAccount = this.ensureSystemAccount(client, "Inventory", "asset");
@@ -2262,21 +2408,444 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Ledger
+  async getLedgerReport(params: {
+    accountId: number;
+    referenceType?: string;
+    startDate?: Date;
+    endDate?: Date;
+    narration?: string;
+  }): Promise<LedgerReport> {
+    const { accountId, referenceType, startDate, endDate, narration } = params;
+    const account = await this.getAccount(accountId);
+    if (!account) {
+      throw new Error("Account not found");
+    }
+
+    const entries = await this.getLedgerEntries(accountId, referenceType, startDate, endDate);
+    const openingBalanceRaw = entries[0]?.openingBalance || account.openingBalance || "0";
+    const openingBalance = parseAmount(openingBalanceRaw);
+    const normalSide = normalSideForAccountType(account?.type);
+
+    const narrationFilter = (narration || "").trim().toLowerCase();
+    const filteredEntries = narrationFilter
+      ? entries.filter((e) => (e.description || "").toLowerCase().includes(narrationFilter))
+      : entries;
+
+    const byType = filteredEntries.reduce(
+      (acc, e) => {
+        if (!e.referenceType || !e.referenceId) return acc;
+        const list = acc[e.referenceType] || [];
+        list.push(e.referenceId);
+        acc[e.referenceType] = list;
+        return acc;
+      },
+      {} as Record<string, number[]>,
+    );
+
+    const uniqueIds = (list?: number[]) => Array.from(new Set(list || []));
+    const purchaseIds = uniqueIds(byType.purchase);
+    const saleIds = uniqueIds(byType.sale);
+    const receiptIds = uniqueIds([...(byType.receipt || []), ...(byType.payment || [])]);
+    const journalIds = uniqueIds(byType.journal_voucher);
+    const expenseIds = uniqueIds(byType.expense);
+
+    const purchaseNoById = new Map<number, string>(
+      purchaseIds.length
+        ? db
+            .select({ id: purchases.id, no: purchases.invoiceNumber })
+            .from(purchases)
+            .where(inArray(purchases.id, purchaseIds))
+            .all()
+            .map((r) => [r.id, r.no])
+        : [],
+    );
+    const purchaseMetaById = new Map<number, { invoiceNumber?: string | null; totalNetWeightKg?: string | null; totalMoundQty?: string | null; subtotal?: string | null }>(
+      purchaseIds.length
+        ? db
+            .select({
+              id: purchases.id,
+              invoiceNumber: purchases.invoiceNumber,
+              totalNetWeightKg: purchases.totalNetWeightKg,
+              totalMoundQty: purchases.totalMoundQty,
+              subtotal: purchases.subtotal,
+            })
+            .from(purchases)
+            .where(inArray(purchases.id, purchaseIds))
+            .all()
+            .map((r) => [r.id, r])
+        : [],
+    );
+    const saleNoById = new Map<number, string>(
+      saleIds.length
+        ? db
+            .select({ id: sales.id, no: sales.invoiceNumber })
+            .from(sales)
+            .where(inArray(sales.id, saleIds))
+            .all()
+            .map((r) => [r.id, r.no])
+        : [],
+    );
+    const saleMetaById = new Map<number, { invoiceNumber?: string | null; subtotal?: string | null }>(
+      saleIds.length
+        ? db
+            .select({ id: sales.id, invoiceNumber: sales.invoiceNumber, subtotal: sales.subtotal })
+            .from(sales)
+            .where(inArray(sales.id, saleIds))
+            .all()
+            .map((r) => [r.id, r])
+        : [],
+    );
+    const saleItemRows = saleIds.length
+      ? db.select().from(saleItems).where(inArray(saleItems.saleId, saleIds)).all()
+      : [];
+    const saleProductIds = Array.from(new Set(saleItemRows.map((item) => item.productId)));
+    const saleProductRows = saleProductIds.length
+      ? db.select({ id: products.id, unit: products.unit }).from(products).where(inArray(products.id, saleProductIds)).all()
+      : [];
+    const saleProductUnitById = new Map<number, string>(saleProductRows.map((p) => [p.id, p.unit || "units"]));
+    const saleQtyById = new Map<number, { totalQty: number; unit: string }>();
+    for (const item of saleItemRows) {
+      const qty = parseAmount(item.quantity);
+      const unit = saleProductUnitById.get(item.productId) || "units";
+      const current = saleQtyById.get(item.saleId) || { totalQty: 0, unit };
+      const resolvedUnit = current.unit === unit ? unit : "units";
+      saleQtyById.set(item.saleId, { totalQty: current.totalQty + qty, unit: resolvedUnit });
+    }
+    const receiptMetaById = new Map<number, { no: string; voucherType: string; settlementAccountId: number | null }>(
+      receiptIds.length
+        ? db
+            .select({
+              id: receiptVouchers.id,
+              no: receiptVouchers.voucherNumber,
+              voucherType: receiptVouchers.voucherType,
+              settlementAccountId: receiptVouchers.settlementAccountId,
+            })
+            .from(receiptVouchers)
+            .where(inArray(receiptVouchers.id, receiptIds))
+            .all()
+            .map((r) => [r.id, { no: r.no, voucherType: r.voucherType, settlementAccountId: r.settlementAccountId ?? null }])
+        : [],
+    );
+    const journalNoById = new Map<number, string>(
+      journalIds.length
+        ? db
+            .select({ id: journalVouchers.id, no: journalVouchers.voucherNo })
+            .from(journalVouchers)
+            .where(inArray(journalVouchers.id, journalIds))
+            .all()
+            .map((r) => [r.id, r.no])
+        : [],
+    );
+    const journalNarrationById = new Map<number, string>(
+      journalIds.length
+        ? db
+            .select({ id: journalVouchers.id, narration: journalVouchers.narration })
+            .from(journalVouchers)
+            .where(inArray(journalVouchers.id, journalIds))
+            .all()
+            .map((r) => [r.id, r.narration || ""])
+        : [],
+    );
+    const expenseMetaById = new Map<number, { voucherNo?: string | null; description?: string | null; expenseAccountId?: number | null }>(
+      expenseIds.length
+        ? db
+            .select({
+              id: expenseEntries.id,
+              voucherNo: expenseEntries.voucherNo,
+              description: expenseEntries.description,
+              expenseAccountId: expenseEntries.expenseAccountId,
+            })
+            .from(expenseEntries)
+            .where(inArray(expenseEntries.id, expenseIds))
+            .all()
+            .map((r) => [r.id, r])
+        : [],
+    );
+
+    const settlementAccountIds = Array.from(
+      new Set(
+        Array.from(receiptMetaById.values())
+          .map((m) => m.settlementAccountId)
+          .filter((id): id is number => Number.isFinite(id as number)),
+      ),
+    );
+    const settlementTypeById = new Map<number, string>(
+      settlementAccountIds.length
+        ? db
+            .select({ id: accounts.id, type: accounts.type })
+            .from(accounts)
+            .where(inArray(accounts.id, settlementAccountIds))
+            .all()
+            .map((r) => [r.id, r.type])
+        : [],
+    );
+    const settlementNameById = new Map<number, string>(
+      settlementAccountIds.length
+        ? db
+            .select({ id: accounts.id, name: accounts.name })
+            .from(accounts)
+            .where(inArray(accounts.id, settlementAccountIds))
+            .all()
+            .map((r) => [r.id, r.name])
+        : [],
+    );
+    const expenseAccountIds = Array.from(
+      new Set(
+        Array.from(expenseMetaById.values())
+          .map((m) => m.expenseAccountId)
+          .filter((id): id is number => Number.isFinite(id as number)),
+      ),
+    );
+    const expenseAccountNameById = new Map<number, string>(
+      expenseAccountIds.length
+        ? db
+            .select({ id: accounts.id, name: accounts.name })
+            .from(accounts)
+            .where(inArray(accounts.id, expenseAccountIds))
+            .all()
+            .map((r) => [r.id, r.name])
+        : [],
+    );
+
+    const resolveVoucher = (refType?: string | null, refId?: number | null) => {
+      if (!refType || !refId) return { vchType: "-", vchNo: "-" };
+      if (refType === "purchase") return { vchType: "Purchase", vchNo: purchaseNoById.get(refId) || `PUR-${refId}` };
+      if (refType === "sale") return { vchType: "Sale", vchNo: saleNoById.get(refId) || `SAL-${refId}` };
+      if (refType === "journal_voucher") return { vchType: "JV", vchNo: journalNoById.get(refId) || `JV-${refId}` };
+      if (refType === "receipt" || refType === "payment") {
+        const meta = receiptMetaById.get(refId);
+        const settlementType = meta?.settlementAccountId ? settlementTypeById.get(meta.settlementAccountId) : undefined;
+        const isBank = settlementType === "bank";
+        const vchType = refType === "receipt" ? (isBank ? "BRV" : "CRV") : (isBank ? "BPV" : "CPV");
+        return { vchType, vchNo: meta?.no || `${vchType}-${refId}` };
+      }
+      if (refType === "expense") return { vchType: "EXP", vchNo: `EXP-${refId}` };
+      return { vchType: refType.toUpperCase(), vchNo: `${refType.toUpperCase()}-${refId}` };
+    };
+
+    const formatQty = (value: number) =>
+      value.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const formatRate = (value: number) =>
+      value.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const normalizedChargeLabels = new Map<string, string>([
+      ["weight", "WEIGHT ADD"],
+      ["freight", "FREIGHT"],
+      ["loading_filling", "LOADING/FILLING"],
+      ["market_fee", "MARKET FEE"],
+      ["mitha_sukri", "MITHA SUKRI"],
+      ["phone_analysis", "PHONE/ANALYSIS"],
+      ["brokerage", "BROKERAGE"],
+      ["commission", "COMMISSION"],
+      ["bardana", "BARDANA"],
+      ["broken_allowance", "BROKEN ALLOWANCE"],
+      ["other", "OTHER"],
+      ["loading", "LOADING"],
+      ["weighing", "WEIGHING"],
+    ]);
+    const isKnownChargeLabel = (label: string) => {
+      const key = label.trim().toUpperCase();
+      return Array.from(normalizedChargeLabels.values()).includes(key);
+    };
+    const normalizeChargeLabel = (description: string) => {
+      const trimmed = (description || "").trim();
+      if (!trimmed) return "";
+      const upper = trimmed.toUpperCase();
+      if (isKnownChargeLabel(upper)) return upper;
+      const match = trimmed.match(/\(([^,]+),/);
+      if (match) {
+        const normalized = normalizedChargeLabels.get(match[1].trim().toLowerCase());
+        if (normalized) return normalized;
+      }
+      return trimmed;
+    };
+
+    const buildPurchaseNarration = (entry: LedgerEntry, refId?: number | null) => {
+      const rawDescription = (entry.description || "").trim();
+      const lowerDescription = rawDescription.toLowerCase();
+      const meta = refId ? purchaseMetaById.get(refId) : undefined;
+      const invoice = meta?.invoiceNumber || (refId ? purchaseNoById.get(refId) : "") || (refId ? `PUR-${refId}` : "");
+      const base = invoice ? `PURCHASE ${invoice}` : "PURCHASE";
+      const netKg = parseAmount(meta?.totalNetWeightKg || "0");
+      const moundQty = parseAmount(meta?.totalMoundQty || "0");
+      const subtotal = parseAmount(meta?.subtotal || "0");
+      const parts = [base];
+      if (netKg > 0) parts.push(`${formatQty(netKg)}KG`);
+      if (moundQty > 0) parts.push(`${formatQty(moundQty)} MUND`);
+      if (subtotal > 0) {
+        const rateBase = moundQty > 0 ? subtotal / Math.max(moundQty, 1) : subtotal / Math.max(netKg, 1);
+        parts.push(`RATE ${formatRate(rateBase)}`);
+      }
+      if (lowerDescription.includes("reversal")) {
+        return rawDescription;
+      }
+      if (lowerDescription.includes("tax")) {
+        return "TAX";
+      }
+      if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
+        return normalizeChargeLabel(rawDescription);
+      }
+      if (rawDescription && !lowerDescription.includes("purchase")) {
+        return rawDescription;
+      }
+      return parts.join(" | ");
+    };
+
+    const buildSaleNarration = (entry: LedgerEntry, refId?: number | null) => {
+      const rawDescription = (entry.description || "").trim();
+      const lowerDescription = rawDescription.toLowerCase();
+      const meta = refId ? saleMetaById.get(refId) : undefined;
+      const invoice = meta?.invoiceNumber || (refId ? saleNoById.get(refId) : "") || (refId ? `SAL-${refId}` : "");
+      const base = invoice ? `SALE ${invoice}` : "SALE";
+      const qtyMeta = refId ? saleQtyById.get(refId) : undefined;
+      const subtotal = parseAmount(meta?.subtotal || "0");
+      const parts = [base];
+      if (qtyMeta && qtyMeta.totalQty > 0) {
+        parts.push(`${formatQty(qtyMeta.totalQty)} ${qtyMeta.unit || "units"}`.trim());
+        if (subtotal > 0) {
+          const rateBase = subtotal / Math.max(qtyMeta.totalQty, 1);
+          parts.push(`RATE ${formatRate(rateBase)}`);
+        }
+      }
+      if (lowerDescription.includes("reversal")) {
+        return rawDescription;
+      }
+      if (lowerDescription.includes("tax")) {
+        return "TAX";
+      }
+      if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
+        return normalizeChargeLabel(rawDescription);
+      }
+      if (rawDescription && !lowerDescription.includes("sale")) {
+        return rawDescription;
+      }
+      return parts.join(" | ");
+    };
+
+    const buildReceiptNarration = (refId?: number | null) => {
+      if (!refId) return "RECEIPT";
+      const meta = receiptMetaById.get(refId);
+      const settlementId = meta?.settlementAccountId || undefined;
+      const settlementType = settlementId ? settlementTypeById.get(settlementId) : undefined;
+      const settlementName = settlementId ? settlementNameById.get(settlementId) : undefined;
+      const modeLabel = settlementType === "bank"
+        ? `Bank ${settlementName || "Bank"}`
+        : "Cash";
+      const vch = meta?.no || `CRV-${refId}`;
+      return `RECEIPT ${vch} | ${modeLabel}`;
+    };
+
+    const buildPaymentNarration = (refId?: number | null) => {
+      if (!refId) return "PAYMENT";
+      const meta = receiptMetaById.get(refId);
+      const settlementId = meta?.settlementAccountId || undefined;
+      const settlementType = settlementId ? settlementTypeById.get(settlementId) : undefined;
+      const settlementName = settlementId ? settlementNameById.get(settlementId) : undefined;
+      const modeLabel = settlementType === "bank"
+        ? `Bank ${settlementName || "Bank"}`
+        : "Cash";
+      const vch = meta?.no || `CPV-${refId}`;
+      return `PAYMENT ${vch} | ${modeLabel}`;
+    };
+
+    const buildJournalNarration = (refId?: number | null) => {
+      if (!refId) return "JV";
+      const vch = journalNoById.get(refId) || `JV-${refId}`;
+      const note = journalNarrationById.get(refId) || "";
+      return note ? `${vch} | ${note}` : vch;
+    };
+
+    const buildExpenseNarration = (refId?: number | null) => {
+      if (!refId) return "EXP";
+      const meta = expenseMetaById.get(refId);
+      const vch = meta?.voucherNo || `EXP-${refId}`;
+      const accountName = meta?.expenseAccountId ? expenseAccountNameById.get(meta.expenseAccountId) : "";
+      const desc = meta?.description || "";
+      return [vch, accountName, desc].filter(Boolean).join(" | ");
+    };
+
+    let running = openingBalance;
+    const rows: LedgerReportRow[] = filteredEntries.map((entry) => {
+      const debit = parseAmount(entry.debit || "0");
+      const credit = parseAmount(entry.credit || "0");
+      const delta = normalSide === "DEBIT" ? debit - credit : credit - debit;
+      running += delta;
+      const voucher = resolveVoucher(entry.referenceType, entry.referenceId);
+
+      let narration = entry.description || "";
+      if (entry.referenceType === "purchase") {
+        narration = buildPurchaseNarration(entry, entry.referenceId);
+      } else if (entry.referenceType === "sale") {
+        narration = buildSaleNarration(entry, entry.referenceId);
+      } else if (entry.referenceType === "receipt") {
+        narration = buildReceiptNarration(entry.referenceId);
+      } else if (entry.referenceType === "payment") {
+        narration = buildPaymentNarration(entry.referenceId);
+      } else if (entry.referenceType === "journal_voucher") {
+        narration = buildJournalNarration(entry.referenceId);
+      } else if (entry.referenceType === "expense") {
+        narration = buildExpenseNarration(entry.referenceId);
+      }
+
+      return {
+        id: entry.id,
+        entryDate: entry.entryDate,
+        narration,
+        vchType: voucher.vchType,
+        vchNo: voucher.vchNo,
+        debit: debit.toString(),
+        credit: credit.toString(),
+        runningBalance: running.toString(),
+        referenceType: entry.referenceType,
+        referenceId: entry.referenceId,
+      };
+    });
+
+    const totals = rows.reduce(
+      (acc, row) => {
+        acc.debit += parseAmount(row.debit);
+        acc.credit += parseAmount(row.credit);
+        acc.closing = parseAmount(row.runningBalance || acc.closing);
+        return acc;
+      },
+      { debit: 0, credit: 0, closing: openingBalance },
+    );
+    const closingFromTotals =
+      normalSide === "DEBIT"
+        ? openingBalance + totals.debit - totals.credit
+        : openingBalance + totals.credit - totals.debit;
+
+    return {
+      account,
+      openingBalance: openingBalance.toString(),
+      rows,
+      totals: {
+        debit: totals.debit.toString(),
+        credit: totals.credit.toString(),
+        closingBalance: totals.closing.toString(),
+      },
+      validation: {
+        closingMatchesLastRow:
+          rows.length === 0 ? true : Math.abs(parseAmount(rows[rows.length - 1].runningBalance) - totals.closing) < 0.0001,
+        closingMatchesTotals: Math.abs(closingFromTotals - totals.closing) < 0.0001,
+      },
+    };
+  }
+
   async getLedgerEntries(
-    accountId?: number,
-    referenceType?: string,
-    startDate?: Date,
-    endDate?: Date,
-  ): Promise<(LedgerEntry & { runningBalance?: string; debit?: string; credit?: string; openingBalance?: string })[]> {
+      accountId?: number,
+      referenceType?: string,
+      startDate?: Date,
+      endDate?: Date,
+    ): Promise<(LedgerEntry & { runningBalance?: string; debit?: string; credit?: string; openingBalance?: string })[]> {
     const whereClauses = [];
     if (accountId) whereClauses.push(eq(ledgerEntries.accountId, accountId));
     if (referenceType) whereClauses.push(eq(ledgerEntries.referenceType, referenceType));
     if (startDate) whereClauses.push(gte(ledgerEntries.entryDate, startDate));
     if (endDate) whereClauses.push(lte(ledgerEntries.entryDate, endOfDay(endDate)));
 
-    const rowsBase = whereClauses.length
-      ? db.select().from(ledgerEntries).where(and(...whereClauses as any)).orderBy(ledgerEntries.entryDate).all()
-      : db.select().from(ledgerEntries).orderBy(ledgerEntries.entryDate).all();
+      const rowsBase = whereClauses.length
+        ? db.select().from(ledgerEntries).where(and(...whereClauses as any)).orderBy(ledgerEntries.entryDate, ledgerEntries.id).all()
+        : db.select().from(ledgerEntries).orderBy(ledgerEntries.entryDate, ledgerEntries.id).all();
 
     if (!accountId) {
       return rowsBase;
@@ -2299,23 +2868,23 @@ export class DatabaseStorage implements IStorage {
         .all();
       opening += parseAmount(movementRow?.total || "0");
     }
-    const rows = rowsBase;
-
-    let running = opening;
-    return rows.map((row) => {
-      const amount = parseAmount(row.amount);
-      const isIncrease =
-        normalSide === "DEBIT" ? row.transactionType === "debit" : row.transactionType === "credit";
-      running = isIncrease ? running + amount : running - amount;
-      return {
-        ...row,
-        openingBalance: opening.toString(),
-        debit: row.transactionType === "debit" ? row.amount : "0",
-        credit: row.transactionType === "credit" ? row.amount : "0",
-        runningBalance: running.toString(),
-      };
-    });
-  }
+      const rows = rowsBase;
+      let running = opening;
+      return rows.map((row) => {
+        const debit = row.transactionType === "debit" ? parseAmount(row.amount) : 0;
+        const credit = row.transactionType === "credit" ? parseAmount(row.amount) : 0;
+        const delta = normalSide === "DEBIT" ? debit - credit : credit - debit;
+        running += delta;
+        return {
+          ...row,
+          openingBalance: opening.toString(),
+          debit: debit.toString(),
+          credit: credit.toString(),
+          runningBalance: running.toString(),
+          balance: running.toString(),
+        };
+      });
+    }
 
   private createLedgerEntryInternal(client: DbClient, entry: InsertLedgerEntry): Promise<LedgerEntry> {
     return Promise.resolve(this.postLedgerEntry(client, entry));
@@ -4252,64 +4821,199 @@ export class DatabaseStorage implements IStorage {
   async getReportDetail(referenceType: string, referenceId: number) {
     const type = (referenceType || "").toLowerCase();
 
-    if (type === "sale") {
-      const sale = await this.getSale(referenceId);
-      if (!sale) return null;
-      const items = await this.getSaleItems(referenceId);
-      const customer = await this.getAccount(sale.customerId);
-      const ledger = db
-        .select({
-          id: ledgerEntries.id,
-          entryDate: ledgerEntries.entryDate,
-          transactionType: ledgerEntries.transactionType,
-          amount: ledgerEntries.amount,
-          description: ledgerEntries.description,
-          referenceType: ledgerEntries.referenceType,
-          referenceId: ledgerEntries.referenceId,
-          accountId: ledgerEntries.accountId,
-          accountName: accounts.name,
-        })
-        .from(ledgerEntries)
-        .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-        .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, referenceId)))
-        .orderBy(ledgerEntries.entryDate)
-        .all()
-        .map((le) => ({
-          ...le,
-          debit: le.transactionType === "debit" ? le.amount : "0",
-          credit: le.transactionType === "credit" ? le.amount : "0",
-        }));
-      return { type: "sale", sale, items, customer, ledgerEntries: ledger };
-    }
+      if (type === "sale") {
+        const sale = await this.getSale(referenceId);
+        if (!sale) return null;
+        const items = await this.getSaleItems(referenceId);
+        const customer = await this.getAccount(sale.customerId);
+        const saleProductIds = Array.from(new Set(items.map((item) => item.productId)));
+        const saleProducts = saleProductIds.length
+          ? db.select().from(products).where(inArray(products.id, saleProductIds)).all()
+          : [];
+        const saleProductMap = new Map(saleProducts.map((p) => [p.id, p]));
+        const formatQty = (value: number) =>
+          value.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+        const buildItemSummary = (entries: SaleItem[]) => {
+          if (!entries.length) return "";
+          const totals = new Map<number, number>();
+          for (const item of entries) {
+            const qty = parseAmount(item.quantity);
+            totals.set(item.productId, (totals.get(item.productId) || 0) + qty);
+          }
+          const parts: string[] = [];
+          const entriesList = Array.from(totals.entries());
+          for (const [idx, [productId, qty]] of entriesList.entries()) {
+            if (idx >= 2) break;
+            const product = saleProductMap.get(productId);
+            const unit = product?.unit || "units";
+            parts.push(`${product?.name || `#${productId}`} ${formatQty(qty)} ${unit}`);
+          }
+          if (entriesList.length > 2) parts.push(`+${entriesList.length - 2} more`);
+          return parts.join(", ");
+        };
+        const saleChargeLines = [
+          { label: "Loading", amount: parseAmount(sale.loadingCharges || "0") },
+          { label: "Weighing", amount: parseAmount(sale.weighingCharges || "0") },
+          { label: "Other", amount: parseAmount(sale.otherCharges || "0") },
+        ]
+          .filter((line) => line.amount !== 0)
+          .map((line) => `${line.label}${line.amount < 0 ? " (less)" : ""} ${formatQty(Math.abs(line.amount))}`);
+        const saleNarration = [
+          `Sale Invoice #${sale.invoiceNumber || sale.id}`,
+          buildItemSummary(items),
+          ...saleChargeLines,
+        ].filter(Boolean).join(" | ");
+        const ledger = db
+          .select({
+            id: ledgerEntries.id,
+            entryDate: ledgerEntries.entryDate,
+            transactionType: ledgerEntries.transactionType,
+            amount: ledgerEntries.amount,
+            description: ledgerEntries.description,
+            referenceType: ledgerEntries.referenceType,
+            referenceId: ledgerEntries.referenceId,
+            accountId: ledgerEntries.accountId,
+            accountName: accounts.name,
+          })
+          .from(ledgerEntries)
+          .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
+          .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, referenceId)))
+          .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
+          .all()
+          .map((le) => ({
+            ...le,
+            description: saleNarration || le.description,
+            debit: le.transactionType === "debit" ? le.amount : "0",
+            credit: le.transactionType === "credit" ? le.amount : "0",
+          }));
+        return { type: "sale", sale, items, customer, ledgerEntries: ledger };
+      }
 
-    if (type === "purchase") {
-      const purchase = await this.getPurchaseWithDetails(referenceId);
-      if (!purchase) return null;
-      const supplier = await this.getAccount(purchase.supplierId);
-      const ledger = db
-        .select({
-          id: ledgerEntries.id,
-          entryDate: ledgerEntries.entryDate,
-          transactionType: ledgerEntries.transactionType,
-          amount: ledgerEntries.amount,
-          description: ledgerEntries.description,
-          referenceType: ledgerEntries.referenceType,
-          referenceId: ledgerEntries.referenceId,
-          accountId: ledgerEntries.accountId,
-          accountName: accounts.name,
-        })
-        .from(ledgerEntries)
-        .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, referenceId)))
-        .orderBy(ledgerEntries.entryDate)
-        .all()
-        .map((le) => ({
-          ...le,
-          debit: le.transactionType === "debit" ? le.amount : "0",
-          credit: le.transactionType === "credit" ? le.amount : "0",
-        }));
-      return { type: "purchase", purchase, supplier, ledgerEntries: ledger };
-    }
+      if (type === "purchase") {
+        const purchase = await this.getPurchaseWithDetails(referenceId);
+        if (!purchase) return null;
+        const supplier = await this.getAccount(purchase.supplierId);
+        const purchaseItems = purchase.items || [];
+        const purchaseChargesList = purchase.charges || [];
+        const purchaseProductIds = Array.from(new Set(purchaseItems.map((item) => item.productId)));
+        const purchaseProducts = purchaseProductIds.length
+          ? db.select().from(products).where(inArray(products.id, purchaseProductIds)).all()
+          : [];
+        const purchaseProductMap = new Map(purchaseProducts.map((p) => [p.id, p]));
+        const formatQty = (value: number) =>
+          value.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+        const purchaseChargeLabel = (type: string) => {
+          switch (type) {
+            case "weight":
+              return "Weight";
+            case "freight":
+              return "Freight";
+            case "loading_filling":
+              return "Loading";
+            case "market_fee":
+              return "Market Fee";
+            case "mitha_sukri":
+              return "Mitha Sukri";
+            case "phone_analysis":
+              return "Phone Analysis";
+            case "brokerage":
+              return "Brokerage";
+            case "commission":
+              return "Commission";
+            case "bardana":
+              return "Bardana";
+            case "broken_allowance":
+              return "Broken Allowance";
+            case "other":
+            default:
+              return "Other";
+          }
+        };
+        const buildItemSummary = (entries: PurchaseItem[]) => {
+          if (!entries.length) return "";
+          const totals = new Map<number, number>();
+          for (const item of entries) {
+            const qty = parseAmount(item.netWeightKg);
+            totals.set(item.productId, (totals.get(item.productId) || 0) + qty);
+          }
+          const parts: string[] = [];
+          const entriesList = Array.from(totals.entries());
+          for (const [idx, [productId, qty]] of entriesList.entries()) {
+            if (idx >= 2) break;
+            const product = purchaseProductMap.get(productId);
+            parts.push(`${product?.name || `#${productId}`} ${formatQty(qty)} kg`);
+          }
+          if (entriesList.length > 2) parts.push(`+${entriesList.length - 2} more`);
+          return parts.join(", ");
+        };
+        const purchaseChargeLines = purchaseChargesList
+          .map((charge) => ({
+            label: purchaseChargeLabel(charge.type),
+            amount: parseAmount(charge.amount),
+            mode: charge.mode,
+          }))
+          .filter((c) => c.amount > 0)
+          .map((c) => `${c.label}${c.mode === "less" ? " (less)" : ""} ${formatQty(c.amount)}`);
+        const purchaseNarration = [
+          `Purchase Invoice #${purchase.invoiceNumber || purchase.id}`,
+          buildItemSummary(purchaseItems),
+          ...purchaseChargeLines,
+        ].filter(Boolean).join(" | ");
+        const ledger = db
+          .select({
+            id: ledgerEntries.id,
+            entryDate: ledgerEntries.entryDate,
+            transactionType: ledgerEntries.transactionType,
+            amount: ledgerEntries.amount,
+            description: ledgerEntries.description,
+            referenceType: ledgerEntries.referenceType,
+            referenceId: ledgerEntries.referenceId,
+            accountId: ledgerEntries.accountId,
+            accountName: accounts.name,
+          })
+          .from(ledgerEntries)
+          .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
+          .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, referenceId)))
+          .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
+          .all()
+          .map((le) => ({
+            ...le,
+            description: purchaseNarration || le.description,
+            debit: le.transactionType === "debit" ? le.amount : "0",
+            credit: le.transactionType === "credit" ? le.amount : "0",
+          }));
+        return { type: "purchase", purchase, supplier, ledgerEntries: ledger };
+      }
+
+      if (type === "expense") {
+        const [expense] = db.select().from(expenseEntries).where(eq(expenseEntries.id, referenceId)).all();
+        if (!expense) return null;
+        const [expenseAccount] = db.select().from(accounts).where(eq(accounts.id, expense.expenseAccountId)).all();
+        const [payFromAccount] = db.select().from(accounts).where(eq(accounts.id, expense.payFromAccountId)).all();
+        const ledger = db
+          .select({
+            id: ledgerEntries.id,
+            entryDate: ledgerEntries.entryDate,
+            transactionType: ledgerEntries.transactionType,
+            amount: ledgerEntries.amount,
+            description: ledgerEntries.description,
+            referenceType: ledgerEntries.referenceType,
+            referenceId: ledgerEntries.referenceId,
+            accountId: ledgerEntries.accountId,
+            accountName: accounts.name,
+          })
+          .from(ledgerEntries)
+          .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
+          .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, referenceId)))
+          .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
+          .all()
+          .map((le) => ({
+            ...le,
+            debit: le.transactionType === "debit" ? le.amount : "0",
+            credit: le.transactionType === "credit" ? le.amount : "0",
+          }));
+        return { type: "expense", expense, expenseAccount, payFromAccount, ledgerEntries: ledger };
+      }
 
     if (type === "product") {
       const product = await this.getProduct(referenceId);

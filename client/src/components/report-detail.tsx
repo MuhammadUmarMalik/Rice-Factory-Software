@@ -29,9 +29,10 @@ type PurchaseDetail = { type: "purchase"; purchase: any; supplier?: any; ledgerE
 type ProductDetail = { type: "product"; product: any; movements?: any[] };
 type AccountDetail = { type: "account"; account: any; ledgerEntries?: LedgerEntry[] };
 type VoucherDetail = { type: "receipt" | "payment" | "journal_voucher"; voucher: any; ledgerEntries?: LedgerEntry[] };
+type ExpenseDetail = { type: "expense"; expense: any; expenseAccount?: any; payFromAccount?: any; ledgerEntries?: LedgerEntry[] };
 type GenericDetail = Record<string, unknown>;
 
-type ReportDetail = SaleDetail | PurchaseDetail | ProductDetail | AccountDetail | VoucherDetail | GenericDetail | null;
+type ReportDetail = SaleDetail | PurchaseDetail | ProductDetail | AccountDetail | VoucherDetail | ExpenseDetail | GenericDetail | null;
 
 const formatMoney = (val: string | number | undefined) => {
   const num = Number(val || 0);
@@ -279,6 +280,43 @@ function renderDetailContent(detail: ReportDetail) {
                 ))}
               </TableBody>
             </Table>
+          </div>
+        )}
+        <LedgerTable entries={d.ledgerEntries} />
+      </div>
+    );
+  }
+
+  if ((detail as ExpenseDetail).type === "expense") {
+    const d = detail as ExpenseDetail;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Badge>Expense</Badge>
+              <span className="text-lg font-semibold">{d.expense?.voucherNo}</span>
+            </div>
+            {d.expense?.expenseDate && (
+              <p className="text-sm text-muted-foreground">
+                {format(new Date(d.expense.expenseDate), "dd MMM yyyy")}
+              </p>
+            )}
+            {d.expenseAccount?.name && (
+              <p className="text-sm text-muted-foreground">Expense Account: {d.expenseAccount.name}</p>
+            )}
+            {d.payFromAccount?.name && (
+              <p className="text-sm text-muted-foreground">Pay From: {d.payFromAccount.name}</p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <SummaryCard label="Amount" value={formatMoney(d.expense?.amount)} highlight />
+          </div>
+        </div>
+        {d.expense?.description && (
+          <div className="rounded-md border p-3 text-sm">
+            <p className="text-xs uppercase text-muted-foreground">Description</p>
+            <p className="mt-1">{d.expense.description}</p>
           </div>
         )}
         <LedgerTable entries={d.ledgerEntries} />

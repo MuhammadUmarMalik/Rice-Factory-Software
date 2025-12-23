@@ -1,6 +1,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { format } from "date-fns";
 import type { Purchase, Account } from "@shared/schema";
+import type { PrintableDocumentPayload, PrintableTableColumn } from "@shared/print";
 
 type PurchaseWithSupplier = Purchase & { supplier?: Account };
 
@@ -214,4 +215,300 @@ export async function downloadPurchasesPdf(args: Parameters<typeof generatePurch
   link.download = "purchases-report.pdf";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 20000);
+}
+
+type LedgerPdfOptions = {
+  payload: PrintableDocumentPayload;
+};
+
+const wrapText = (text: string, font: any, fontSize: number, maxWidth: number) => {
+  const lines: string[] = [];
+  const paragraphs = text.split("\n");
+  for (const paragraph of paragraphs) {
+    const words = paragraph.split(" ");
+    let current = "";
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      const width = font.widthOfTextAtSize(candidate, fontSize);
+      if (width <= maxWidth) {
+        current = candidate;
+      } else if (current) {
+        lines.push(current);
+        current = word;
+      } else {
+        let remaining = word;
+        while (remaining.length > 0) {
+          let slice = remaining;
+          while (font.widthOfTextAtSize(slice, fontSize) > maxWidth && slice.length > 1) {
+            slice = slice.slice(0, -1);
+          }
+          lines.push(slice);
+          remaining = remaining.slice(slice.length);
+        }
+        current = "";
+      }
+    }
+    if (current) lines.push(current);
+  }
+  return lines.length ? lines : [""];
+};
+
+const ledgerColumnWidths = (keys: string[], totalWidth: number) => {
+  const weights: Record<string, number> = {
+    date: 0.12,
+    narration: 0.52,
+    debit: 0.12,
+    credit: 0.12,
+    balance: 0.12,
+  };
+  const totalWeight = keys.reduce((sum, key) => sum + (weights[key] || 0.1), 0);
+  const widths = keys.map((key) => Math.floor((totalWidth * (weights[key] || 0.1)) / totalWeight));
+  const used = widths.reduce((sum, w) => sum + w, 0);
+  if (widths.length && used !== totalWidth) {
+    widths[widths.length - 1] += totalWidth - used;
+  }
+  return widths;
+};
+
+const headerLabel = (columns: PrintableTableColumn[], key: string, fallback: string) => {
+  const col = columns.find((c) => c.key === key);
+  return col?.label || fallback;
+};
+
+export async function generateLedgerPdf({ payload }: LedgerPdfOptions) {
+  const pdfDoc = await PDFDocument.create();
+  let page = pdfDoc.addPage([px(595.28), px(841.89)]);
+  let { width, height } = page.getSize();
+  const marginX = px(34);
+  const marginTop = px(34);
+  const marginBottom = px(34);
+  let cursorY = height - marginTop;
+
+  const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const fontMono = await pdfDoc.embedFont(StandardFonts.Courier);
+  const fontMonoBold = await pdfDoc.embedFont(StandardFonts.CourierBold);
+
+  const accountName = payload.meta?.filters?.Account || "Account Ledger";
+  const dateFrom = payload.meta?.dateFrom || "";
+  const dateTo = payload.meta?.dateTo || "";
+  const dateRange =
+    dateFrom || dateTo
+      ? `${dateFrom || "Start"} - ${dateTo || "End"}`
+      : "All dates";
+  const headerHeight = px(30);
+  let pageNumber = 1;
+  const printedAt = new Date();
+  const printedLabel = `Printed ${printedAt.toLocaleString("en-GB")}`;
+
+  const drawPageFooter = () => {
+    const footerY = marginBottom - px(10);
+    page.drawText(printedLabel, {
+      x: marginX,
+      y: footerY,
+      size: 8,
+      font: fontRegular,
+      color: rgb(0.4, 0.4, 0.4),
+    });
+    const pageText = `Page ${pageNumber}`;
+    const pageTextWidth = fontRegular.widthOfTextAtSize(pageText, 8);
+    page.drawText(pageText, {
+      x: width - marginX - pageTextWidth,
+      y: footerY,
+      size: 8,
+      font: fontRegular,
+      color: rgb(0.4, 0.4, 0.4),
+    });
+  };
+
+  const drawPageHeader = () => {
+    const headerTop = height - marginTop;
+    page.drawText(String(accountName), {
+      x: marginX,
+      y: headerTop - px(12),
+      size: 12,
+      font: fontBold,
+      color: rgb(0.1, 0.1, 0.1),
+    });
+    page.drawText(dateRange, {
+      x: marginX,
+      y: headerTop - px(24),
+      size: 9,
+      font: fontRegular,
+      color: rgb(0.4, 0.4, 0.4),
+    });
+    page.drawLine({
+      start: { x: marginX, y: headerTop - headerHeight },
+      end: { x: width - marginX, y: headerTop - headerHeight },
+      thickness: 1,
+      color: rgb(0.82, 0.82, 0.82),
+    });
+    cursorY = headerTop - headerHeight - px(6);
+    drawPageFooter();
+  };
+
+  const table = payload.table;
+  if (!table) {
+    const pdfBytes = await pdfDoc.save();
+    return new Blob([pdfBytes], { type: "application/pdf" });
+  }
+
+  const columnKeys = table.columns.map((c) => c.key);
+  const tableWidth = width - marginX * 2;
+  const columnWidths = ledgerColumnWidths(columnKeys, tableWidth);
+  const rowPadding = px(4);
+  const lineHeight = px(11);
+
+  const drawHeader = () => {
+    let x = marginX;
+    const headerHeight = px(18);
+    columnKeys.forEach((key, idx) => {
+      page.drawRectangle({
+        x,
+        y: cursorY - headerHeight + px(4),
+        width: columnWidths[idx],
+        height: headerHeight,
+        color: rgb(0.96, 0.96, 0.96),
+        borderWidth: 1,
+        borderColor: rgb(0.82, 0.82, 0.82),
+      });
+      page.drawText(
+        headerLabel(table.columns, key, key),
+        {
+          x: x + px(4),
+          y: cursorY - px(12),
+          size: 8.5,
+          font: fontBold,
+          color: rgb(0.12, 0.12, 0.12),
+        },
+      );
+      x += columnWidths[idx];
+    });
+    cursorY -= headerHeight;
+  };
+
+  const ensureSpace = (heightNeeded: number) => {
+    if (cursorY - heightNeeded < marginBottom) {
+      pageNumber += 1;
+      page = pdfDoc.addPage([px(595.28), px(841.89)]);
+      const size = page.getSize();
+      width = size.width;
+      height = size.height;
+      cursorY = height - marginTop;
+      drawPageHeader();
+      drawHeader();
+    }
+  };
+
+  drawPageHeader();
+  drawHeader();
+
+  const rows = table.rows || [];
+  for (const row of rows) {
+    const cellLines = columnKeys.map((key, idx) => {
+      const value = row[key];
+      const text = value === null || value === undefined ? "" : String(value);
+      if (key === "debit" || key === "credit" || key === "balance") {
+        return [text];
+      }
+      return wrapText(text, fontRegular, 9, columnWidths[idx] - rowPadding * 2);
+    });
+    const maxLines = Math.max(...cellLines.map((lines) => lines.length), 1);
+    const rowHeight = maxLines * lineHeight + rowPadding * 2;
+
+    ensureSpace(rowHeight);
+
+    let x = marginX;
+    columnKeys.forEach((key, idx) => {
+      const widthCol = columnWidths[idx];
+      page.drawRectangle({
+        x,
+        y: cursorY - rowHeight + px(4),
+        width: widthCol,
+        height: rowHeight,
+        borderWidth: 1,
+        borderColor: rgb(0.9, 0.9, 0.9),
+      });
+
+      const lines = cellLines[idx];
+      lines.forEach((line, lineIndex) => {
+        const textY = cursorY - rowPadding - lineHeight * lineIndex - px(10);
+        if (key === "debit" || key === "credit" || key === "balance") {
+          const textWidth = fontMono.widthOfTextAtSize(line, 9);
+          page.drawText(line, {
+            x: x + widthCol - rowPadding - textWidth,
+            y: textY,
+            size: 9,
+            font: fontMono,
+            color: rgb(0.1, 0.1, 0.1),
+          });
+        } else {
+          page.drawText(line, {
+            x: x + rowPadding,
+            y: textY,
+            size: 9,
+            font: fontRegular,
+            color: rgb(0.1, 0.1, 0.1),
+          });
+        }
+      });
+      x += widthCol;
+    });
+    cursorY -= rowHeight;
+  }
+
+  if (table.totalsRow) {
+    const totalsRow = table.totalsRow;
+    const cellLines = columnKeys.map((key, idx) => {
+      const value = totalsRow[key];
+      const text = value === null || value === undefined ? "" : String(value);
+      if (key === "debit" || key === "credit" || key === "balance") {
+        return [text];
+      }
+      return wrapText(text, fontBold, 9, columnWidths[idx] - rowPadding * 2);
+    });
+    const maxLines = Math.max(...cellLines.map((lines) => lines.length), 1);
+    const rowHeight = maxLines * lineHeight + rowPadding * 2;
+    ensureSpace(rowHeight);
+    let x = marginX;
+    columnKeys.forEach((key, idx) => {
+      const widthCol = columnWidths[idx];
+      page.drawRectangle({
+        x,
+        y: cursorY - rowHeight + px(4),
+        width: widthCol,
+        height: rowHeight,
+        borderWidth: 1,
+        borderColor: rgb(0.8, 0.8, 0.8),
+        color: rgb(0.93, 0.93, 0.93),
+      });
+      const lines = cellLines[idx];
+      lines.forEach((line, lineIndex) => {
+        const textY = cursorY - rowPadding - lineHeight * lineIndex - px(10);
+        if (key === "debit" || key === "credit" || key === "balance") {
+          const textWidth = fontMonoBold.widthOfTextAtSize(line, 9);
+          page.drawText(line, {
+            x: x + widthCol - rowPadding - textWidth,
+            y: textY,
+            size: 9,
+            font: fontMonoBold,
+            color: rgb(0.1, 0.1, 0.1),
+          });
+        } else {
+          page.drawText(line, {
+            x: x + rowPadding,
+            y: textY,
+            size: 9,
+            font: fontBold,
+            color: rgb(0.1, 0.1, 0.1),
+          });
+        }
+      });
+      x += widthCol;
+    });
+    cursorY -= rowHeight;
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([pdfBytes], { type: "application/pdf" });
 }

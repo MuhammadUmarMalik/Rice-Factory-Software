@@ -50,12 +50,24 @@ export default function StockReportPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [productId, setProductId] = useState<string>("all");
+  const [productSearch, setProductSearch] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [unit, setUnit] = useState<string>("all");
 
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+
+  const productQuery = productSearch.trim().toLowerCase();
+  const filteredProducts = productQuery
+    ? products.filter((p) => {
+        const haystack = [p.name, p.nameUrdu, p.unit]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(productQuery);
+      })
+    : products;
 
   const { data, isLoading } = useQuery<StockReport>({
     queryKey: ["/api/reports/stock", fromDate, toDate, productId, category, unit],
@@ -290,8 +302,17 @@ export default function StockReportPage() {
                   <SelectValue placeholder="All items" />
                 </SelectTrigger>
                 <SelectContent>
+                  <div className="px-2 pb-2">
+                    <Input
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="Search items"
+                      className="h-8"
+                    />
+                  </div>
                   <SelectItem value="all">All</SelectItem>
-                  {products.map((p) => (
+                  {filteredProducts.map((p) => (
                     <SelectItem key={p.id} value={p.id.toString()}>
                       {p.name}
                     </SelectItem>

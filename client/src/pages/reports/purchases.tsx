@@ -54,7 +54,9 @@ export default function PurchaseReportPage() {
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [supplierId, setSupplierId] = useState<string>("all");
+  const [supplierSearch, setSupplierSearch] = useState("");
   const [productId, setProductId] = useState<string>("all");
+  const [productSearch, setProductSearch] = useState("");
   const [status, setStatus] = useState<string>("all");
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
@@ -65,6 +67,21 @@ export default function PurchaseReportPage() {
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
+
+  const supplierQuery = supplierSearch.trim().toLowerCase();
+  const filteredSuppliers = supplierQuery
+    ? suppliers.filter((s) => s.name.toLowerCase().includes(supplierQuery))
+    : suppliers;
+  const productQuery = productSearch.trim().toLowerCase();
+  const filteredProducts = productQuery
+    ? products.filter((p) => {
+        const haystack = [p.name, p.nameUrdu, p.unit]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(productQuery);
+      })
+    : products;
 
   const { data, isLoading } = useQuery<PurchaseReport>({
     queryKey: ["/api/reports/purchases", dateFrom, dateTo, supplierId, productId, status],
@@ -246,8 +263,17 @@ export default function PurchaseReportPage() {
                   <SelectValue placeholder="All suppliers" />
                 </SelectTrigger>
                 <SelectContent>
+                  <div className="px-2 pb-2">
+                    <Input
+                      value={supplierSearch}
+                      onChange={(e) => setSupplierSearch(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="Search suppliers"
+                      className="h-8"
+                    />
+                  </div>
                   <SelectItem value="all">All</SelectItem>
-                  {suppliers.map((s) => (
+                  {filteredSuppliers.map((s) => (
                     <SelectItem key={s.id} value={s.id.toString()}>
                       {s.name}
                     </SelectItem>
@@ -262,8 +288,17 @@ export default function PurchaseReportPage() {
                   <SelectValue placeholder="All items" />
                 </SelectTrigger>
                 <SelectContent>
+                  <div className="px-2 pb-2">
+                    <Input
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="Search items"
+                      className="h-8"
+                    />
+                  </div>
                   <SelectItem value="all">All</SelectItem>
-                  {products.map((p) => (
+                  {filteredProducts.map((p) => (
                     <SelectItem key={p.id} value={p.id.toString()}>
                       {p.name}
                     </SelectItem>

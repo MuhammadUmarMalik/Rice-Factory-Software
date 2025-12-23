@@ -508,6 +508,7 @@ export default function ProductsPage() {
                         </FormControl>
                         <SelectContent>
                           <SelectItem value="kg">Kilogram (kg)</SelectItem>
+                          <SelectItem value="mound">Mound (40 kg)</SelectItem>
                           <SelectItem value="quintal">Quintal (100 kg)</SelectItem>
                           <SelectItem value="ton">Ton (1000 kg)</SelectItem>
                           <SelectItem value="bag">Bag</SelectItem>

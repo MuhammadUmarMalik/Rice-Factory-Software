@@ -17,13 +17,13 @@ function fmtDate(value?: string | number | Date) {
   }
 }
 
-function money(value?: string | number, prefix = "Rs.") {
+function money(value?: string | number | null, prefix = "Rs.") {
   const num = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
   if (!Number.isFinite(num)) return `${prefix} 0`;
   return `${prefix} ${num.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function num(value?: string | number) {
+function num(value?: string | number | null) {
   const n = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
   if (!Number.isFinite(n)) return "0";
   return n.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -312,66 +312,123 @@ export async function mapLedgerReport(params: Record<string, any>, ctx: PrintCon
   const accountId = Number(params.accountId);
   if (!accountId) throw new Error("accountId is required");
   const scope = params.scope ? String(params.scope) : undefined;
-  const referenceType = scope === "sales" ? "sale" : scope === "purchases" ? "purchase" : undefined;
+  const voucherTypeRaw = params.voucherType ? String(params.voucherType) : undefined;
+  const normalizeVoucherType = (value?: string) => {
+    if (!value) return undefined;
+    const v = value.trim().toLowerCase();
+    if (v === "sale" || v === "sales") return "sale";
+    if (v === "purchase" || v === "purchases") return "purchase";
+    if (v === "journal" || v === "jv" || v === "journal_voucher") return "journal_voucher";
+    if (v === "receipt" || v === "crv" || v === "brv") return "receipt";
+    if (v === "payment" || v === "cpv" || v === "bpv") return "payment";
+    if (v === "expense" || v === "exp") return "expense";
+    return undefined;
+  };
+  const scopeRef =
+    scope === "sales"
+      ? "sale"
+      : scope === "purchases"
+        ? "purchase"
+        : scope === "journal"
+          ? "journal_voucher"
+          : scope === "expenses"
+            ? "expense"
+            : scope === "payroll"
+              ? "journal_voucher"
+              : undefined;
+  const referenceType = normalizeVoucherType(voucherTypeRaw) || scopeRef;
   const startDate = params.startDate ? new Date(String(params.startDate)) : undefined;
   const endDate = params.endDate ? new Date(String(params.endDate)) : undefined;
+  const narration = params.narration ? String(params.narration) : undefined;
+  const language = params.language ? String(params.language) : "en";
+  const useUrdu = language.toLowerCase() === "ur";
 
-  const account = await storage.getAccount(accountId);
-  const entries = await storage.getLedgerEntries(accountId, referenceType, startDate, endDate);
+  const report = await storage.getLedgerReport({
+    accountId,
+    referenceType,
+    startDate,
+    endDate,
+    narration,
+  });
+  const account = report.account;
 
   const columns = buildColumns([
-    { key: "date", label: "Date", width: "14%" },
-    { key: "particulars", label: "Particulars" },
-    { key: "debit", label: "Debit", align: "right", width: "14%" },
-    { key: "credit", label: "Credit", align: "right", width: "14%" },
-    { key: "balance", label: "Balance", align: "right", width: "16%" },
+    { key: "date", label: useUrdu ? "تاریخ" : "Date", width: "12%" },
+    { key: "narration", label: useUrdu ? "تفصیل" : "NARATION" },
+    { key: "debit", label: useUrdu ? "ڈیبٹ" : "Debit", align: "right", width: "12%" },
+    { key: "credit", label: useUrdu ? "کریڈٹ" : "Credit", align: "right", width: "12%" },
+    { key: "balance", label: useUrdu ? "بقایا" : "Balance", align: "right", width: "12%" },
   ]);
 
-  const rows = entries.map((e) => ({
-    date: fmtDate(e.entryDate),
-    particulars: e.description || "",
-    debit: parseFloat(e.debit || "0") > 0 ? money(e.debit) : "-",
-    credit: parseFloat(e.credit || "0") > 0 ? money(e.credit) : "-",
-    balance: money(e.runningBalance || e.balance),
-  }));
+  const openingLabel = useUrdu ? "ابتدائی بقایا" : "Opening Balance";
+  const openingRow = {
+    date: startDate ? fmtDate(startDate) : "",
+    narration: openingLabel,
+    voucher: "",
+    debit: "",
+    credit: "",
+    balance: money(report.openingBalance),
+  };
 
-  const totals = entries.reduce(
-    (acc, e) => {
-      acc.debit += parseFloat(e.debit || "0");
-      acc.credit += parseFloat(e.credit || "0");
-      acc.closing = parseFloat(e.runningBalance || e.balance || "0") || acc.closing;
-      return acc;
-    },
-    { debit: 0, credit: 0, closing: parseFloat(entries[0]?.openingBalance || account?.openingBalance || "0") || 0 },
-  );
+  const rows = [
+    openingRow,
+    ...report.rows.map((e) => {
+      return {
+        date: fmtDate(e.entryDate),
+        narration: e.narration,
+        debit: parseFloat(e.debit || "0") > 0 ? money(e.debit) : "-",
+        credit: parseFloat(e.credit || "0") > 0 ? money(e.credit) : "-",
+        balance: money(e.runningBalance),
+      };
+    }),
+  ];
 
   return {
     docType: "REPORT",
     docKey: "report.ledger",
-    title: scope === "sales" ? "Sales Ledger" : scope === "purchases" ? "Purchase Ledger" : "Ledger",
+    title:
+      scope === "sales"
+        ? "Sales Ledger"
+        : scope === "purchases"
+          ? "Purchase Ledger"
+          : scope === "journal"
+            ? "Journal Ledger"
+            : scope === "expenses"
+              ? "Expense Ledger"
+              : scope === "payroll"
+                ? "Payroll Ledger"
+                : scope === "employee"
+                  ? "Employee Pay Ledger"
+                  : scope === "cash"
+                    ? "Cash Ledger"
+                    : scope === "bank"
+                      ? "Bank Ledger"
+                      : "Ledger",
     company: ctx.company,
     meta: baseMeta(ctx, {
       dateFrom: startDate ? fmtDate(startDate) : undefined,
       dateTo: endDate ? fmtDate(endDate) : undefined,
       filters: {
         Account: account?.name || `#${accountId}`,
+        ...(narration ? { Narration: narration } : {}),
+        ...(voucherTypeRaw ? { VoucherType: voucherTypeRaw } : {}),
       },
     }),
     sections: [
-      summaryCard("Opening", money(entries[0]?.openingBalance || account?.openingBalance || 0)),
-      summaryCard("Debit", money(totals.debit), true),
-      summaryCard("Credit", money(totals.credit), true),
-      summaryCard("Closing", money(totals.closing), true),
+      summaryCard("Opening", money(report.openingBalance)),
+      summaryCard("Debit", money(report.totals.debit), true),
+      summaryCard("Credit", money(report.totals.credit), true),
+      summaryCard("Closing", money(report.totals.closingBalance), true),
     ],
     table: {
       columns,
       rows,
       totalsRow: {
         date: "",
-        particulars: "Totals",
-        debit: money(totals.debit),
-        credit: money(totals.credit),
-        balance: money(totals.closing),
+        narration: useUrdu ? "کل" : "Totals",
+        debit: money(report.totals.debit),
+        credit: money(report.totals.credit),
+        balance: money(report.totals.closingBalance),
       },
     },
     settings: { currency: "PKR" },
