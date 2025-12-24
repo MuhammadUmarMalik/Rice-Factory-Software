@@ -1,0 +1,80 @@
+import type { Request, Response } from "express";
+import { z } from "zod";
+import { insertEmployeeSchema, insertEmployeeSalaryStructureSchema } from "@shared/schema";
+import * as employeesService from "../services/employees.service";
+import { getUserId } from "../utils/auth";
+
+export async function listEmployees(req: Request, res: Response) {
+  try {
+    const rows = await employeesService.listEmployees();
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch employees" });
+  }
+}
+
+export async function getEmployee(req: Request, res: Response) {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const row = await employeesService.getEmployee(id);
+    if (!row) return res.status(404).json({ error: "Employee not found" });
+    res.json(row);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch employee" });
+  }
+}
+
+export async function createEmployee(req: Request, res: Response) {
+  try {
+    const data = insertEmployeeSchema.parse(req.body);
+    const created = await employeesService.createEmployee(data, getUserId(req));
+    res.status(201).json(created);
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+    console.error(error);
+    res.status(500).json({ error: "Failed to create employee" });
+  }
+}
+
+export async function updateEmployee(req: Request, res: Response) {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const data = insertEmployeeSchema.partial().parse(req.body);
+    const updated = await employeesService.updateEmployee(id, data);
+    if (!updated) return res.status(404).json({ error: "Employee not found" });
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+    console.error(error);
+    res.status(500).json({ error: "Failed to update employee" });
+  }
+}
+
+export async function getSalaryStructures(req: Request, res: Response) {
+  try {
+    const employeeId = parseInt(req.params.id, 10);
+    const rows = await employeesService.getSalaryStructures(employeeId);
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch salary structures" });
+  }
+}
+
+export async function createSalaryStructure(req: Request, res: Response) {
+  try {
+    const employeeId = parseInt(req.params.id, 10);
+    const body = insertEmployeeSalaryStructureSchema.omit({ employeeId: true }).parse({
+      ...req.body,
+      effectiveFrom: req.body?.effectiveFrom ? new Date(req.body.effectiveFrom) : undefined,
+    });
+    const created = await employeesService.createSalaryStructure(employeeId, body, getUserId(req));
+    res.status(201).json(created);
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+    console.error(error);
+    res.status(500).json({ error: "Failed to create salary structure" });
+  }
+}
