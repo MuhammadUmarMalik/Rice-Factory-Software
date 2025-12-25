@@ -36,6 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { useAuthStore } from "@/stores/auth.store";
 
 const employeeSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -63,8 +64,7 @@ type SalaryStructureFormData = z.infer<typeof salaryStructureSchema>;
 export default function EmployeesPage() {
   const { t, isRTL } = useLanguage();
   const { toast } = useToast();
-  // Default to admin for local/dev usage; production should set role via auth.
-  const role = (typeof window !== "undefined" ? localStorage.getItem("role") : null) || "admin";
+  const role = useAuthStore((state) => state.user?.role || "operator");
   const canEdit = ["admin", "manager", "hr"].includes(role);
 
   const [openEmployeeDialog, setOpenEmployeeDialog] = useState(false);
@@ -313,7 +313,7 @@ export default function EmployeesPage() {
             if (!canEdit) {
               toast({
                 title: "Forbidden",
-                description: "Only Admin/Manager/HR can create employees. Set `localStorage.role` to `hr` or `admin`.",
+                description: "Only Admin/Manager/HR can create employees. Login with a permitted role.",
                 variant: "destructive",
               });
               return;

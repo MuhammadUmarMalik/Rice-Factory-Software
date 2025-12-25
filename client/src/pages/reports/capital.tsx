@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type CapitalStatement = {
   openingCapital: string;
@@ -22,14 +23,10 @@ export default function CapitalPage() {
     queryKey: ["/api/financial/capital", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
-      const res = await fetch(`/api/financial/capital?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/financial/capital?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load capital statement");
       return res.json();
     },

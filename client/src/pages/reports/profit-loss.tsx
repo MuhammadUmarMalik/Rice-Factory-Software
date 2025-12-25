@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { useState } from "react";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type ProfitLossResponse = {
   period: { fromDate: string | number | Date; toDate: string | number | Date };
@@ -26,14 +27,10 @@ export default function ProfitLossPage() {
   const { data: profitLoss } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", dateFrom, dateTo],
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       if (dateFrom) params.set("startDate", dateFrom);
       if (dateTo) params.set("endDate", dateTo);
-      const res = await fetch(`/api/reports/profit-loss?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/reports/profit-loss?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch profit/loss");
       return res.json();
     },

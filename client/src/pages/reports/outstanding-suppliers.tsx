@@ -16,6 +16,7 @@ import { format } from "date-fns";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type OutstandingSupplierRow = {
   purchaseId: number;
@@ -61,14 +62,10 @@ export default function OutstandingSuppliersPage() {
     queryKey: ["/api/reports/outstanding-suppliers", asOfDate, supplierId],
     enabled: !!asOfDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("asOfDate", asOfDate);
       if (supplierId !== "all") params.set("supplierId", supplierId);
-      const res = await fetch(`/api/reports/outstanding-suppliers?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/reports/outstanding-suppliers?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load outstanding suppliers");
       return res.json();
     },

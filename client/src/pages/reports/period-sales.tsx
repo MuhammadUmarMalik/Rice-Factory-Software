@@ -17,6 +17,7 @@ import type { Account } from "@shared/schema";
 import { downloadCsv } from "@/lib/export";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type PeriodSalesRow = {
   period: string;
@@ -47,16 +48,12 @@ export default function PeriodSalesPage() {
     queryKey: ["/api/reports/period-sales", fromDate, toDate, customerId, groupBy],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
       params.set("groupBy", groupBy);
       if (customerId !== "all") params.set("customerId", customerId);
-      const res = await fetch(`/api/reports/period-sales?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/reports/period-sales?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load period sales");
       return res.json();
     },

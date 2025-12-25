@@ -7,14 +7,16 @@ import {
   listPayments,
   updatePayment,
 } from "../controllers/payments.controller";
+import { requireRoles } from "../utils/auth";
+import { Roles } from "../utils/roles";
 
 const router = Router();
 
-router.get("/api/payments", listPayments);
-router.get("/api/payments/next-number", getNextPaymentNumber);
-router.get("/api/payments/:id", getPayment);
-router.post("/api/payments", createPayment);
-router.patch("/api/payments/:id", updatePayment);
-router.delete("/api/payments/:id", deletePayment);
+router.get("/api/payments", requireRoles(Roles.finance), listPayments);
+router.get("/api/payments/next-number", requireRoles(Roles.finance), getNextPaymentNumber);
+router.get("/api/payments/:id", requireRoles(Roles.finance), getPayment);
+router.post("/api/payments", requireRoles(Roles.finance), createPayment);
+router.patch("/api/payments/:id", requireRoles(Roles.finance), updatePayment);
+router.delete("/api/payments/:id", requireRoles(Roles.finance), deletePayment);
 
 export default router;

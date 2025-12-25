@@ -1,5 +1,4 @@
- 
- {
+{
   "name": "rest-express",
   "version": "1.0.0",
   "type": "module",
@@ -10,7 +9,10 @@
     "start": "cross-env NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push",
-    "test": "tsx script/test-reports.ts"
+    "test": "tsx script/test-reports.ts",
+    "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:5000 && electron .\"",
+    "electron:build": "npm run build && electron-builder",
+    "db:seed": "tsx script/seed-admin.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -56,6 +58,7 @@
     "express-session": "^1.18.1",
     "framer-motion": "^11.13.1",
     "input-otp": "^1.4.2",
+    "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.453.0",
     "memorystore": "^1.6.7",
     "next-themes": "^0.4.6",
@@ -92,6 +95,7 @@
     "@types/express": "4.17.21",
     "@types/express-session": "^1.18.0",
     "@types/node": "20.16.11",
+    "@types/jsonwebtoken": "^9.0.6",
     "@types/passport": "^1.0.16",
     "@types/passport-local": "^1.0.38",
     "@types/react": "^18.3.11",
@@ -106,9 +110,28 @@
     "tailwindcss": "^3.4.17",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",
-    "vite": "^5.4.20"
+    "vite": "^5.4.20",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "concurrently": "^8.2.2",
+    "wait-on": "^7.0.1"
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.millmanager.app",
+    "productName": "Mill Manager",
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json",
+      "node_modules/**"
+    ],
+    "asar": true
   }
 }

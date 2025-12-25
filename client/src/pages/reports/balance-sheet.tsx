@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useQuery } from "@tanstack/react-query";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type BalanceSheet = {
   asOfDate: string | number | Date;
@@ -28,13 +29,9 @@ export default function BalanceSheetPage() {
     queryKey: ["/api/financial/balance-sheet", asOfDate],
     enabled: !!asOfDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("asOfDate", asOfDate);
-      const res = await fetch(`/api/financial/balance-sheet?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/financial/balance-sheet?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load balance sheet");
       return res.json();
     },

@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/select";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useAuthStore } from "@/stores/auth.store";
+import { useLocation } from "wouter";
 
 type SettingsPayload = {
   businessName: string;
@@ -48,6 +50,9 @@ export default function SettingsPage() {
   const { t, language, setLanguage, isRTL } = useLanguage();
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
+  const user = useAuthStore((state) => state.user);
+  const [, setLocation] = useLocation();
+  const isAdmin = user?.role === "admin";
   
   const [businessName, setBusinessName] = useState(defaultSettings.businessName);
   const [businessNameUrdu, setBusinessNameUrdu] = useState(defaultSettings.businessNameUrdu);
@@ -307,9 +312,9 @@ export default function SettingsPage() {
           <CardContent className="space-y-4">
             <div className={`p-4 rounded-lg bg-muted/30 ${isRTL ? "text-right" : ""}`}>
               <p className="font-medium">{language === "ur" ? "موجودہ صارف" : "Current User"}</p>
-              <p className="text-sm text-muted-foreground mt-1">admin@ricemillerp.com</p>
+              <p className="text-sm text-muted-foreground mt-1">{user?.username || "-"}</p>
               <Badge variant="secondary" className="mt-2">
-                {language === "ur" ? "ایڈمن" : "Admin"}
+                {user?.role ? user.role.toUpperCase() : language === "ur" ? "?????" : "Admin"}
               </Badge>
             </div>
 
@@ -325,11 +330,18 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <Button variant="outline" className="w-full" disabled>
-              {language === "ur" ? "صارفین کا انتظام" : "Manage Users"}
-              <Badge variant="secondary" className="ml-2 text-xs">
-                {language === "ur" ? "جلد آ رہا ہے" : "Coming Soon"}
-              </Badge>
+            <Button
+              variant="outline"
+              className="w-full"
+              disabled={!isAdmin}
+              onClick={() => setLocation("/admin/users")}
+            >
+              {language === "ur" ? "?????? ?? ??????" : "Manage Users"}
+              {!isAdmin && (
+                <Badge variant="secondary" className="ml-2 text-xs">
+                  {language === "ur" ? "??? ?????" : "Admin only"}
+                </Badge>
+              )}
             </Button>
           </CardContent>
         </Card>

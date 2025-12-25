@@ -18,6 +18,7 @@ import clsx from "clsx";
 import { Link, useLocation } from "wouter";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type LedgerReportRow = {
   id: number;
@@ -112,7 +113,6 @@ export default function LedgerPage() {
     queryKey: ["/api/ledger", selectedAccountId, scope, dateFrom, dateTo, voucherType, narrationSearch],
     enabled: !!selectedAccountId,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       if (selectedAccountId) params.set("accountId", selectedAccountId);
       if (scope) params.set("scope", scope);
@@ -120,10 +120,7 @@ export default function LedgerPage() {
       if (dateTo) params.set("endDate", dateTo);
       if (voucherType && voucherType !== "all") params.set("voucherType", voucherType);
       if (narrationSearch) params.set("narration", narrationSearch);
-      const res = await fetch(`/api/ledger?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/ledger?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch ledger");
       return res.json();
     },

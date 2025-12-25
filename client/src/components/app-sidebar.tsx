@@ -1,11 +1,11 @@
 import { Link, useLocation } from "wouter";
-import { 
-  LayoutDashboard, 
-  Users, 
-  Package, 
-  ShoppingCart, 
-  Cog, 
-  FileText, 
+import {
+  LayoutDashboard,
+  Users,
+  Package,
+  ShoppingCart,
+  Cog,
+  FileText,
   Factory,
   TrendingUp,
   ChevronDown,
@@ -34,6 +34,8 @@ import {
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useLanguage } from "@/contexts/language-context";
+import { useAuthStore } from "@/stores/auth.store";
+import { apiRequest } from "@/lib/queryClient";
 
 const mainMenuItems = [
   { title: "dashboard", url: "/", icon: LayoutDashboard },
@@ -111,8 +113,28 @@ const hrSubmenu = [
 ];
 
 export function AppSidebar() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const { t, language, isRTL } = useLanguage();
+  const user = useAuthStore((state) => state.user);
+  const isAdmin = user?.role === "admin";
+  const clearSession = useAuthStore((state) => state.logout);
+
+  const initials = (() => {
+    const name = user?.fullName || user?.username || "";
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "MM";
+    if (parts.length === 1) return parts[0][0]?.toUpperCase() || "MM";
+    return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+  })();
+
+  const handleLogout = async () => {
+    try {
+      await apiRequest("POST", "/api/auth/logout");
+    } finally {
+      clearSession();
+      setLocation("/login");
+    }
+  };
 
   const isActive = (url: string) => {
     if (url === "/") return location === "/";
@@ -277,6 +299,20 @@ export function AppSidebar() {
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {isAdmin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={isActive("/admin/users")}
+                    data-testid="nav-users"
+                  >
+                    <Link href="/admin/users" className={isRTL ? "flex-row-reverse" : ""}>
+                      <Users className="h-4 w-4" />
+                      <span className={isRTL ? "font-urdu" : ""}>Users</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -285,13 +321,18 @@ export function AppSidebar() {
       <SidebarFooter className="p-4 border-t border-sidebar-border">
         <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
           <Avatar className="h-9 w-9">
-            <AvatarFallback className="bg-primary/10 text-primary text-sm">AD</AvatarFallback>
+            <AvatarFallback className="bg-primary/10 text-primary text-sm">{initials}</AvatarFallback>
           </Avatar>
           <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
-            <p className={`text-sm font-medium ${isRTL ? "font-urdu" : ""}`}>Admin</p>
-            <p className="text-xs text-muted-foreground">admin@ricemill.com</p>
+            <p className={`text-sm font-medium ${isRTL ? "font-urdu" : ""}`}>{user?.fullName || "User"}</p>
+            <p className="text-xs text-muted-foreground">{user?.username || ""}</p>
           </div>
-          <SidebarMenuButton size="sm" className="h-8 w-8" data-testid="button-logout">
+          <SidebarMenuButton
+            size="sm"
+            className="h-8 w-8"
+            data-testid="button-logout"
+            onClick={handleLogout}
+          >
             <LogOut className="h-4 w-4" />
           </SidebarMenuButton>
         </div>

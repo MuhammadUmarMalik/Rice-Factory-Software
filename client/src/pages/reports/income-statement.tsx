@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type IncomeStatement = {
   period: { fromDate: string | number | Date; toDate: string | number | Date };
@@ -23,14 +24,10 @@ export default function IncomeStatementPage() {
     queryKey: ["/api/financial/income-statement", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
-      const res = await fetch(`/api/financial/income-statement?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/financial/income-statement?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load income statement");
       return res.json();
     },

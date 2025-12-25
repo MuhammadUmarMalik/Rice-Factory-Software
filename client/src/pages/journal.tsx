@@ -38,6 +38,7 @@ import type { Account } from "@shared/schema";
 import { useLanguage } from "@/contexts/language-context";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { useAuthStore } from "@/stores/auth.store";
 
 const journalFormSchema = z
   .object({
@@ -130,7 +131,7 @@ export default function JournalVoucherPage() {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [isViewing, setIsViewing] = useState(false);
   const [search, setSearch] = useState("");
-  const role = (typeof window !== "undefined" ? localStorage.getItem("role") : null) || "admin";
+  const role = useAuthStore((state) => state.user?.role || "operator");
   const canApprove = ["admin", "manager"].includes(role);
   const canEditDraft = ["admin", "manager", "accountant"].includes(role);
 

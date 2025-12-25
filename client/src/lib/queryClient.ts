@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { useAuthStore } from "@/stores/auth.store";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -12,12 +13,12 @@ export async function apiRequest(
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
+  const token = useAuthStore.getState().token;
   const res = await fetch(url, {
     method,
     headers: {
       ...(data ? { "Content-Type": "application/json" } : {}),
-      ...(role ? { "x-user-role": role } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
@@ -33,10 +34,10 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
+    const token = useAuthStore.getState().token;
     const res = await fetch(queryKey.join("/") as string, {
       cache: "no-store",
-      headers: role ? { "x-user-role": role } : {},
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
       credentials: "include",
     });
 
