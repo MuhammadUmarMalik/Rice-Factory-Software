@@ -514,9 +514,9 @@ export default function PurchasesPage() {
     const rate = parseFloat(item.rate) || 0;
     const grossWeight = bags * filling + loose;
     const netWeight = Math.max(grossWeight - less - bardana, 0);
-    const moundQtyFloat = netWeight / moundBaseKg;
-    const moundQty = Math.floor(moundQtyFloat);
-    const moundRemainderKg = Math.max(netWeight - moundQty * moundBaseKg, 0);
+    const moundQty = netWeight / moundBaseKg;
+    const moundWhole = Math.floor(moundQty);
+    const moundRemainderKg = Math.max(netWeight - moundWhole * moundBaseKg, 0);
     let billingQty = netWeight;
     if (item.rateUnit === "mound") billingQty = netWeight / moundBaseKg;
     if (item.rateUnit === "bag") billingQty = bags;

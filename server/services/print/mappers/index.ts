@@ -351,37 +351,50 @@ export async function mapLedgerReport(params: Record<string, any>, ctx: PrintCon
     narration,
   });
   const account = report.account;
+  const normalSide = (() => {
+    const t = (account?.type || "").toLowerCase();
+    return ["supplier", "liability", "equity", "income"].includes(t) ? "CREDIT" : "DEBIT";
+  })();
 
   const columns = buildColumns([
     { key: "date", label: useUrdu ? "تاریخ" : "Date", width: "12%" },
-    { key: "narration", label: useUrdu ? "تفصیل" : "NARATION" },
+    { key: "narration", label: useUrdu ? "تفصیل" : "Narration" },
     { key: "debit", label: useUrdu ? "ڈیبٹ" : "Debit", align: "right", width: "12%" },
     { key: "credit", label: useUrdu ? "کریڈٹ" : "Credit", align: "right", width: "12%" },
     { key: "balance", label: useUrdu ? "بقایا" : "Balance", align: "right", width: "12%" },
   ]);
 
-  const openingLabel = useUrdu ? "ابتدائی بقایا" : "Opening Balance";
-  const openingRow = {
-    date: startDate ? fmtDate(startDate) : "",
-    narration: openingLabel,
-    voucher: "",
-    debit: "",
-    credit: "",
-    balance: money(report.openingBalance),
+  const ledgerDate = (value?: string | number | Date) => {
+    if (!value) return "";
+    try {
+      return format(new Date(value), "dd.MM.yy");
+    } catch {
+      return "";
+    }
+  };
+  const ledgerMoney = (value?: string | number | null) => {
+    const num = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
+    if (!Number.isFinite(num)) return "0.00";
+    return num.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const balanceLabel = (value?: string | number | null) => {
+    const num = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
+    if (!Number.isFinite(num) || num === 0) return ledgerMoney(0);
+    const side = num >= 0
+      ? (normalSide === "DEBIT" ? "DR" : "CR")
+      : (normalSide === "DEBIT" ? "CR" : "DR");
+    return `${ledgerMoney(Math.abs(num))} ${side}`;
   };
 
-  const rows = [
-    openingRow,
-    ...report.rows.map((e) => {
-      return {
-        date: fmtDate(e.entryDate),
-        narration: e.narration,
-        debit: parseFloat(e.debit || "0") > 0 ? money(e.debit) : "-",
-        credit: parseFloat(e.credit || "0") > 0 ? money(e.credit) : "-",
-        balance: money(e.runningBalance),
-      };
-    }),
-  ];
+  const rows = report.rows.map((e) => {
+    return {
+      date: ledgerDate(e.entryDate),
+      narration: e.narration,
+      debit: parseFloat(e.debit || "0") > 0 ? ledgerMoney(e.debit) : "-",
+      credit: parseFloat(e.credit || "0") > 0 ? ledgerMoney(e.credit) : "-",
+      balance: balanceLabel(e.runningBalance),
+    };
+  });
 
   return {
     docType: "REPORT",
@@ -415,20 +428,21 @@ export async function mapLedgerReport(params: Record<string, any>, ctx: PrintCon
       },
     }),
     sections: [
-      summaryCard("Opening", money(report.openingBalance)),
-      summaryCard("Debit", money(report.totals.debit), true),
-      summaryCard("Credit", money(report.totals.credit), true),
-      summaryCard("Closing", money(report.totals.closingBalance), true),
+      summaryCard("Opening", balanceLabel(report.openingBalance)),
+      summaryCard("Debit", ledgerMoney(report.totals.debit), true),
+      summaryCard("Credit", ledgerMoney(report.totals.credit), true),
+      summaryCard("Closing", balanceLabel(report.totals.closingBalance), true),
     ],
+    signatures: [],
     table: {
       columns,
       rows,
       totalsRow: {
         date: "",
         narration: useUrdu ? "کل" : "Totals",
-        debit: money(report.totals.debit),
-        credit: money(report.totals.credit),
-        balance: money(report.totals.closingBalance),
+        debit: ledgerMoney(report.totals.debit),
+        credit: ledgerMoney(report.totals.credit),
+        balance: balanceLabel(report.totals.closingBalance),
       },
     },
     settings: { currency: "PKR" },
