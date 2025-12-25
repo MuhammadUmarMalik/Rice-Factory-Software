@@ -55,31 +55,54 @@ const accountsSubmenu = [
   { title: "expenses", url: "/accounts/expenses" },
 ];
 
-const reportsSubmenu = [
-  { title: "stockReport", url: "/reports/stock" },
-  { title: "purchaseReport", url: "/reports/purchases" },
-  { title: "salesReport", url: "/reports/sales" },
-  { title: "periodPurchases", url: "/reports/period-purchases" },
-  { title: "periodSales", url: "/reports/period-sales" },
-  { title: "grossProfit", url: "/reports/gross-profit" },
-  { title: "dayBook", url: "/reports/day-book" },
-  { title: "outstandingCustomers", url: "/reports/outstanding-customers" },
-  { title: "outstandingSuppliers", url: "/reports/outstanding-suppliers" },
-  { title: "ledger", url: "/reports/ledger" },
-  // { title: "salesLedger", url: "/reports/ledger-sales" },
-  // { title: "purchaseLedger", url: "/reports/ledger-purchases" },
-  // { title: "journalLedger", url: "/reports/ledger-journal" },
-  // { title: "expenseLedger", url: "/reports/ledger-expenses" },
-  // { title: "payrollLedger", url: "/reports/ledger-payroll" },
-  // { title: "employeePayLedger", url: "/reports/ledger-employee" },
-  // { title: "cashLedger", url: "/reports/ledger-cash" },
-  // { title: "bankLedger", url: "/reports/ledger-bank" },
-  { title: "trialBalance", url: "/reports/trial-balance" },
-  { title: "profitLoss", url: "/reports/profit-loss" },
-  { title: "incomeStatement", url: "/reports/income-statement" },
-  { title: "balanceSheet", url: "/reports/balance-sheet" },
-  { title: "capitalAccount", url: "/reports/capital" },
-  { title: "salaryAccount", url: "/reports/salary" },
+const reportsSubmenuGroups = [
+  {
+    label: "Operations",
+    items: [
+      { title: "stockReport", url: "/reports/stock" },
+      { title: "purchaseReport", url: "/reports/purchases" },
+      { title: "salesReport", url: "/reports/sales" },
+      { title: "periodPurchases", url: "/reports/period-purchases" },
+      { title: "periodSales", url: "/reports/period-sales" },
+      { title: "grossProfit", url: "/reports/gross-profit" },
+      { title: "dayBook", url: "/reports/day-book" },
+    ],
+  },
+  {
+    label: "Receivables/Payables",
+    items: [
+      { title: "outstandingCustomers", url: "/reports/outstanding-customers" },
+      { title: "outstandingSuppliers", url: "/reports/outstanding-suppliers" },
+    ],
+  },
+  {
+    label: "Ledger",
+    items: [
+      { title: "ledger", url: "/reports/ledger" },
+      // { title: "salesLedger", url: "/reports/ledger-sales" },
+      // { title: "purchaseLedger", url: "/reports/ledger-purchases" },
+      // { title: "journalLedger", url: "/reports/ledger-journal" },
+      // { title: "expenseLedger", url: "/reports/ledger-expenses" },
+      // { title: "payrollLedger", url: "/reports/ledger-payroll" },
+      // { title: "employeePayLedger", url: "/reports/ledger-employee" },
+      // { title: "cashLedger", url: "/reports/ledger-cash" },
+      // { title: "bankLedger", url: "/reports/ledger-bank" },
+    ],
+  },
+  {
+    label: "Financial Statements",
+    items: [
+      { title: "trialBalance", url: "/reports/trial-balance" },
+      { title: "profitLoss", url: "/reports/profit-loss" },
+      { title: "incomeStatement", url: "/reports/income-statement" },
+      { title: "balanceSheet", url: "/reports/balance-sheet" },
+      { title: "capitalAccount", url: "/reports/capital" },
+    ],
+  },
+  {
+    label: "Payroll",
+    items: [{ title: "salaryAccount", url: "/reports/salary" }],
+  },
 ];
 
 const hrSubmenu = [
@@ -180,22 +203,29 @@ export function AppSidebar() {
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <SidebarMenuSub>
-                      {reportsSubmenu.map((subItem) => (
-                        <SidebarMenuSubItem key={subItem.title}>
-                          <SidebarMenuSubButton 
-                            asChild 
-                            isActive={isActive(subItem.url)}
-                            data-testid={`nav-${subItem.title}`}
-                          >
-                            <Link
-                              href={subItem.url}
-                              title={t(subItem.title as any)}
-                              className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
-                            >
-                              <span>{t(subItem.title as any)}</span>
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
+                      {reportsSubmenuGroups.map((group) => (
+                        <div key={group.label} className="space-y-1">
+                          <div className={`px-2 pt-2 text-xs font-semibold text-muted-foreground ${isRTL ? "text-right" : ""}`}>
+                            {group.label}
+                          </div>
+                          {group.items.map((subItem) => (
+                            <SidebarMenuSubItem key={subItem.title}>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={isActive(subItem.url)}
+                                data-testid={`nav-${subItem.title}`}
+                              >
+                                <Link
+                                  href={subItem.url}
+                                  title={t(subItem.title as any)}
+                                  className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
+                                >
+                                  <span>{t(subItem.title as any)}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </div>
                       ))}
                     </SidebarMenuSub>
                   </CollapsibleContent>

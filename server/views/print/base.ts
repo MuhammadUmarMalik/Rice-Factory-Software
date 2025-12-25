@@ -120,6 +120,7 @@ function renderNotes(payload: PrintableDocumentPayload) {
 }
 
 function renderSignatures(payload: PrintableDocumentPayload) {
+  if (payload.docKey !== "voucher.journal") return "";
   const signatures = payload.signatures || [
     { label: "Prepared By" },
     { label: "Approved By" },
