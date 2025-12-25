@@ -109,6 +109,18 @@
   }
 }
 
+/* Popup print preview: hide iframe scrollbars in the modal */
+.print-preview-frame {
+  border: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.print-preview-frame::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* LIGHT MODE */
 :root {
   --button-outline: rgba(0,0,0, .10);

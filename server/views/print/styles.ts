@@ -6,6 +6,7 @@ export const printStyles = `
     --accent: #0ea5e9;
     --bg: #ffffff;
     --soft: #f8fafc;
+    --soft-strong: #f1f5f9;
   }
 
   @page {
@@ -14,23 +15,31 @@ export const printStyles = `
   }
 
   * {
-    box-sizing: border-box;
+    // box-sizing: border-box;
   }
 
+  html,
   body {
-    font-family: "Times New Roman", "Georgia", serif;
+    font-family: "Cambria", "Times New Roman", serif;
     color: var(--ink);
     background: var(--bg);
     margin: 0;
     padding: 0;
-    font-size: 12px;
-    line-height: 1.45;
+    font-size: 12.5px;
+    line-height: 1.5;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  body::-webkit-scrollbar {
+    width: 0;
+    height: 0;
   }
 
   .doc {
     position: relative;
     min-height: 100%;
-    padding-bottom: 20mm;
+    padding: 10mm 12mm 18mm;
   }
 
   .header {
@@ -73,7 +82,7 @@ export const printStyles = `
 
   .doc-title h1 {
     margin: 0;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.4px;
@@ -131,15 +140,17 @@ export const printStyles = `
     width: 100%;
     border-collapse: collapse;
     margin-bottom: 12px;
+    table-layout: fixed;
   }
 
   thead th {
-    background: var(--soft);
+    background: var(--soft-strong);
     border: 1px solid var(--border);
-    padding: 6px;
+    padding: 7px 6px;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.3px;
+    vertical-align: middle;
   }
   thead {
     display: table-header-group;
@@ -147,7 +158,7 @@ export const printStyles = `
 
   tbody td {
     border: 1px solid var(--border);
-    padding: 6px;
+    padding: 7px 6px;
     vertical-align: top;
   }
 
@@ -164,7 +175,7 @@ export const printStyles = `
   }
 
   .group-row td {
-    background: #f1f5f9;
+    background: var(--soft-strong);
     font-weight: 700;
     text-transform: uppercase;
     font-size: 11px;
@@ -172,12 +183,12 @@ export const printStyles = `
 
   .totals-row td {
     font-weight: 700;
-    background: #e2e8f0;
+    background: #e5e7eb;
   }
 
   .notes {
     border: 1px dashed var(--border);
-    padding: 8px;
+    padding: 8px 10px;
     border-radius: 8px;
     background: var(--soft);
     margin-bottom: 12px;
@@ -186,7 +197,7 @@ export const printStyles = `
   .signatures {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
+    gap: 18px;
     margin-top: 18px;
   }
 
