@@ -1540,9 +1540,9 @@ export class DatabaseStorage implements IStorage {
     const rate = parseAmount(item.rate);
     const grossWeightKg = (bags * filling) + looseKgs;
     const netWeightKg = Math.max(grossWeightKg - lessKg - bardanaKatKg, 0);
-    const moundQtyFloat = netWeightKg / moundBaseKg;
-    const moundQty = Math.floor(moundQtyFloat);
-    const moundRemainderKg = Math.max(netWeightKg - (moundQty * moundBaseKg), 0);
+    const moundQty = netWeightKg / moundBaseKg;
+    const moundWhole = Math.floor(moundQty);
+    const moundRemainderKg = Math.max(netWeightKg - (moundWhole * moundBaseKg), 0);
 
     const unit = item.rateUnit;
     let billingQty = netWeightKg;
@@ -1611,9 +1611,9 @@ export class DatabaseStorage implements IStorage {
         return normalized;
       });
 
-      const totalMoundQtyFloat = totalNetWeightKg / moundBaseKg;
-      const totalMoundQty = Math.floor(totalMoundQtyFloat);
-      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
+      const totalMoundQty = totalNetWeightKg / moundBaseKg;
+      const totalMoundWhole = Math.floor(totalMoundQty);
+      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundWhole * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
       const brokerCommissionPercent = parseAmount(purchase.brokerCommissionPercent || "0");
@@ -1684,7 +1684,7 @@ export class DatabaseStorage implements IStorage {
       // Double-entry: split purchase into base/tax/charge lines so ledgers show each impact.
       const debitAccountId = purchase.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
       const supplierAccountId = purchase.supplierId;
-      const baseAmount = Math.max(lineSubtotal, 0);
+      const baseAmount = Math.max(subtotal, 0);
       const ledgerLines: Omit<InsertLedgerEntry, "balance">[] = [];
       const purchaseBaseLabel = `PURCHASE ${invoiceNumber}`;
 
@@ -1712,6 +1712,29 @@ export class DatabaseStorage implements IStorage {
         });
       }
 
+      if (brokerCommission > 0) {
+        const amount = brokerCommission.toString();
+        const commissionLabel = "BROKER COMMISSION";
+        pushLine({
+          accountId: debitAccountId,
+          transactionType: "debit",
+          amount,
+          description: commissionLabel,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: "credit",
+          amount,
+          description: commissionLabel,
+          referenceType: "purchase",
+          referenceId: newPurchase.id,
+          entryDate: postingDate,
+        });
+      }
+
       const chargeLabel = (type: string) => {
         switch (type) {
           case "weight":
@@ -1719,7 +1742,7 @@ export class DatabaseStorage implements IStorage {
           case "freight":
             return "FREIGHT";
           case "loading_filling":
-            return "LOADING/FILLING";
+            return "LOADING/UNLOADING";
           case "market_fee":
             return "MARKET FEE";
           case "mitha_sukri":
@@ -1874,9 +1897,9 @@ export class DatabaseStorage implements IStorage {
         return normalized;
       });
 
-      const totalMoundQtyFloat = totalNetWeightKg / moundBaseKg;
-      const totalMoundQty = Math.floor(totalMoundQtyFloat);
-      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundQty * moundBaseKg), 0);
+      const totalMoundQty = totalNetWeightKg / moundBaseKg;
+      const totalMoundWhole = Math.floor(totalMoundQty);
+      const totalMoundRemainderKg = Math.max(totalNetWeightKg - (totalMoundWhole * moundBaseKg), 0);
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
       const brokerCommissionPercent = parseAmount((purchase as any).brokerCommissionPercent ?? existing.brokerCommissionPercent ?? "0");
@@ -1927,7 +1950,7 @@ export class DatabaseStorage implements IStorage {
       // Post fresh double-entry for updated purchase with split charge lines.
       const debitAccountId = purchase.expenseAccountId ?? existing.expenseAccountId ?? this.ensureSystemAccount(client, "Inventory", "asset").id;
       const supplierAccountId = purchase.supplierId ?? existing.supplierId;
-      const baseAmount = Math.max(lineSubtotal, 0);
+      const baseAmount = Math.max(subtotal, 0);
       const ledgerLines: Omit<InsertLedgerEntry, "balance">[] = [];
       const purchaseBaseLabel = `PURCHASE ${existing.invoiceNumber}`;
 
@@ -1955,6 +1978,29 @@ export class DatabaseStorage implements IStorage {
         });
       }
 
+      if (brokerCommission > 0) {
+        const amount = brokerCommission.toString();
+        const commissionLabel = "BROKER COMMISSION";
+        pushLine({
+          accountId: debitAccountId,
+          transactionType: "debit",
+          amount,
+          description: commissionLabel,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+        pushLine({
+          accountId: supplierAccountId,
+          transactionType: "credit",
+          amount,
+          description: commissionLabel,
+          referenceType: "purchase",
+          referenceId: id,
+          entryDate: postingDate,
+        });
+      }
+
       const chargeLabel = (type: string) => {
         switch (type) {
           case "weight":
@@ -1962,7 +2008,7 @@ export class DatabaseStorage implements IStorage {
           case "freight":
             return "FREIGHT";
           case "loading_filling":
-            return "LOADING/FILLING";
+            return "LOADING/UNLOADING";
           case "market_fee":
             return "MARKET FEE";
           case "mitha_sukri":
@@ -2421,10 +2467,355 @@ export class DatabaseStorage implements IStorage {
       throw new Error("Account not found");
     }
 
-    const entries = await this.getLedgerEntries(accountId, referenceType, startDate, endDate);
-    const openingBalanceRaw = entries[0]?.openingBalance || account.openingBalance || "0";
-    const openingBalance = parseAmount(openingBalanceRaw);
     const normalSide = normalSideForAccountType(account?.type);
+    const resolveOpeningBalance = () => {
+      let opening = parseAmount(account.openingBalance || "0");
+      if (startDate) {
+        const movementWhere = [eq(ledgerEntries.accountId, accountId), lt(ledgerEntries.entryDate, startDate)];
+        if (referenceType) movementWhere.push(eq(ledgerEntries.referenceType, referenceType));
+        const [movementRow] = db
+          .select({
+            total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = ${
+              normalSide === "DEBIT" ? sql`'debit'` : sql`'credit'`
+            } THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+          })
+          .from(ledgerEntries)
+          .where(and(...movementWhere as any))
+          .all();
+        opening += parseAmount(movementRow?.total || "0");
+      }
+      return opening;
+    };
+    const entriesBase = await this.getLedgerEntries(accountId, referenceType, startDate, endDate);
+    const entries = (() => {
+      const accountType = account?.type;
+      const expandPurchase = accountType === "supplier";
+      const expandSale = accountType === "customer";
+      if (!expandPurchase && !expandSale) return entriesBase;
+
+      const chargeLabel = (type: string) => {
+        switch (type) {
+          case "weight":
+            return "WEIGHT ADD";
+          case "freight":
+            return "FREIGHT";
+          case "loading_filling":
+            return "LOADING/UNLOADING";
+          case "market_fee":
+            return "MARKET FEE";
+          case "mitha_sukri":
+            return "MITHA SUKRI";
+          case "phone_analysis":
+            return "PHONE/ANALYSIS";
+          case "brokerage":
+            return "BROKERAGE";
+          case "commission":
+            return "COMMISSION";
+          case "bardana":
+            return "BARDANA";
+          case "broken_allowance":
+            return "BROKEN ALLOWANCE";
+          case "other":
+          default:
+            return "OTHER";
+        }
+      };
+
+      const saleChargeLabels = [
+        { key: "loading", label: "LOADING" },
+        { key: "weighing", label: "WEIGHING" },
+        { key: "other", label: "OTHER" },
+      ];
+
+      const detailLabels = new Set([
+        "TAX",
+        "BROKER COMMISSION",
+        "LOADING",
+        "WEIGHING",
+        "OTHER",
+        "WEIGHT ADD",
+        "FREIGHT",
+        "LOADING/UNLOADING",
+        "MARKET FEE",
+        "MITHA SUKRI",
+        "PHONE/ANALYSIS",
+        "BROKERAGE",
+        "COMMISSION",
+        "BARDANA",
+        "BROKEN ALLOWANCE",
+      ]);
+
+      const byRef = new Map<string, typeof entriesBase>();
+      for (const entry of entriesBase) {
+        if (!entry.referenceType || !entry.referenceId) continue;
+        const key = `${entry.referenceType}:${entry.referenceId}`;
+        const list = byRef.get(key) || [];
+        list.push(entry);
+        byRef.set(key, list);
+      }
+
+      const purchaseIds = expandPurchase
+        ? Array.from(new Set(entriesBase.filter((e) => e.referenceType === "purchase").map((e) => e.referenceId).filter(Boolean) as number[]))
+        : [];
+      const saleIds = expandSale
+        ? Array.from(new Set(entriesBase.filter((e) => e.referenceType === "sale").map((e) => e.referenceId).filter(Boolean) as number[]))
+        : [];
+
+      const purchaseItemSubtotalById = new Map<number, string>(
+        purchaseIds.length
+          ? db
+              .select({
+                id: purchaseItems.purchaseId,
+                subtotal: sql<string>`COALESCE(SUM(CAST(${purchaseItems.amount} AS REAL)), 0)`,
+              })
+              .from(purchaseItems)
+              .where(and(inArray(purchaseItems.purchaseId, purchaseIds), isNull(purchaseItems.deletedAt)))
+              .groupBy(purchaseItems.purchaseId)
+              .all()
+              .map((r) => [r.id, r.subtotal])
+          : [],
+      );
+      const purchaseMetaById = new Map<
+        number,
+        { invoiceNumber?: string | null; purchaseDate?: Date | null; taxAmount?: string | null; brokerCommissionAmount?: string | null }
+      >(
+        purchaseIds.length
+          ? db
+              .select({
+                id: purchases.id,
+                invoiceNumber: purchases.invoiceNumber,
+                purchaseDate: purchases.purchaseDate,
+                taxAmount: purchases.taxAmount,
+                brokerCommissionAmount: purchases.brokerCommissionAmount,
+              })
+              .from(purchases)
+              .where(inArray(purchases.id, purchaseIds))
+              .all()
+              .map((r) => [r.id, r])
+          : [],
+      );
+      const purchaseChargesById = new Map<number, PurchaseCharge[]>(
+        purchaseIds.length
+          ? db
+              .select()
+              .from(purchaseCharges)
+              .where(inArray(purchaseCharges.purchaseId, purchaseIds))
+              .all()
+              .reduce((acc, row) => {
+                const list = acc.get(row.purchaseId) || [];
+                list.push(row);
+                acc.set(row.purchaseId, list);
+                return acc;
+              }, new Map<number, PurchaseCharge[]>())
+          : [],
+      );
+
+      const saleItemSubtotalById = new Map<number, string>(
+        saleIds.length
+          ? db
+              .select({
+                id: saleItems.saleId,
+                subtotal: sql<string>`COALESCE(SUM(CAST(${saleItems.totalPrice} AS REAL)), 0)`,
+              })
+              .from(saleItems)
+              .where(inArray(saleItems.saleId, saleIds))
+              .groupBy(saleItems.saleId)
+              .all()
+              .map((r) => [r.id, r.subtotal])
+          : [],
+      );
+      const saleMetaById = new Map<
+        number,
+        { invoiceNumber?: string | null; saleDate?: Date | null; taxAmount?: string | null; loadingCharges?: string | null; weighingCharges?: string | null; otherCharges?: string | null }
+      >(
+        saleIds.length
+          ? db
+              .select({
+                id: sales.id,
+                invoiceNumber: sales.invoiceNumber,
+                saleDate: sales.saleDate,
+                taxAmount: sales.taxAmount,
+                loadingCharges: sales.loadingCharges,
+                weighingCharges: sales.weighingCharges,
+                otherCharges: sales.otherCharges,
+              })
+              .from(sales)
+              .where(inArray(sales.id, saleIds))
+              .all()
+              .map((r) => [r.id, r])
+          : [],
+      );
+
+      const shouldExpand = (refType: string, refId: number, list: typeof entriesBase) => {
+        if ((refType === "purchase" && !expandPurchase) || (refType === "sale" && !expandSale)) return false;
+        const hasDetail = list.some((e) => {
+          const label = (e.description || "").trim().toUpperCase();
+          return detailLabels.has(label) || label.includes("TAX");
+        });
+        if (hasDetail) return false;
+        return true;
+      };
+
+      let virtualId = 0;
+      const buildEntry = (args: {
+        refType: string;
+        refId: number;
+        entryDate: Date | number;
+        transactionType: "debit" | "credit";
+        amount: number;
+        description: string;
+      }) => {
+        const amount = Math.abs(args.amount);
+        return {
+          id: -1 * (++virtualId),
+          accountId,
+          entryDate: args.entryDate,
+          transactionType: args.transactionType,
+          amount: amount.toString(),
+          description: args.description,
+          referenceType: args.refType,
+          referenceId: args.refId,
+          debit: args.transactionType === "debit" ? amount.toString() : "0",
+          credit: args.transactionType === "credit" ? amount.toString() : "0",
+        } as LedgerEntry & { debit?: string; credit?: string };
+      };
+
+      const result: typeof entriesBase = [];
+      const processed = new Set<string>();
+      for (const entry of entriesBase) {
+        if (!entry.referenceType || !entry.referenceId) {
+          result.push(entry);
+          continue;
+        }
+        const refType = entry.referenceType;
+        const refId = entry.referenceId;
+        const key = `${refType}:${refId}`;
+        const list = byRef.get(key);
+        if (!list || !shouldExpand(refType, refId, list)) {
+          result.push(entry);
+          continue;
+        }
+        if (processed.has(key)) {
+          continue;
+        }
+        processed.add(key);
+        if (refType === "purchase" && expandPurchase) {
+          const meta = purchaseMetaById.get(refId);
+          const entryDate = meta?.purchaseDate || entry.entryDate || new Date();
+          const baseAmount = parseAmount(purchaseItemSubtotalById.get(refId) || "0");
+          if (baseAmount > 0) {
+            result.push(
+              buildEntry({
+                refType,
+                refId,
+                entryDate,
+                transactionType: "credit",
+                amount: baseAmount,
+                description: `PURCHASE ${meta?.invoiceNumber || `PUR-${refId}`}`,
+              }),
+            );
+          }
+          const brokerCommission = parseAmount(meta?.brokerCommissionAmount || "0");
+          if (brokerCommission > 0) {
+            result.push(
+              buildEntry({
+                refType,
+                refId,
+                entryDate,
+                transactionType: "credit",
+                amount: brokerCommission,
+                description: "BROKER COMMISSION",
+              }),
+            );
+          }
+          const charges = purchaseChargesById.get(refId) || [];
+          for (const charge of charges) {
+            const amt = parseAmount(charge.amount);
+            if (amt <= 0) continue;
+            const transactionType = charge.mode === "less" ? "debit" : "credit";
+            result.push(
+              buildEntry({
+                refType,
+                refId,
+                entryDate,
+                transactionType,
+                amount: amt,
+                description: chargeLabel(charge.type),
+              }),
+            );
+          }
+          const taxAmount = parseAmount(meta?.taxAmount || "0");
+          if (taxAmount > 0) {
+            result.push(
+              buildEntry({
+                refType,
+                refId,
+                entryDate,
+                transactionType: "credit",
+                amount: taxAmount,
+                description: "TAX",
+              }),
+            );
+          }
+          continue;
+        }
+        if (refType === "sale" && expandSale) {
+          const meta = saleMetaById.get(refId);
+          const entryDate = meta?.saleDate || entry.entryDate || new Date();
+          const baseAmount = parseAmount(saleItemSubtotalById.get(refId) || "0");
+          if (baseAmount > 0) {
+            result.push(
+              buildEntry({
+                refType,
+                refId,
+                entryDate,
+                transactionType: "debit",
+                amount: baseAmount,
+                description: `SALE ${meta?.invoiceNumber || `SAL-${refId}`}`,
+              }),
+            );
+          }
+          const saleCharges = [
+            { label: saleChargeLabels[0].label, amount: parseAmount(meta?.loadingCharges || "0") },
+            { label: saleChargeLabels[1].label, amount: parseAmount(meta?.weighingCharges || "0") },
+            { label: saleChargeLabels[2].label, amount: parseAmount(meta?.otherCharges || "0") },
+          ];
+          for (const charge of saleCharges) {
+            if (charge.amount === 0) continue;
+            const transactionType = charge.amount >= 0 ? "debit" : "credit";
+            result.push(
+              buildEntry({
+                refType,
+                refId,
+                entryDate,
+                transactionType,
+                amount: Math.abs(charge.amount),
+                description: charge.label,
+              }),
+            );
+          }
+          const taxAmount = parseAmount(meta?.taxAmount || "0");
+          if (taxAmount > 0) {
+            result.push(
+              buildEntry({
+                refType,
+                refId,
+                entryDate,
+                transactionType: "debit",
+                amount: taxAmount,
+                description: "TAX",
+              }),
+            );
+          }
+          continue;
+        }
+        result.push(entry);
+      }
+      return result;
+    })();
+    const openingBalance = entriesBase[0]?.openingBalance
+      ? parseAmount(entriesBase[0].openingBalance)
+      : resolveOpeningBalance();
 
     const narrationFilter = (narration || "").trim().toLowerCase();
     const filteredEntries = narrationFilter
@@ -2459,7 +2850,31 @@ export class DatabaseStorage implements IStorage {
             .map((r) => [r.id, r.no])
         : [],
     );
-    const purchaseMetaById = new Map<number, { invoiceNumber?: string | null; totalNetWeightKg?: string | null; totalMoundQty?: string | null; subtotal?: string | null }>(
+    const purchaseItemSubtotalById = new Map<number, string>(
+      purchaseIds.length
+        ? db
+            .select({
+              id: purchaseItems.purchaseId,
+              subtotal: sql<string>`COALESCE(SUM(CAST(${purchaseItems.amount} AS REAL)), 0)`,
+            })
+            .from(purchaseItems)
+            .where(and(inArray(purchaseItems.purchaseId, purchaseIds), isNull(purchaseItems.deletedAt)))
+            .groupBy(purchaseItems.purchaseId)
+            .all()
+            .map((r) => [r.id, r.subtotal])
+        : [],
+    );
+    const purchaseMetaById = new Map<
+      number,
+      {
+        invoiceNumber?: string | null;
+        totalNetWeightKg?: string | null;
+        totalMoundQty?: string | null;
+        subtotal?: string | null;
+        itemsSubtotal?: string | null;
+        totalAmount?: string | null;
+      }
+    >(
       purchaseIds.length
         ? db
             .select({
@@ -2468,12 +2883,69 @@ export class DatabaseStorage implements IStorage {
               totalNetWeightKg: purchases.totalNetWeightKg,
               totalMoundQty: purchases.totalMoundQty,
               subtotal: purchases.subtotal,
+              totalAmount: purchases.totalAmount,
             })
             .from(purchases)
             .where(inArray(purchases.id, purchaseIds))
             .all()
-            .map((r) => [r.id, r])
+            .map((r) => [r.id, { ...r, itemsSubtotal: purchaseItemSubtotalById.get(r.id) }])
         : [],
+    );
+    const purchaseItemRows = purchaseIds.length
+      ? db
+          .select({
+            purchaseId: purchaseItems.purchaseId,
+            productId: purchaseItems.productId,
+            moundQty: purchaseItems.moundQty,
+            netWeightKg: purchaseItems.netWeightKg,
+            rate: purchaseItems.rate,
+          })
+          .from(purchaseItems)
+          .where(and(inArray(purchaseItems.purchaseId, purchaseIds), isNull(purchaseItems.deletedAt)))
+          .all()
+      : [];
+    const purchaseProductIds = Array.from(new Set(purchaseItemRows.map((item) => item.productId)));
+    const purchaseProductRows = purchaseProductIds.length
+      ? db.select({ id: products.id, name: products.name }).from(products).where(inArray(products.id, purchaseProductIds)).all()
+      : [];
+    const purchaseProductNameById = new Map<number, string>(purchaseProductRows.map((p) => [p.id, p.name]));
+    const summarizeNames = (names?: Iterable<string>) => {
+      const list = Array.from(new Set(names ? Array.from(names) : [])).filter(Boolean);
+      if (list.length === 0) return "";
+      if (list.length === 1) return list[0];
+      return `${list[0]} +${list.length - 1} more`;
+    };
+    const purchaseItemNameSets = new Map<number, Set<string>>();
+    const purchaseItemTotalsById = new Map<number, { moundQty: number; netKg: number }>();
+    const purchaseItemRatesById = new Map<number, Set<number>>();
+    for (const item of purchaseItemRows) {
+      const name = purchaseProductNameById.get(item.productId);
+      if (!name) continue;
+      const set = purchaseItemNameSets.get(item.purchaseId) || new Set<string>();
+      set.add(name);
+      purchaseItemNameSets.set(item.purchaseId, set);
+      const moundQty = parseAmount(item.moundQty || "0");
+      const netKg = parseAmount(item.netWeightKg || "0");
+      const current = purchaseItemTotalsById.get(item.purchaseId) || { moundQty: 0, netKg: 0 };
+      purchaseItemTotalsById.set(item.purchaseId, {
+        moundQty: current.moundQty + moundQty,
+        netKg: current.netKg + netKg,
+      });
+      const rateValue = parseAmount(item.rate || "0");
+      if (rateValue > 0) {
+        const rates = purchaseItemRatesById.get(item.purchaseId) || new Set<number>();
+        rates.add(rateValue);
+        purchaseItemRatesById.set(item.purchaseId, rates);
+      }
+    }
+    const purchaseItemNameById = new Map<number, string>(
+      Array.from(purchaseItemNameSets.entries()).map(([id, names]) => [id, summarizeNames(names)]),
+    );
+    const purchaseItemTotals = new Map<number, { moundQty: number; netKg: number }>(
+      Array.from(purchaseItemTotalsById.entries()).map(([id, totals]) => [id, totals]),
+    );
+    const purchaseItemRates = new Map<number, number[]>(
+      Array.from(purchaseItemRatesById.entries()).map(([id, rates]) => [id, Array.from(rates)]),
     );
     const saleNoById = new Map<number, string>(
       saleIds.length
@@ -2485,10 +2957,10 @@ export class DatabaseStorage implements IStorage {
             .map((r) => [r.id, r.no])
         : [],
     );
-    const saleMetaById = new Map<number, { invoiceNumber?: string | null; subtotal?: string | null }>(
+    const saleMetaById = new Map<number, { invoiceNumber?: string | null; subtotal?: string | null; totalAmount?: string | null }>(
       saleIds.length
         ? db
-            .select({ id: sales.id, invoiceNumber: sales.invoiceNumber, subtotal: sales.subtotal })
+            .select({ id: sales.id, invoiceNumber: sales.invoiceNumber, subtotal: sales.subtotal, totalAmount: sales.totalAmount })
             .from(sales)
             .where(inArray(sales.id, saleIds))
             .all()
@@ -2500,17 +2972,32 @@ export class DatabaseStorage implements IStorage {
       : [];
     const saleProductIds = Array.from(new Set(saleItemRows.map((item) => item.productId)));
     const saleProductRows = saleProductIds.length
-      ? db.select({ id: products.id, unit: products.unit }).from(products).where(inArray(products.id, saleProductIds)).all()
+      ? db
+          .select({ id: products.id, unit: products.unit, name: products.name })
+          .from(products)
+          .where(inArray(products.id, saleProductIds))
+          .all()
       : [];
     const saleProductUnitById = new Map<number, string>(saleProductRows.map((p) => [p.id, p.unit || "units"]));
+    const saleProductNameById = new Map<number, string>(saleProductRows.map((p) => [p.id, p.name]));
     const saleQtyById = new Map<number, { totalQty: number; unit: string }>();
+    const saleItemNameSets = new Map<number, Set<string>>();
     for (const item of saleItemRows) {
       const qty = parseAmount(item.quantity);
       const unit = saleProductUnitById.get(item.productId) || "units";
       const current = saleQtyById.get(item.saleId) || { totalQty: 0, unit };
       const resolvedUnit = current.unit === unit ? unit : "units";
       saleQtyById.set(item.saleId, { totalQty: current.totalQty + qty, unit: resolvedUnit });
+      const name = saleProductNameById.get(item.productId);
+      if (name) {
+        const set = saleItemNameSets.get(item.saleId) || new Set<string>();
+        set.add(name);
+        saleItemNameSets.set(item.saleId, set);
+      }
     }
+    const saleItemNameById = new Map<number, string>(
+      Array.from(saleItemNameSets.entries()).map(([id, names]) => [id, summarizeNames(names)]),
+    );
     const receiptMetaById = new Map<number, { no: string; voucherType: string; settlementAccountId: number | null }>(
       receiptIds.length
         ? db
@@ -2627,10 +3114,12 @@ export class DatabaseStorage implements IStorage {
       value.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
     const formatRate = (value: number) =>
       value.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const formatMoney = (value: number) =>
+      value.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const normalizedChargeLabels = new Map<string, string>([
       ["weight", "WEIGHT ADD"],
       ["freight", "FREIGHT"],
-      ["loading_filling", "LOADING/FILLING"],
+      ["loading_filling", "LOADING/UNLOADING"],
       ["market_fee", "MARKET FEE"],
       ["mitha_sukri", "MITHA SUKRI"],
       ["phone_analysis", "PHONE/ANALYSIS"],
@@ -2638,6 +3127,7 @@ export class DatabaseStorage implements IStorage {
       ["commission", "COMMISSION"],
       ["bardana", "BARDANA"],
       ["broken_allowance", "BROKEN ALLOWANCE"],
+      ["broker_commission", "BROKER COMMISSION"],
       ["other", "OTHER"],
       ["loading", "LOADING"],
       ["weighing", "WEIGHING"],
@@ -2659,35 +3149,53 @@ export class DatabaseStorage implements IStorage {
       return trimmed;
     };
 
+    const formatRateList = (rates: number[]) => {
+      if (!rates.length) return "";
+      const list = rates.slice().sort((a, b) => a - b).map((rate) => formatRate(rate));
+      if (list.length <= 2) return list.join("/");
+      return `${list.slice(0, 2).join("/")}/+${list.length - 2} more`;
+    };
     const buildPurchaseNarration = (entry: LedgerEntry, refId?: number | null) => {
       const rawDescription = (entry.description || "").trim();
       const lowerDescription = rawDescription.toLowerCase();
       const meta = refId ? purchaseMetaById.get(refId) : undefined;
       const invoice = meta?.invoiceNumber || (refId ? purchaseNoById.get(refId) : "") || (refId ? `PUR-${refId}` : "");
       const base = invoice ? `PURCHASE ${invoice}` : "PURCHASE";
-      const netKg = parseAmount(meta?.totalNetWeightKg || "0");
-      const moundQty = parseAmount(meta?.totalMoundQty || "0");
-      const subtotal = parseAmount(meta?.subtotal || "0");
+      const itemLabel = refId ? purchaseItemNameById.get(refId) : "";
+      const itemTotals = refId ? purchaseItemTotals.get(refId) : undefined;
+      const netKg = itemTotals?.netKg ?? parseAmount(meta?.totalNetWeightKg || "0");
+      const moundQty = netKg > 0 ? netKg / 40 : (itemTotals?.moundQty ?? parseAmount(meta?.totalMoundQty || "0"));
+      const subtotal = parseAmount(meta?.itemsSubtotal || meta?.subtotal || "0");
+      const qtyParts = [];
       const parts = [base];
-      if (netKg > 0) parts.push(`${formatQty(netKg)}KG`);
-      if (moundQty > 0) parts.push(`${formatQty(moundQty)} MUND`);
-      if (subtotal > 0) {
-        const rateBase = moundQty > 0 ? subtotal / Math.max(moundQty, 1) : subtotal / Math.max(netKg, 1);
-        parts.push(`RATE ${formatRate(rateBase)}`);
+      const amountLabel = parseAmount(entry.amount || "0");
+      if (itemLabel) parts.push(itemLabel);
+      if (netKg > 0) qtyParts.push(`${formatQty(netKg)}KG`);
+      if (moundQty > 0) qtyParts.push(`${formatQty(moundQty)} MUND`);
+      if (qtyParts.length > 0) parts.push(...qtyParts);
+      const itemRates = refId ? purchaseItemRates.get(refId) : undefined;
+      const rateLabel = itemRates ? formatRateList(itemRates) : "";
+      if (rateLabel) {
+        parts.push(`RATE ${rateLabel} PER MUND`);
       }
+      const joinParts = () => parts.join(" / ");
       if (lowerDescription.includes("reversal")) {
         return rawDescription;
       }
       if (lowerDescription.includes("tax")) {
-        return "TAX";
+        return amountLabel > 0 ? `TAX (${formatMoney(amountLabel)})` : "TAX";
       }
       if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
-        return normalizeChargeLabel(rawDescription);
+        const label = normalizeChargeLabel(rawDescription);
+        return amountLabel > 0 ? `${label} (${formatMoney(amountLabel)})` : label;
+      }
+      if (lowerDescription.includes("broker commission") || lowerDescription.includes("brokerage")) {
+        return amountLabel > 0 ? `BROKER COMMISSION (${formatMoney(amountLabel)})` : "BROKER COMMISSION";
       }
       if (rawDescription && !lowerDescription.includes("purchase")) {
         return rawDescription;
       }
-      return parts.join(" | ");
+      return joinParts();
     };
 
     const buildSaleNarration = (entry: LedgerEntry, refId?: number | null) => {
@@ -2696,29 +3204,36 @@ export class DatabaseStorage implements IStorage {
       const meta = refId ? saleMetaById.get(refId) : undefined;
       const invoice = meta?.invoiceNumber || (refId ? saleNoById.get(refId) : "") || (refId ? `SAL-${refId}` : "");
       const base = invoice ? `SALE ${invoice}` : "SALE";
+      const itemLabel = refId ? saleItemNameById.get(refId) : "";
       const qtyMeta = refId ? saleQtyById.get(refId) : undefined;
       const subtotal = parseAmount(meta?.subtotal || "0");
       const parts = [base];
+      const amountLabel = parseAmount(entry.amount || "0");
+      if (itemLabel) parts.push(itemLabel);
+      const qtyParts = [];
       if (qtyMeta && qtyMeta.totalQty > 0) {
-        parts.push(`${formatQty(qtyMeta.totalQty)} ${qtyMeta.unit || "units"}`.trim());
+        qtyParts.push(`${formatQty(qtyMeta.totalQty)} ${qtyMeta.unit || "units"}`.trim());
         if (subtotal > 0) {
           const rateBase = subtotal / Math.max(qtyMeta.totalQty, 1);
           parts.push(`RATE ${formatRate(rateBase)}`);
         }
       }
+      if (qtyParts.length > 0) parts.push(...qtyParts);
+      const joinParts = () => parts.join(" / ");
       if (lowerDescription.includes("reversal")) {
         return rawDescription;
       }
       if (lowerDescription.includes("tax")) {
-        return "TAX";
+        return amountLabel > 0 ? `TAX (${formatMoney(amountLabel)})` : "TAX";
       }
       if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
-        return normalizeChargeLabel(rawDescription);
+        const label = normalizeChargeLabel(rawDescription);
+        return amountLabel > 0 ? `${label} (${formatMoney(amountLabel)})` : label;
       }
       if (rawDescription && !lowerDescription.includes("sale")) {
         return rawDescription;
       }
-      return parts.join(" | ");
+      return joinParts();
     };
 
     const buildReceiptNarration = (refId?: number | null) => {
@@ -2744,7 +3259,8 @@ export class DatabaseStorage implements IStorage {
         ? `Bank ${settlementName || "Bank"}`
         : "Cash";
       const vch = meta?.no || `CPV-${refId}`;
-      return `PAYMENT ${vch} | ${modeLabel}`;
+      const cleanVch = vch.replace(/\(\s*RS\s*\)/gi, "").replace(/\s{2,}/g, " ").trim();
+      return `PAYMENT ${cleanVch} | ${modeLabel}`;
     };
 
     const buildJournalNarration = (refId?: number | null) => {
@@ -2764,7 +3280,8 @@ export class DatabaseStorage implements IStorage {
     };
 
     let running = openingBalance;
-    const rows: LedgerReportRow[] = filteredEntries.map((entry) => {
+    const rows: LedgerReportRow[] = [];
+    for (const entry of filteredEntries) {
       const debit = parseAmount(entry.debit || "0");
       const credit = parseAmount(entry.credit || "0");
       const delta = normalSide === "DEBIT" ? debit - credit : credit - debit;
@@ -2786,7 +3303,7 @@ export class DatabaseStorage implements IStorage {
         narration = buildExpenseNarration(entry.referenceId);
       }
 
-      return {
+      rows.push({
         id: entry.id,
         entryDate: entry.entryDate,
         narration,
@@ -2797,8 +3314,8 @@ export class DatabaseStorage implements IStorage {
         runningBalance: running.toString(),
         referenceType: entry.referenceType,
         referenceId: entry.referenceId,
-      };
-    });
+      });
+    }
 
     const totals = rows.reduce(
       (acc, row) => {
@@ -4842,8 +5359,9 @@ export class DatabaseStorage implements IStorage {
           }
           const parts: string[] = [];
           const entriesList = Array.from(totals.entries());
-          for (const [idx, [productId, qty]] of entriesList.entries()) {
+          for (let idx = 0; idx < entriesList.length; idx += 1) {
             if (idx >= 2) break;
+            const [productId, qty] = entriesList[idx];
             const product = saleProductMap.get(productId);
             const unit = product?.unit || "units";
             parts.push(`${product?.name || `#${productId}`} ${formatQty(qty)} ${unit}`);
@@ -4938,10 +5456,13 @@ export class DatabaseStorage implements IStorage {
           }
           const parts: string[] = [];
           const entriesList = Array.from(totals.entries());
-          for (const [idx, [productId, qty]] of entriesList.entries()) {
+          for (let idx = 0; idx < entriesList.length; idx += 1) {
             if (idx >= 2) break;
+            const [productId, qty] = entriesList[idx];
             const product = purchaseProductMap.get(productId);
-            parts.push(`${product?.name || `#${productId}`} ${formatQty(qty)} kg`);
+            const mound = qty > 0 ? qty / 40 : 0;
+            const qtyLabel = mound > 0 ? `${formatQty(mound)} mund` : `${formatQty(qty)} kg`;
+            parts.push(`${product?.name || `#${productId}`} ${qtyLabel}`);
           }
           if (entriesList.length > 2) parts.push(`+${entriesList.length - 2} more`);
           return parts.join(", ");

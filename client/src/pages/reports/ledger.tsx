@@ -16,7 +16,6 @@ import type { Account } from "@shared/schema";
 import { format } from "date-fns";
 import clsx from "clsx";
 import { Link, useLocation } from "wouter";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 
@@ -49,7 +48,6 @@ export default function LedgerPage() {
   const [dateTo, setDateTo] = useState<string>("");
   const [voucherType, setVoucherType] = useState<string>("all");
   const [narrationSearch, setNarrationSearch] = useState<string>("");
-  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const path = typeof window !== "undefined" ? window.location.pathname : location;
   const scope = path.includes("ledger-sales")
@@ -164,6 +162,20 @@ export default function LedgerPage() {
     const num = typeof value === "number" ? value : parseFloat(value || "0");
     if (!Number.isFinite(num)) return "0.00";
     return num.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const normalSideForType = (type?: string | null) => {
+    if (!type) return "DEBIT";
+    const t = type.toLowerCase();
+    return ["supplier", "liability", "equity", "income"].includes(t) ? "CREDIT" : "DEBIT";
+  };
+  const balanceLabel = (value?: string | number) => {
+    const num = typeof value === "number" ? value : parseFloat(value || "0");
+    if (!Number.isFinite(num) || num === 0) return formatAmount(0);
+    const normalSide = normalSideForType(selectedAccount?.type);
+    const side = num >= 0
+      ? (normalSide === "DEBIT" ? "DR" : "CR")
+      : (normalSide === "DEBIT" ? "CR" : "DR");
+    return `${formatAmount(Math.abs(num))} ${side}`;
   };
   const tabs = [
     { label: "General", href: "/reports/ledger", active: scope === undefined },
@@ -284,11 +296,11 @@ export default function LedgerPage() {
               {selectedAccount.name}
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Opening balance: Rs. {formatAmount(openingBalance)}
+              Opening balance: {balanceLabel(openingBalance)}
             </p>
             {(dateFrom || dateTo) && (
               <p className="text-xs text-muted-foreground">
-                {dateFrom ? format(new Date(dateFrom), "dd MMM yyyy") : "Start"} — {dateTo ? format(new Date(dateTo), "dd MMM yyyy") : "Today"}
+                {dateFrom ? format(new Date(dateFrom), "dd MMM yyyy") : "Start"} - {dateTo ? format(new Date(dateTo), "dd MMM yyyy") : "Today"}
               </p>
             )}
             {validation && (!validation.closingMatchesLastRow || !validation.closingMatchesTotals) && (
@@ -301,7 +313,7 @@ export default function LedgerPage() {
             <div className="min-w-[780px] border rounded-lg bg-white">
               <div className="grid grid-cols-[90px,1fr,120px,120px,120px] bg-muted/60 text-[11px] font-semibold uppercase tracking-wide border-b">
                 <div className="px-3 py-2 border-r">{isRTL ? "تاریخ" : "Date"}</div>
-                <div className="px-3 py-2 border-r">{isRTL ? "تفصیل" : "NARATION"}</div>
+                <div className="px-3 py-2 border-r">{isRTL ? "تفصیل" : "Narration"}</div>
                 <div className="px-3 py-2 border-r text-right">{isRTL ? "ڈیبٹ" : "Debit"}</div>
                 <div className="px-3 py-2 border-r text-right">{isRTL ? "کریڈٹ" : "Credit"}</div>
                 <div className="px-3 py-2 text-right">{isRTL ? "بقایا" : "Balance"}</div>
@@ -311,19 +323,6 @@ export default function LedgerPage() {
                 <div className="p-6 text-center text-muted-foreground text-sm">Loading entries...</div>
               ) : (
                 <>
-                  <div className="grid grid-cols-[90px,1fr,120px,120px,120px] text-sm border-b bg-muted/10">
-                    <div className="px-3 py-2 border-r text-xs text-muted-foreground">
-                      {dateFrom ? format(new Date(dateFrom), "dd-MM-yy") : ""}
-                    </div>
-                    <div className="px-3 py-2 border-r font-medium">
-                      {isRTL ? "ابتدائی بقایا" : "Opening Balance"}
-                    </div>
-                    <div className="px-3 py-2 border-r text-right font-mono tabular-nums">-</div>
-                    <div className="px-3 py-2 border-r text-right font-mono tabular-nums">-</div>
-                    <div className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
-                      Rs. {formatAmount(openingBalance)}
-                    </div>
-                  </div>
                   {ledgerRows.length === 0 ? (
                     <div className="px-3 py-3 text-center text-muted-foreground text-sm border-b">
                       No entries for this range.
@@ -333,37 +332,29 @@ export default function LedgerPage() {
                       const debit = parseFloat(entry.debit || "0");
                       const credit = parseFloat(entry.credit || "0");
                       const balance = parseFloat(entry.runningBalance || "0");
-                      const allowedTypes = ["purchase", "sale", "receipt", "payment", "journal_voucher", "expense"];
-                      const clickable = entry.referenceType && entry.referenceId && allowedTypes.includes(entry.referenceType);
                       const narration = entry.narration || "";
                       return (
                         <div
                           key={entry.id}
                           className={clsx(
                             "grid grid-cols-[90px,1fr,120px,120px,120px] text-sm border-b last:border-b-0",
-                            clickable ? "cursor-pointer hover:bg-muted/30 transition-colors" : "",
                             idx % 2 === 0 ? "bg-white" : "bg-muted/20",
                           )}
-                          onClick={() =>
-                            clickable && entry.referenceType
-                              ? openDetail({ type: entry.referenceType as any, id: Number(entry.referenceId) })
-                              : undefined
-                          }
                         >
                           <div className="px-3 py-2 border-r text-xs text-muted-foreground font-mono">
-                            {format(new Date(entry.entryDate), "dd-MM-yy")}
+                            {format(new Date(entry.entryDate), "dd.MM.yy")}
                           </div>
                           <div className="px-3 py-2 border-r">
                             <div className="text-sm font-medium leading-5">{narration}</div>
                           </div>
                           <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
-                            {debit > 0 ? `Rs. ${formatAmount(debit)}` : "-"}
+                            {debit > 0 ? formatAmount(debit) : "-"}
                           </div>
                           <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
-                            {credit > 0 ? `Rs. ${formatAmount(credit)}` : "-"}
+                            {credit > 0 ? formatAmount(credit) : "-"}
                           </div>
                           <div className="px-3 py-2 text-right font-mono tabular-nums font-semibold">
-                            Rs. {formatAmount(balance)}
+                            {balanceLabel(balance)}
                           </div>
                         </div>
                       );
@@ -372,18 +363,18 @@ export default function LedgerPage() {
                 </>
               )}
 
-              {ledgerRows.length > 0 && (
+              {ledgerReport && !isLoading && (
                 <div className="grid grid-cols-[90px,1fr,120px,120px,120px] bg-muted/80 text-sm font-semibold border-t">
                   <div className="px-3 py-2 border-r"></div>
                   <div className="px-3 py-2 border-r">{isRTL ? "کل" : "Totals"}</div>
                   <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
-                    {Number(totals.debit || 0) > 0 ? `Rs. ${formatAmount(totals.debit)}` : "-"}
+                    {Number(totals.debit || 0) > 0 ? formatAmount(totals.debit) : "-"}
                   </div>
                   <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
-                    {Number(totals.credit || 0) > 0 ? `Rs. ${formatAmount(totals.credit)}` : "-"}
+                    {Number(totals.credit || 0) > 0 ? formatAmount(totals.credit) : "-"}
                   </div>
                   <div className="px-3 py-2 text-right font-mono tabular-nums">
-                    Rs. {formatAmount(totals.closingBalance)}
+                    {balanceLabel(totals.closingBalance)}
                   </div>
                 </div>
               )}
@@ -400,13 +391,6 @@ export default function LedgerPage() {
         </Card>
       )}
 
-      <ReportDetailDialog
-        reference={reference}
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
     </div>
   );
 }
