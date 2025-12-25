@@ -78,3 +78,37 @@ export async function createSalaryStructure(req: Request, res: Response) {
     res.status(500).json({ error: "Failed to create salary structure" });
   }
 }
+
+export async function updateSalaryStructure(req: Request, res: Response) {
+  try {
+    const employeeId = parseInt(req.params.id, 10);
+    const structureId = parseInt(req.params.structureId, 10);
+    const body = insertEmployeeSalaryStructureSchema
+      .omit({ employeeId: true })
+      .partial()
+      .parse({
+        ...req.body,
+        effectiveFrom: req.body?.effectiveFrom ? new Date(req.body.effectiveFrom) : undefined,
+      });
+    const updated = await employeesService.updateSalaryStructure(employeeId, structureId, body);
+    if (!updated) return res.status(404).json({ error: "Salary structure not found" });
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
+    console.error(error);
+    res.status(500).json({ error: "Failed to update salary structure" });
+  }
+}
+
+export async function deleteSalaryStructure(req: Request, res: Response) {
+  try {
+    const employeeId = parseInt(req.params.id, 10);
+    const structureId = parseInt(req.params.structureId, 10);
+    const deleted = await employeesService.deleteSalaryStructure(employeeId, structureId);
+    if (!deleted) return res.status(404).json({ error: "Salary structure not found" });
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to delete salary structure" });
+  }
+}

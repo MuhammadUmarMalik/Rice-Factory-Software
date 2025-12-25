@@ -35,6 +35,7 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
     const res = await fetch(queryKey.join("/") as string, {
+      cache: "no-store",
       headers: role ? { "x-user-role": role } : {},
       credentials: "include",
     });

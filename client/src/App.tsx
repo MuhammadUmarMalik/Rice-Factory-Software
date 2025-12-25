@@ -55,7 +55,7 @@ function Router() {
       <Route path="/payments" component={PaymentsPage} />
       <Route path="/expenses" component={ExpensesPage} />
       <Route path="/journal" component={Journal} />
-      <Route path="/cash" component={Cash} />
+      {/* <Route path="/cash" component={Cash} /> */}
       <Route path="/processing" component={Processing} />
       <Route path="/sales" component={Sales} />
       <Route path="/settings" component={Settings} />
