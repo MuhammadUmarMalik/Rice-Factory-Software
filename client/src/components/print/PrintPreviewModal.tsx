@@ -66,7 +66,7 @@ export function PrintPreviewModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl h-[90vh]">
+      <DialogContent className="max-w-6xl h-[90vh] flex flex-col">
         <DialogHeader className="flex flex-row items-center justify-between gap-4">
           <DialogTitle>{title || "Print Preview"}</DialogTitle>
           <div className="flex gap-2">
@@ -75,23 +75,24 @@ export function PrintPreviewModal({
             </Button>
           </div>
         </DialogHeader>
-        <div className="flex-1 h-full border rounded-md overflow-hidden bg-muted/20">
+        <div className="flex-1 min-h-0 rounded-lg border bg-muted/20 p-4">
           {loading ? (
             <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
               Loading preview...
             </div>
           ) : (
-            <iframe
-              ref={iframeRef}
-              title="Print preview"
-              className="w-full h-full"
-              srcDoc={html}
-              onLoad={handleIframeLoad}
-            />
+            <div className="h-full w-full overflow-hidden rounded-md bg-white shadow-sm">
+              <iframe
+                ref={iframeRef}
+                title="Print preview"
+                className="print-preview-frame h-full w-full"
+                srcDoc={html}
+                onLoad={handleIframeLoad}
+              />
+            </div>
           )}
         </div>
       </DialogContent>
     </Dialog>
   );
 }
-
