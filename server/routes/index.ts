@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import authRoutes from "./auth.routes";
 import accountsRoutes from "./accounts.routes";
 import cashRoutes from "./cash.routes";
 import dashboardRoutes from "./dashboard.routes";
@@ -19,10 +20,17 @@ import reportsRoutes from "./reports.routes";
 import salesRoutes from "./sales.routes";
 import settingsRoutes from "./settings.routes";
 import printRoutes from "./print.routes";
+import usersRoutes from "./users.routes";
+import { authenticate, requireAuth } from "../utils/auth";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  app.use(authRoutes);
+  app.use("/api", authenticate);
+  app.use("/api", requireAuth);
+
   app.use(settingsRoutes);
   app.use(dashboardRoutes);
+  app.use(usersRoutes);
   app.use(accountsRoutes);
   app.use(expensesRoutes);
   app.use(employeesRoutes);

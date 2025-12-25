@@ -2,25 +2,21 @@ import { create } from "zustand";
 
 type AuthState = {
   token: string | null;
-  roles: string[];
-  permissions: Record<string, boolean>;
+  user: { id: number; username: string; fullName: string; role: string } | null;
 };
 
 type AuthActions = {
-  login: (payload: { token: string; roles: string[]; permissions: Record<string, boolean> }) => void;
+  setSession: (payload: { token: string | null; user: AuthState["user"] }) => void;
   logout: () => void;
-  hasPerm: (key: string) => boolean;
 };
 
 const initialState: AuthState = {
   token: null,
-  roles: [],
-  permissions: {},
+  user: null,
 };
 
-export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
+export const useAuthStore = create<AuthState & AuthActions>((set) => ({
   ...initialState,
-  login: ({ token, roles, permissions }) => set({ token, roles, permissions }),
+  setSession: ({ token, user }) => set({ token, user }),
   logout: () => set(initialState),
-  hasPerm: (key) => Boolean(get().permissions[key]),
 }));

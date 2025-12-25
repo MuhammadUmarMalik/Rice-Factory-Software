@@ -1,10 +1,13 @@
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import createMemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./config/static";
 import { createServer } from "http";
 
 const app = express();
 const httpServer = createServer(app);
+const MemoryStore = createMemoryStore(session);
 
 declare module "http" {
   interface IncomingMessage {
@@ -21,6 +24,24 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+app.set("trust proxy", 1);
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || process.env.JWT_SECRET || "dev-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 1000 * 60 * 60 * 8,
+    },
+    store: new MemoryStore({
+      checkPeriod: 1000 * 60 * 60,
+    }),
+  }),
+);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {

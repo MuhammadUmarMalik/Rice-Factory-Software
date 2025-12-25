@@ -17,6 +17,7 @@ import type { Account } from "@shared/schema";
 import { downloadCsv } from "@/lib/export";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type PeriodPurchaseRow = {
   period: string;
@@ -47,16 +48,12 @@ export default function PeriodPurchasesPage() {
     queryKey: ["/api/reports/period-purchases", fromDate, toDate, supplierId, groupBy],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
       params.set("groupBy", groupBy);
       if (supplierId !== "all") params.set("supplierId", supplierId);
-      const res = await fetch(`/api/reports/period-purchases?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/reports/period-purchases?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load period purchases");
       return res.json();
     },

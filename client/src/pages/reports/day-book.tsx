@@ -8,6 +8,7 @@ import { ReportDetailDialog, useReportDetail } from "@/components/report-detail"
 import { Input } from "@/components/ui/input";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type DayBookRow = {
   entryId: number;
@@ -39,14 +40,10 @@ export default function DayBookPage() {
     queryKey: ["/api/reports/day-book", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
-      const res = await fetch(`/api/reports/day-book?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/reports/day-book?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load day book");
       return res.json();
     },

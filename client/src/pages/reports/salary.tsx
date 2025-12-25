@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type SalaryRow = {
   accountId: number | null;
@@ -34,14 +35,10 @@ export default function SalaryAccountPage() {
     queryKey: ["/api/financial/salary", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
-      const res = await fetch(`/api/financial/salary?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/financial/salary?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load salary account");
       return res.json();
     },

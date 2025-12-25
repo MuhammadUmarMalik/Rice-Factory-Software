@@ -1,4 +1,5 @@
-import { Switch, Route } from "wouter";
+import { useEffect, useState } from "react";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -9,12 +10,14 @@ import { ThemeProvider } from "@/contexts/theme-context";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Header } from "@/components/header";
 import NotFound from "@/pages/not-found";
+import LoginPage from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import Products from "@/pages/products";
 import Purchases from "@/pages/purchases";
 import Processing from "@/pages/processing";
 import Sales from "@/pages/sales";
 import Settings from "@/pages/settings";
+import UsersAdminPage from "@/pages/admin/users";
 import Customers from "@/pages/accounts/customers";
 import Suppliers from "@/pages/accounts/suppliers";
 import Banks from "@/pages/accounts/banks";
@@ -43,6 +46,8 @@ import Cash from "@/pages/cash";
 import EmployeesPage from "@/pages/hr/employees";
 import PayrollPage from "@/pages/hr/payroll";
 import ExpensesPage from "@/pages/expenses";
+import { useAuthStore } from "@/stores/auth.store";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 
 function Router() {
@@ -59,6 +64,7 @@ function Router() {
       <Route path="/processing" component={Processing} />
       <Route path="/sales" component={Sales} />
       <Route path="/settings" component={Settings} />
+      <Route path="/admin/users" component={UsersAdminPage} />
       <Route path="/accounts/customers" component={Customers} />
       <Route path="/accounts/suppliers" component={Suppliers} />
       <Route path="/accounts/banks" component={Banks} />
@@ -95,6 +101,42 @@ function Router() {
 }
 
 function App() {
+  const [location, setLocation] = useLocation();
+  const [authChecked, setAuthChecked] = useState(false);
+  const token = useAuthStore((state) => state.token);
+  const user = useAuthStore((state) => state.user);
+  const setSession = useAuthStore((state) => state.setSession);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetchWithAuth("/api/auth/me");
+        if (!alive) return;
+        if (res.ok) {
+          const data = await res.json();
+          setSession({ token, user: data.user || null });
+        } else if (res.status === 401) {
+          setSession({ token: null, user: null });
+        }
+      } catch {
+        if (alive) setSession({ token: null, user: null });
+      } finally {
+        if (alive) setAuthChecked(true);
+      }
+    };
+    load();
+    return () => {
+      alive = false;
+    };
+  }, [setSession, token]);
+
+  useEffect(() => {
+    if (!authChecked) return;
+    if (!user && location !== "/login") setLocation("/login");
+    if (user && location === "/login") setLocation("/");
+  }, [authChecked, user, location, setLocation]);
+
   const sidebarStyle = {
     "--sidebar-width": "16rem",
     "--sidebar-width-icon": "3rem",
@@ -114,17 +156,21 @@ function App() {
       <ThemeProvider>
         <LanguageProvider>
           <TooltipProvider>
-            <SidebarProvider style={sidebarStyle as React.CSSProperties}>
-              <Shell>
-                <AppSidebar />
-                <div className="flex flex-col flex-1 overflow-hidden">
+            {location === "/login" ? (
+              <LoginPage />
+            ) : (
+              <SidebarProvider style={sidebarStyle as React.CSSProperties}>
+                <Shell>
+                  <AppSidebar />
+                  <div className="flex flex-col flex-1 overflow-hidden">
                   <Header />
                   <main className="flex-1 overflow-auto bg-background">
-                    <Router />
+                      {authChecked ? <Router /> : <div className="p-6 text-sm text-muted-foreground">Loading...</div>}
                   </main>
                 </div>
               </Shell>
             </SidebarProvider>
+            )}
             <Toaster />
           </TooltipProvider>
         </LanguageProvider>

@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { useAuthStore } from "@/stores/auth.store";
 
 type PayrollWithEmployee = Payroll & { employee: Employee | null };
 
@@ -48,8 +49,7 @@ type PaymentFormData = z.infer<typeof paymentSchema>;
 export default function PayrollPage() {
   const { isRTL } = useLanguage();
   const { toast } = useToast();
-  // Default to admin for local/dev usage; production should set role via auth.
-  const role = (typeof window !== "undefined" ? localStorage.getItem("role") : null) || "admin";
+  const role = useAuthStore((state) => state.user?.role || "operator");
 
   const canGenerate = ["admin", "manager", "hr", "accountant"].includes(role);
   const canApprove = ["admin", "manager"].includes(role);

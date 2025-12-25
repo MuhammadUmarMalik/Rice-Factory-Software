@@ -8,6 +8,7 @@ import { ReportDetailDialog, useReportDetail } from "@/components/report-detail"
 import { format } from "date-fns";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type GrossProfitReport = {
   netSales: string;
@@ -27,14 +28,10 @@ export default function GrossProfitPage() {
     queryKey: ["/api/reports/gross-profit", fromDate, toDate],
     enabled: !!fromDate && !!toDate,
     queryFn: async () => {
-      const role = typeof window !== "undefined" ? localStorage.getItem("role") || "admin" : "admin";
       const params = new URLSearchParams();
       params.set("fromDate", fromDate);
       params.set("toDate", toDate);
-      const res = await fetch(`/api/reports/gross-profit?${params.toString()}`, {
-        credentials: "include",
-        headers: role ? { "x-user-role": role } : {},
-      });
+      const res = await fetchWithAuth(`/api/reports/gross-profit?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load gross profit");
       return res.json();
     },
