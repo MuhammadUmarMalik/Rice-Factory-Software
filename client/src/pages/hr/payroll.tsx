@@ -48,7 +48,8 @@ type PaymentFormData = z.infer<typeof paymentSchema>;
 export default function PayrollPage() {
   const { isRTL } = useLanguage();
   const { toast } = useToast();
-  const role = (typeof window !== "undefined" ? localStorage.getItem("role") : null) || "operator";
+  // Default to admin for local/dev usage; production should set role via auth.
+  const role = (typeof window !== "undefined" ? localStorage.getItem("role") : null) || "admin";
 
   const canGenerate = ["admin", "manager", "hr", "accountant"].includes(role);
   const canApprove = ["admin", "manager"].includes(role);
@@ -353,4 +354,3 @@ export default function PayrollPage() {
     </div>
   );
 }
-

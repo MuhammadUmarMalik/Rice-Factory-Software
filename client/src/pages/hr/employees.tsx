@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Edit, BadgeDollarSign } from "lucide-react";
+import { Plus, Edit, BadgeDollarSign, Trash2 } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -72,6 +72,7 @@ export default function EmployeesPage() {
 
   const [openSalaryDialog, setOpenSalaryDialog] = useState(false);
   const [salaryEmployee, setSalaryEmployee] = useState<Employee | null>(null);
+  const [editingStructure, setEditingStructure] = useState<EmployeeSalaryStructure | null>(null);
 
   const showApiError = (error: unknown) => {
     const message = (error as any)?.message ? String((error as any).message) : "Unknown error";
@@ -172,6 +173,41 @@ export default function EmployeesPage() {
         deductions: "0",
       });
       toast({ title: t("savedSuccessfully") });
+    },
+    onError: (err) => showApiError(err),
+  });
+
+  const updateStructureMutation = useMutation({
+    mutationFn: (data: SalaryStructureFormData & { employeeId: number; id: number }) =>
+      apiRequest("PATCH", `/api/employees/${data.employeeId}/salary-structures/${data.id}`, {
+        ...data,
+        effectiveFrom: new Date(data.effectiveFrom),
+      }),
+    onSuccess: async () => {
+      if (salaryEmployee) {
+        await queryClient.invalidateQueries({ queryKey: [`/api/employees/${salaryEmployee.id}/salary-structures`] });
+      }
+      setEditingStructure(null);
+      salaryForm.reset({
+        effectiveFrom: new Date().toISOString().slice(0, 10),
+        basicSalary: "0",
+        allowances: "0",
+        deductions: "0",
+      });
+      toast({ title: t("savedSuccessfully") });
+    },
+    onError: (err) => showApiError(err),
+  });
+
+  const deleteStructureMutation = useMutation({
+    mutationFn: (data: { employeeId: number; id: number }) =>
+      apiRequest("DELETE", `/api/employees/${data.employeeId}/salary-structures/${data.id}`),
+    onSuccess: async () => {
+      if (salaryEmployee) {
+        await queryClient.invalidateQueries({ queryKey: [`/api/employees/${salaryEmployee.id}/salary-structures`] });
+      }
+      if (editingStructure) setEditingStructure(null);
+      toast({ title: "Deleted" });
     },
     onError: (err) => showApiError(err),
   });
@@ -479,7 +515,10 @@ export default function EmployeesPage() {
         open={openSalaryDialog}
         onOpenChange={(open) => {
           setOpenSalaryDialog(open);
-          if (!open) setSalaryEmployee(null);
+          if (!open) {
+            setSalaryEmployee(null);
+            setEditingStructure(null);
+          }
         }}
       >
         <DialogContent className="max-w-3xl">
@@ -515,7 +554,43 @@ export default function EmployeesPage() {
                             {s.netSalary}
                           </div>
                         </div>
-                        <Badge variant="secondary">Net {s.netSalary}</Badge>
+                        <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                          <Badge variant="secondary">Net {s.netSalary}</Badge>
+                          {canEdit && (
+                            <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                title="Edit structure"
+                                onClick={() => {
+                                  setEditingStructure(s);
+                                  salaryForm.reset({
+                                    effectiveFrom: new Date(s.effectiveFrom as any).toISOString().slice(0, 10),
+                                    basicSalary: s.basicSalary || "0",
+                                    allowances: s.allowances || "0",
+                                    deductions: s.deductions || "0",
+                                  });
+                                }}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                title="Delete structure"
+                                onClick={() => {
+                                  if (!salaryEmployee) return;
+                                  const ok = window.confirm("Delete this salary structure? This cannot be undone.");
+                                  if (!ok) return;
+                                  deleteStructureMutation.mutate({ employeeId: salaryEmployee.id, id: s.id });
+                                }}
+                                disabled={deleteStructureMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -526,14 +601,20 @@ export default function EmployeesPage() {
             {canEdit && salaryEmployee && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Add New Structure</CardTitle>
+                  <CardTitle className="text-base">
+                    {editingStructure ? "Edit Structure" : "Add New Structure"}
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <Form {...salaryForm}>
                     <form
-                      onSubmit={salaryForm.handleSubmit((data) =>
-                        createStructureMutation.mutate({ ...data, employeeId: salaryEmployee.id }),
-                      )}
+                      onSubmit={salaryForm.handleSubmit((data) => {
+                        if (editingStructure) {
+                          updateStructureMutation.mutate({ ...data, employeeId: salaryEmployee.id, id: editingStructure.id });
+                        } else {
+                          createStructureMutation.mutate({ ...data, employeeId: salaryEmployee.id });
+                        }
+                      })}
                       className="space-y-4"
                     >
                       <div className="grid gap-4 md:grid-cols-2">
@@ -588,7 +669,27 @@ export default function EmployeesPage() {
                         />
                       </div>
                       <div className={`flex justify-end gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                        <Button type="submit" disabled={createStructureMutation.isPending}>
+                        {editingStructure && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => {
+                              setEditingStructure(null);
+                              salaryForm.reset({
+                                effectiveFrom: new Date().toISOString().slice(0, 10),
+                                basicSalary: "0",
+                                allowances: "0",
+                                deductions: "0",
+                              });
+                            }}
+                          >
+                            {t("cancel")}
+                          </Button>
+                        )}
+                        <Button
+                          type="submit"
+                          disabled={createStructureMutation.isPending || updateStructureMutation.isPending}
+                        >
                           {t("save")}
                         </Button>
                       </div>

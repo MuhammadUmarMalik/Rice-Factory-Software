@@ -6,7 +6,18 @@ import { useLanguage } from "@/contexts/language-context";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LabelList,
+} from "recharts";
 import { format } from "date-fns";
 
 type DashboardStats = {
@@ -128,8 +139,8 @@ const statCards = [
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+      <div className="grid gap-6">
+        <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <div className={isRTL ? "text-right" : ""}>
               <CardTitle className="text-base font-semibold">
@@ -151,7 +162,7 @@ const statCards = [
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-80">
+            <div className="h-[480px]">
               {chartLoading ? (
                 <div className="flex items-center justify-center h-full">
                   <Skeleton className="h-16 w-1/2" />
@@ -201,17 +212,23 @@ const statCards = [
             </p>
           </CardHeader>
           <CardContent>
-            <div className="h-80">
+            <div className="h-96">
               {chartLoading ? (
                 <div className="flex items-center justify-center h-full">
-                  <Skeleton className="h-16 w-1/2" />
+                  <Skeleton className="h-36 w-1/2" />
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData?.productStock || []} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
-                    <XAxis type="number" className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                    <YAxis type="category" dataKey="name" className="text-xs" width={80} />
+                  <BarChart data={chartData?.productStock || []} barCategoryGap={16}>
+                    <defs>
+                      <linearGradient id="productStockGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.9} />
+                        <stop offset="100%" stopColor="hsl(var(--chart-2))" stopOpacity={0.9} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+                    <XAxis dataKey="name" className="text-xs" interval={0} angle={-25} textAnchor="end" height={70} />
+                    <YAxis className="text-xs" tickFormatter={(value) => value.toLocaleString()} />
                     <Tooltip 
                       contentStyle={{ 
                         backgroundColor: "hsl(var(--card))", 
@@ -220,7 +237,14 @@ const statCards = [
                       }}
                       formatter={(value: number) => [`${value.toLocaleString()} kg`, ""]}
                     />
-                    <Bar dataKey="stock" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="stock" fill="url(#productStockGradient)" radius={[8, 8, 0, 0]}>
+                      <LabelList
+                        dataKey="stock"
+                        position="top"
+                        formatter={(value: number) => value.toLocaleString()}
+                        className="fill-muted-foreground text-xs"
+                      />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               )}

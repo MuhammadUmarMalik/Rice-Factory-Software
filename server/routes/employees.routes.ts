@@ -2,10 +2,12 @@ import { Router } from "express";
 import {
   createEmployee,
   createSalaryStructure,
+  deleteSalaryStructure,
   getEmployee,
   getSalaryStructures,
   listEmployees,
   updateEmployee,
+  updateSalaryStructure,
 } from "../controllers/employees.controller";
 import { requireRoles } from "../utils/auth";
 
@@ -32,6 +34,16 @@ router.post(
   "/api/employees/:id/salary-structures",
   requireRoles(["admin", "manager", "hr"]),
   createSalaryStructure,
+);
+router.patch(
+  "/api/employees/:id/salary-structures/:structureId",
+  requireRoles(["admin", "manager", "hr"]),
+  updateSalaryStructure,
+);
+router.delete(
+  "/api/employees/:id/salary-structures/:structureId",
+  requireRoles(["admin", "manager", "hr"]),
+  deleteSalaryStructure,
 );
 
 export default router;

@@ -432,6 +432,12 @@ export interface IStorage {
   // Salary Structures
   getEmployeeSalaryStructures(employeeId: number): Promise<EmployeeSalaryStructure[]>;
   createEmployeeSalaryStructure(data: InsertEmployeeSalaryStructure): Promise<EmployeeSalaryStructure>;
+  updateEmployeeSalaryStructure(
+    employeeId: number,
+    structureId: number,
+    data: Partial<InsertEmployeeSalaryStructure>,
+  ): Promise<EmployeeSalaryStructure | undefined>;
+  deleteEmployeeSalaryStructure(employeeId: number, structureId: number): Promise<boolean>;
   getEffectiveSalaryStructure(employeeId: number, asOf: Date): Promise<EmployeeSalaryStructure | undefined>;
 
   // Payroll
@@ -962,6 +968,56 @@ export class DatabaseStorage implements IStorage {
     } as any).returning().get();
 
     return created as any;
+  }
+
+  async updateEmployeeSalaryStructure(
+    employeeId: number,
+    structureId: number,
+    data: Partial<InsertEmployeeSalaryStructure>,
+  ): Promise<EmployeeSalaryStructure | undefined> {
+    return db.transaction((tx) => {
+      const [existing] = tx
+        .select()
+        .from(employeeSalaryStructures)
+        .where(and(eq(employeeSalaryStructures.id, structureId), eq(employeeSalaryStructures.employeeId, employeeId)))
+        .all();
+      if (!existing) return undefined;
+
+      const basic =
+        data.basicSalary !== undefined ? parseAmount(data.basicSalary as any) : parseAmount(existing.basicSalary);
+      const allowances =
+        data.allowances !== undefined ? parseAmount(data.allowances as any) : parseAmount(existing.allowances);
+      const deductions =
+        data.deductions !== undefined ? parseAmount(data.deductions as any) : parseAmount(existing.deductions);
+      const gross = basic + allowances;
+      const net = gross - deductions;
+      if (net < 0) throw new Error("Net salary cannot be negative");
+
+      const updateData: any = {
+        grossSalary: gross.toString(),
+        netSalary: net.toString(),
+      };
+      if (data.basicSalary !== undefined) updateData.basicSalary = data.basicSalary;
+      if (data.allowances !== undefined) updateData.allowances = data.allowances;
+      if (data.deductions !== undefined) updateData.deductions = data.deductions;
+      if (data.effectiveFrom !== undefined) updateData.effectiveFrom = data.effectiveFrom as any;
+
+      const updated = tx
+        .update(employeeSalaryStructures)
+        .set(updateData)
+        .where(and(eq(employeeSalaryStructures.id, structureId), eq(employeeSalaryStructures.employeeId, employeeId)))
+        .returning()
+        .get();
+      return updated as any;
+    });
+  }
+
+  async deleteEmployeeSalaryStructure(employeeId: number, structureId: number): Promise<boolean> {
+    const result = await db
+      .delete(employeeSalaryStructures)
+      .where(and(eq(employeeSalaryStructures.id, structureId), eq(employeeSalaryStructures.employeeId, employeeId)))
+      .run();
+    return result.changes > 0;
   }
 
   // Payroll
