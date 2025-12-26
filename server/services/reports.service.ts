@@ -50,8 +50,8 @@ export async function getGrossProfit(fromDate: Date, toDate: Date) {
   return storage.getGrossProfit(fromDate, toDate);
 }
 
-export async function getDayBook(fromDate: Date, toDate: Date) {
-  return storage.getDayBook(fromDate, toDate);
+export async function getDayBook(date: Date) {
+  return storage.getDayBook(date);
 }
 
 export async function getOutstandingCustomers(asOfDate: Date, customerId?: number) {

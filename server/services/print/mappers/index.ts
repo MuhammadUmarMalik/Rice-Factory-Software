@@ -952,22 +952,21 @@ export async function mapGrossProfit(params: Record<string, any>, ctx: PrintCont
 }
 
 export async function mapDayBook(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date();
-  const toDate = params.toDate ? new Date(String(params.toDate)) : fromDate;
-  const report = await storage.getDayBook(fromDate, toDate);
+  const date = params.date ? new Date(String(params.date)) : new Date();
+  const report = await storage.getDayBook(date);
 
   const dayBookDate = (value?: Date) => (value ? format(value, "dd-MM-yyyy") : "");
-  const balanceLabel = (value?: string | number | null) => {
-    const numValue = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
+  const balanceLabel = (amount?: string | number | null, type?: string) => {
+    const numValue = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0"));
     if (!Number.isFinite(numValue) || numValue === 0) return "0.00";
-    const side = numValue >= 0 ? "DR" : "CR";
+    const side = type || (numValue >= 0 ? "DR" : "CR");
     return `${Math.abs(numValue).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${side}`;
   };
 
   const columns = buildColumns([
-    { key: "srNo", label: "Sr.No", width: "6%" },
-    { key: "voucherNo", label: "ID", width: "12%" },
-    { key: "voucherType", label: "Type", width: "8%" },
+    { key: "srNo", label: "Sr.No", width: "8%" },
+    { key: "id", label: "ID", width: "12%" },
+    { key: "type", label: "Type", width: "8%" },
     { key: "particulars", label: "Particulars" },
     { key: "receipt", label: "Receipt", align: "right", width: "14%" },
     { key: "payment", label: "Payment", align: "right", width: "14%" },
@@ -977,24 +976,23 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
   const rows = [
     {
       srNo: "",
-      voucherNo: "",
-      voucherType: "",
+      id: "",
+      type: "",
       particulars: "OPENING BALANCE",
       receipt: "0.00",
       payment: "0.00",
-      balance: balanceLabel(report.openingBalance),
+      balance: balanceLabel(report.openingBalance.amount, report.openingBalance.type),
     },
-    ...report.rows.map((r: any, index: number) => ({
-      srNo: String(index + 1),
-      voucherNo: r.voucherNo || "-",
-      voucherType: r.voucherType || "-",
-      particulars: [r.accountName || "-", r.narration || ""].filter(Boolean).join("\n"),
-      receipt: parseFloat(r.debit || "0") > 0 ? num(r.debit) : "0.00",
-      payment: parseFloat(r.credit || "0") > 0 ? num(r.credit) : "0.00",
-      balance: balanceLabel(r.balance),
+    ...report.rows.map((r: any) => ({
+      srNo: String(r.srNo),
+      id: r.id || "-",
+      type: r.type || "-",
+      particulars: [`[${r.partyName || "-"}]`, r.mode || ""].filter(Boolean).join("\n"),
+      receipt: parseFloat(r.receipt || "0") > 0 ? num(r.receipt) : "0.00",
+      payment: parseFloat(r.payment || "0") > 0 ? num(r.payment) : "0.00",
+      balance: balanceLabel(r.balanceAmount, r.balanceType),
     })),
   ];
-  const closingBalance = report.rows.length ? report.rows[report.rows.length - 1].balance : report.openingBalance;
 
   return {
     docType: "REPORT",
@@ -1002,20 +1000,20 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
     title: "Day Book",
     company: ctx.company,
     meta: baseMeta(ctx, {
-      dateFrom: dayBookDate(fromDate),
-      dateTo: dayBookDate(toDate),
+      dateFrom: dayBookDate(date),
+      dateTo: dayBookDate(date),
     }),
     table: {
       columns,
       rows,
       totalsRow: {
         srNo: "",
-        voucherNo: "",
-        voucherType: "",
-        particulars: "TOTALS",
-        receipt: num(report.totals.debit),
-        payment: num(report.totals.credit),
-        balance: balanceLabel(closingBalance),
+        id: "",
+        type: "",
+        particulars: "Total:",
+        receipt: num(report.totals.receipt),
+        payment: num(report.totals.payment),
+        balance: "",
       },
     },
     settings: { currency: "PKR" },
