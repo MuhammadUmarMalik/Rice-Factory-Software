@@ -2,7 +2,8 @@ import { promises as fs } from "fs";
 import path from "path";
 import { settingsSchema } from "../schemas/settings.schema";
 
-const settingsPath = path.join(process.cwd(), ".local", "settings.json");
+const baseDir = process.env.APP_DATA_DIR ? process.env.APP_DATA_DIR : path.resolve(".local");
+const settingsPath = path.join(baseDir, "settings.json");
 
 export async function readSettings() {
   try {

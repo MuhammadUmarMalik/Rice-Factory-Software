@@ -4,7 +4,11 @@ import fs from "fs";
 import path from "path";
 import * as schema from "@shared/schema";
 
-const dbPath = process.env.DATABASE_URL || path.resolve(".local", "data.db");
+const appDataDir = process.env.APP_DATA_DIR;
+const defaultDbPath = appDataDir
+  ? path.join(appDataDir, "data.db")
+  : path.resolve(".local", "data.db");
+const dbPath = process.env.DATABASE_URL || defaultDbPath;
 const dbDir = path.dirname(dbPath.startsWith("file:") ? dbPath.replace("file:", "") : dbPath);
 
 if (!fs.existsSync(dbDir)) {
