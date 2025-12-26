@@ -49,6 +49,7 @@ const saleFormSchema = z.object({
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
     quantity: z.string().min(1, "Quantity is required"),
+    unit: z.string().min(1, "Unit is required"),
     pricePerUnit: z.string().min(1, "Price is required"),
   })).min(1, "At least one item is required"),
 });
@@ -60,6 +61,13 @@ export default function SalesPage() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
+  const unitOptions = [
+    { value: "kg", label: "Kilogram (kg)" },
+    { value: "mound", label: "Mound (40 kg)" },
+    { value: "quintal", label: "Quintal (100 kg)" },
+    { value: "ton", label: "Ton (1000 kg)" },
+    { value: "bag", label: "Bag" },
+  ];
 
   const form = useForm<SaleFormData>({
     resolver: zodResolver(saleFormSchema),
@@ -71,7 +79,7 @@ export default function SalesPage() {
       otherCharges: "0",
       paidAmount: "0",
       notes: "",
-      items: [{ productId: "", quantity: "", pricePerUnit: "" }],
+      items: [{ productId: "", quantity: "", unit: "", pricePerUnit: "" }],
     },
   });
 
@@ -111,6 +119,7 @@ export default function SalesPage() {
         items: data.items.map(item => ({
           productId: parseInt(item.productId),
           quantity: item.quantity,
+          unit: item.unit,
           pricePerUnit: item.pricePerUnit,
         })),
       }),
@@ -162,7 +171,7 @@ export default function SalesPage() {
       otherCharges: "0",
       paidAmount: "0",
       notes: "",
-      items: [{ productId: "", quantity: "", pricePerUnit: "" }],
+      items: [{ productId: "", quantity: "", unit: "", pricePerUnit: "" }],
     });
     setIsDialogOpen(true);
   };
@@ -371,7 +380,7 @@ export default function SalesPage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => append({ productId: "", quantity: "", pricePerUnit: "" })}
+                    onClick={() => append({ productId: "", quantity: "", unit: "", pricePerUnit: "" })}
                     data-testid="button-add-item"
                   >
                     <Plus className="h-4 w-4" />
@@ -384,17 +393,28 @@ export default function SalesPage() {
                     <div key={field.id} className="grid grid-cols-12 gap-2 items-end">
                       {(() => {
                         const selectedProductId = form.watch(`items.${index}.productId`);
-                        const unit = getUnitForProduct(selectedProductId) || "unit";
+                        const selectedUnit = form.watch(`items.${index}.unit`);
+                        const unit = selectedUnit || getUnitForProduct(selectedProductId) || "unit";
                         return (
                           <>
-                          <div className="col-span-5">
+                          <div className="col-span-4">
                             <FormField
                               control={form.control}
                               name={`items.${index}.productId`}
                               render={({ field }) => (
                             <FormItem>
                               {index === 0 && <FormLabel>{language === "ur" ? "مصنوعات" : "Product"}</FormLabel>}
-                              <Select onValueChange={field.onChange} value={field.value}>
+                              <Select
+                                onValueChange={(value) => {
+                                  field.onChange(value);
+                                  const productUnit = getUnitForProduct(value);
+                                  const currentUnit = form.getValues(`items.${index}.unit`);
+                                  if (productUnit && !currentUnit) {
+                                    form.setValue(`items.${index}.unit`, productUnit, { shouldValidate: true });
+                                  }
+                                }}
+                                value={field.value}
+                              >
                                 <FormControl>
                                   <SelectTrigger data-testid={`select-product-${index}`}>
                                     <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select"} />
@@ -413,7 +433,7 @@ export default function SalesPage() {
                           )}
                         />
                           </div>
-                          <div className="col-span-3">
+                          <div className="col-span-2">
                             <FormField
                               control={form.control}
                               name={`items.${index}.quantity`}
@@ -428,6 +448,32 @@ export default function SalesPage() {
                           )}
                         />
                       </div>
+                          <div className="col-span-2">
+                            <FormField
+                              control={form.control}
+                              name={`items.${index}.unit`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  {index === 0 && <FormLabel>Unit</FormLabel>}
+                                  <Select onValueChange={field.onChange} value={field.value}>
+                                    <FormControl>
+                                      <SelectTrigger data-testid={`select-unit-${index}`}>
+                                        <SelectValue placeholder="Select" />
+                                      </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                      {unitOptions.map((opt) => (
+                                        <SelectItem key={opt.value} value={opt.value}>
+                                          {opt.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
                           <div className="col-span-3">
                             <FormField
                               control={form.control}
