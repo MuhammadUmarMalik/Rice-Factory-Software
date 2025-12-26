@@ -1,6 +1,7 @@
 
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { Plus, Eye, Truck, Calculator, ArrowLeft, Edit, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -91,6 +92,7 @@ type PurchaseFormData = z.infer<typeof purchaseFormSchema>;
 export default function PurchasesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
+  const [location] = useLocation();
   const purchaseMode = useUIStore((state) => state.viewModes.purchase ?? null);
   const setViewMode = useUIStore((state) => state.setViewMode);
   const isDialogOpen = useUIStore((state) => state.modals.purchaseForm?.open ?? false);
@@ -105,6 +107,7 @@ export default function PurchasesPage() {
   const activePurchaseId = usePurchaseStore((state) => state.currentId);
   const [customProductDrafts, setCustomProductDrafts] = useState<Record<number, { name: string; unit: string }>>({});
   const [creatingProductIndex, setCreatingProductIndex] = useState<number | null>(null);
+  const consumedEditId = useRef<number | null>(null);
   const setMode = (mode: PurchaseMode) => {
     setViewMode("purchase", mode);
     setPurchaseStateMode(mode);
@@ -430,6 +433,19 @@ export default function PurchasesPage() {
     return res.json();
   };
 
+  const handleEditById = async (purchaseId: number) => {
+    try {
+      const detail = await loadPurchaseDetail(purchaseId);
+      setMode("edit");
+      setCurrentPurchase(detail as any);
+      setCurrentPurchaseId(purchaseId);
+      populateFormFromPurchase(detail);
+      openDialog("purchaseForm");
+    } catch (err: any) {
+      toast({ title: "Failed to load purchase detail", description: err?.message || "Unknown error", variant: "destructive" });
+    }
+  };
+
   const handleEdit = async (purchase: Purchase) => {
     try {
       const detail = await loadPurchaseDetail(purchase.id);
@@ -455,6 +471,16 @@ export default function PurchasesPage() {
       toast({ title: "Failed to load purchase detail", description: err?.message || "Unknown error", variant: "destructive" });
     }
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.split("?")[1] || "");
+    const editParam = params.get("editId");
+    if (!editParam) return;
+    const id = Number(editParam);
+    if (!Number.isFinite(id) || consumedEditId.current === id) return;
+    consumedEditId.current = id;
+    handleEditById(id);
+  }, [location]);
   const handleCloseDialog = () => {
     closeDialog("purchaseForm");
     setMode(null);
