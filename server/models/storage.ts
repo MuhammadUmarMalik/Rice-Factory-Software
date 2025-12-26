@@ -303,27 +303,23 @@ export interface IStorage {
     grossMarginPercent: string;
     rows?: Array<{ saleId: number; invoiceNumber: string; saleDate: Date; netSales: string; costOfGoodsSold: string; grossProfit: string }>;
   }>;
-  getDayBook(startDate: Date, endDate: Date): Promise<{
+  getDayBook(date: Date): Promise<{
+    openingBalance: { amount: string; type: "DR" | "CR" | "" };
     rows: Array<{
-      entryId: number;
+      srNo: number;
+      id: string;
+      type: string;
+      partyName: string;
+      mode: string;
+      receipt: string;
+      payment: string;
+      balanceAmount: string;
+      balanceType: "DR" | "CR" | "";
       date: Date;
-      accountId?: number | null;
-      accountName: string;
-      accountType?: string | null;
-      isSystemAccount?: boolean | null;
-      voucherType: string;
-      voucherNo: string;
-      narration: string;
-      debit: string;
-      credit: string;
-      balance: string;
       referenceType?: string | null;
       referenceId?: number | null;
     }>;
-    openingBalance: string;
-    totals: { debit: string; credit: string };
-    validation: { balanced: boolean; difference: string };
-    dayTotals: Array<{ date: string; debit: string; credit: string; balanced: boolean }>;
+    totals: { receipt: string; payment: string };
   }>;
   getOutstandingCustomers(asOfDate: Date, customerId?: number): Promise<{
     rows: Array<{
@@ -3611,7 +3607,9 @@ export class DatabaseStorage implements IStorage {
         (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
 
       const cleanLines = (lines || []).map((line) => {
-        const amt = parseAmount((line.debit || line.credit || "0") ?? "0").toString();
+        const debitValue = parseAmount(line.debit || "0");
+        const creditValue = parseAmount(line.credit || "0");
+        const amt = Math.max(debitValue, creditValue).toString();
         return {
           ...line,
           debit: voucherType === "DR" ? amt : "0",
@@ -3619,7 +3617,10 @@ export class DatabaseStorage implements IStorage {
         };
       });
 
-      const total = cleanLines.reduce((sum, l) => sum + parseAmount(l.debit || l.credit || "0"), 0);
+      const total = cleanLines.reduce(
+        (sum, l) => sum + Math.max(parseAmount(l.debit || "0"), parseAmount(l.credit || "0")),
+        0,
+      );
       if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
       // Append counter-entry for settlement account to enforce double-entry
@@ -3711,7 +3712,9 @@ export class DatabaseStorage implements IStorage {
         (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
 
       const cleanLines = (lines || []).map((line) => {
-        const amt = parseAmount((line.debit || line.credit || "0") ?? "0").toString();
+        const debitValue = parseAmount(line.debit || "0");
+        const creditValue = parseAmount(line.credit || "0");
+        const amt = Math.max(debitValue, creditValue).toString();
         return {
           ...line,
           debit: voucherType === "DR" ? amt : "0",
@@ -3719,7 +3722,10 @@ export class DatabaseStorage implements IStorage {
         };
       });
 
-      const total = cleanLines.reduce((sum, l) => sum + parseAmount(l.debit || l.credit || "0"), 0);
+      const total = cleanLines.reduce(
+        (sum, l) => sum + Math.max(parseAmount(l.debit || "0"), parseAmount(l.credit || "0")),
+        0,
+      );
       if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
       const settlementLine: ReceiptLineInput = voucherType === "CR"
@@ -4810,18 +4816,206 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getDayBook(startDate: Date, endDate: Date) {
-    const from = startDate;
-    const to = endOfDay(endDate);
+  async getDayBook(date: Date) {
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = endOfDay(dayStart);
 
-    const [openingRow] = db
+    const accountRows = db
       .select({
-        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+        id: accounts.id,
+        name: accounts.name,
+        type: accounts.type,
+        isSystemAccount: accounts.isSystemAccount,
       })
-      .from(ledgerEntries)
-      .where(lt(ledgerEntries.entryDate, from))
+      .from(accounts)
       .all();
-    const openingBalance = parseAmount(openingRow?.total || "0");
+
+    const isCashBankAccount = (account: { name?: string | null; type?: string | null; isSystemAccount?: boolean | null }) => {
+      const name = (account.name || "").toLowerCase();
+      const isCash = name.includes("cash");
+      const isBank = name.includes("bank") || account.type === "bank";
+      const isSystemCash = account.isSystemAccount && account.type === "asset";
+      return isCash || isBank || isSystemCash;
+    };
+
+    const cashBankIds = accountRows.filter(isCashBankAccount).map((a) => a.id);
+    const cashBankIdSet = new Set(cashBankIds);
+
+    const [openingRow] = cashBankIds.length
+      ? db
+          .select({
+            total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+          })
+          .from(ledgerEntries)
+          .where(and(inArray(ledgerEntries.accountId, cashBankIds), lt(ledgerEntries.entryDate, dayStart)))
+          .all()
+      : [{ total: "0" }];
+    const openingValue = parseAmount(openingRow?.total || "0");
+    const openingBalance = {
+      amount: Math.abs(openingValue).toString(),
+      type: openingValue === 0 ? "" : openingValue >= 0 ? "DR" : "CR",
+    };
+
+    const purchaseRows = db
+      .select({
+        id: purchases.id,
+        voucherNo: purchases.invoiceNumber,
+        voucherDate: purchases.purchaseDate,
+        notes: purchases.notes,
+        partyName: accounts.name,
+      })
+      .from(purchases)
+      .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
+      .where(and(isNull(purchases.deletedAt), gte(purchases.purchaseDate, dayStart), lte(purchases.purchaseDate, dayEnd)))
+      .all();
+
+    const saleRows = db
+      .select({
+        id: sales.id,
+        voucherNo: sales.invoiceNumber,
+        voucherDate: sales.saleDate,
+        notes: sales.notes,
+        partyName: accounts.name,
+      })
+      .from(sales)
+      .leftJoin(accounts, eq(sales.customerId, accounts.id))
+      .where(and(gte(sales.saleDate, dayStart), lte(sales.saleDate, dayEnd)))
+      .all();
+
+    const receiptVoucherRows = db
+      .select({
+        id: receiptVouchers.id,
+        voucherNo: receiptVouchers.voucherNumber,
+        voucherDate: receiptVouchers.voucherDate,
+        voucherType: receiptVouchers.voucherType,
+        narration: receiptVouchers.narration,
+      })
+      .from(receiptVouchers)
+      .where(and(isNull(receiptVouchers.deletedAt), gte(receiptVouchers.voucherDate, dayStart), lte(receiptVouchers.voucherDate, dayEnd)))
+      .all();
+
+    const journalRows = db
+      .select({
+        id: journalVouchers.id,
+        voucherNo: journalVouchers.voucherNo,
+        voucherDate: journalVouchers.voucherDate,
+        narration: journalVouchers.narration,
+      })
+      .from(journalVouchers)
+      .where(and(gte(journalVouchers.voucherDate, dayStart), lte(journalVouchers.voucherDate, dayEnd)))
+      .all();
+
+    const expenseRows = db
+      .select({
+        id: expenseEntries.id,
+        voucherNo: expenseEntries.voucherNo,
+        voucherDate: expenseEntries.expenseDate,
+        narration: expenseEntries.description,
+      })
+      .from(expenseEntries)
+      .where(and(gte(expenseEntries.expenseDate, dayStart), lte(expenseEntries.expenseDate, dayEnd)))
+      .all();
+
+    const contraRows = db
+      .select({
+        id: contraVouchers.id,
+        voucherNo: contraVouchers.voucherNo,
+        voucherDate: contraVouchers.voucherDate,
+        narration: contraVouchers.narration,
+      })
+      .from(contraVouchers)
+      .where(and(gte(contraVouchers.voucherDate, dayStart), lte(contraVouchers.voucherDate, dayEnd)))
+      .all();
+
+    type VoucherMeta = {
+      referenceType: string;
+      referenceId: number;
+      voucherNo: string;
+      typeCode: string;
+      date: Date;
+      partyName: string;
+      narration: string;
+    };
+
+    const voucherMetaByKey = new Map<string, VoucherMeta>();
+    const addMeta = (meta: VoucherMeta) => {
+      const key = `${meta.referenceType}:${meta.referenceId}`;
+      voucherMetaByKey.set(key, meta);
+    };
+
+    for (const row of purchaseRows) {
+      addMeta({
+        referenceType: "purchase",
+        referenceId: row.id,
+        voucherNo: row.voucherNo,
+        typeCode: "PI",
+        date: new Date(row.voucherDate as any),
+        partyName: row.partyName || "",
+        narration: row.notes || "",
+      });
+    }
+
+    for (const row of saleRows) {
+      addMeta({
+        referenceType: "sale",
+        referenceId: row.id,
+        voucherNo: row.voucherNo,
+        typeCode: "SV",
+        date: new Date(row.voucherDate as any),
+        partyName: row.partyName || "",
+        narration: row.notes || "",
+      });
+    }
+
+    for (const row of receiptVoucherRows) {
+      const refType = row.voucherType === "CR" ? "receipt" : "payment";
+      addMeta({
+        referenceType: refType,
+        referenceId: row.id,
+        voucherNo: row.voucherNo,
+        typeCode: refType === "receipt" ? "RV" : "PV",
+        date: new Date(row.voucherDate as any),
+        partyName: "",
+        narration: row.narration || "",
+      });
+    }
+
+    for (const row of journalRows) {
+      addMeta({
+        referenceType: "journal_voucher",
+        referenceId: row.id,
+        voucherNo: row.voucherNo,
+        typeCode: "JV",
+        date: new Date(row.voucherDate as any),
+        partyName: "",
+        narration: row.narration || "",
+      });
+    }
+
+    for (const row of expenseRows) {
+      addMeta({
+        referenceType: "expense",
+        referenceId: row.id,
+        voucherNo: row.voucherNo,
+        typeCode: "EV",
+        date: new Date(row.voucherDate as any),
+        partyName: "",
+        narration: row.narration || "",
+      });
+    }
+
+    for (const row of contraRows) {
+      addMeta({
+        referenceType: "contra",
+        referenceId: row.id,
+        voucherNo: row.voucherNo,
+        typeCode: "CV",
+        date: new Date(row.voucherDate as any),
+        partyName: "",
+        narration: row.narration || "",
+      });
+    }
 
     const entries = db
       .select({
@@ -4839,145 +5033,93 @@ export class DatabaseStorage implements IStorage {
       })
       .from(ledgerEntries)
       .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-      .where(and(gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
+      .where(and(gte(ledgerEntries.entryDate, dayStart), lte(ledgerEntries.entryDate, dayEnd)))
       .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
       .all();
 
-    const byType = entries.reduce(
-      (acc, e) => {
-        if (!e.referenceType || !e.referenceId) return acc;
-        const list = acc[e.referenceType] || [];
-        list.push(e.referenceId);
-        acc[e.referenceType] = list;
-        return acc;
-      },
-      {} as Record<string, number[]>,
-    );
+    type Entry = (typeof entries)[number];
+    type Group = { meta: VoucherMeta; entries: Entry[] };
 
-    const purchaseNoById = new Map<number, string>(
-      byType.purchase?.length
-        ? db
-            .select({ id: purchases.id, no: purchases.invoiceNumber })
-            .from(purchases)
-            .where(inArray(purchases.id, byType.purchase))
-            .all()
-            .map((r) => [r.id, r.no])
-        : [],
-    );
-    const saleNoById = new Map<number, string>(
-      byType.sale?.length
-        ? db
-            .select({ id: sales.id, no: sales.invoiceNumber })
-            .from(sales)
-            .where(inArray(sales.id, byType.sale))
-            .all()
-            .map((r) => [r.id, r.no])
-        : [],
-    );
-    const receiptNoById = new Map<number, string>(
-      byType.receipt?.length
-        ? db
-            .select({ id: receiptVouchers.id, no: receiptVouchers.voucherNumber })
-            .from(receiptVouchers)
-            .where(inArray(receiptVouchers.id, byType.receipt))
-            .all()
-            .map((r) => [r.id, r.no])
-        : [],
-    );
-    const paymentNoById = new Map<number, string>(
-      byType.payment?.length
-        ? db
-            .select({ id: receiptVouchers.id, no: receiptVouchers.voucherNumber })
-            .from(receiptVouchers)
-            .where(inArray(receiptVouchers.id, byType.payment))
-            .all()
-            .map((r) => [r.id, r.no])
-        : [],
-    );
-    const journalNoById = new Map<number, string>(
-      byType.journal_voucher?.length
-        ? db
-            .select({ id: journalVouchers.id, no: journalVouchers.voucherNo })
-            .from(journalVouchers)
-            .where(inArray(journalVouchers.id, byType.journal_voucher))
-            .all()
-            .map((r) => [r.id, r.no])
-        : [],
-    );
+    const groupMap = new Map<string, Group>();
+    for (const entry of entries) {
+      if (!entry.referenceType || !entry.referenceId) continue;
+      const key = `${entry.referenceType}:${entry.referenceId}`;
+      const meta = voucherMetaByKey.get(key);
+      if (!meta) continue;
+      const group = groupMap.get(key);
+      if (group) group.entries.push(entry);
+      else groupMap.set(key, { meta, entries: [entry] });
+    }
 
-    const typeMap: Record<string, string> = {
-      receipt: "RV",
-      payment: "PV",
-      journal_voucher: "JV",
-      sale: "SV",
-      purchase: "PU",
-      expense: "EV",
-      contra: "CV",
-    };
-
-    let runningBalance = openingBalance;
-    const rows = entries.map((e) => {
-      const amount = parseAmount(e.amount);
-      const debitValue = e.transactionType === "debit" ? amount : 0;
-      const creditValue = e.transactionType === "credit" ? amount : 0;
-      runningBalance += debitValue - creditValue;
-      let voucherNo = "-";
-      if (e.referenceType && e.referenceId) {
-        if (e.referenceType === "purchase") voucherNo = purchaseNoById.get(e.referenceId) || "-";
-        else if (e.referenceType === "sale") voucherNo = saleNoById.get(e.referenceId) || "-";
-        else if (e.referenceType === "receipt") voucherNo = receiptNoById.get(e.referenceId) || "-";
-        else if (e.referenceType === "payment") voucherNo = paymentNoById.get(e.referenceId) || "-";
-        else if (e.referenceType === "journal_voucher") voucherNo = journalNoById.get(e.referenceId) || "-";
-        else voucherNo = `${e.referenceType.toUpperCase()}-${e.referenceId}`;
-      }
-      return {
-        entryId: e.id,
-        date: new Date(e.entryDate as any),
-        accountId: e.accountId,
-        accountName: e.accountName || "",
-        accountType: e.accountType,
-        isSystemAccount: e.isSystemAccount,
-        voucherType: typeMap[e.referenceType || ""] || (e.referenceType || "").toUpperCase(),
-        voucherNo,
-        narration: e.description || "",
-        debit: debitValue.toString(),
-        credit: creditValue.toString(),
-        balance: runningBalance.toString(),
-        referenceType: e.referenceType,
-        referenceId: e.referenceId,
-      };
+    const groups = Array.from(groupMap.values()).sort((a, b) => {
+      const dateDiff = a.meta.date.getTime() - b.meta.date.getTime();
+      if (dateDiff !== 0) return dateDiff;
+      return a.meta.referenceId - b.meta.referenceId;
     });
 
-    const totals = rows.reduce(
-      (acc, r) => {
-        acc.debit += parseAmount(r.debit);
-        acc.credit += parseAmount(r.credit);
-        return acc;
-      },
-      { debit: 0, credit: 0 },
-    );
+    const rows: Array<{
+      srNo: number;
+      id: string;
+      type: string;
+      partyName: string;
+      mode: string;
+      receipt: string;
+      payment: string;
+      balanceAmount: string;
+      balanceType: "DR" | "CR" | "";
+      date: Date;
+      referenceType?: string | null;
+      referenceId?: number | null;
+    }> = [];
 
-    const dayMap = new Map<string, { debit: number; credit: number }>();
-    for (const r of rows) {
-      const key = new Date(r.date).toISOString().slice(0, 10);
-      const current = dayMap.get(key) || { debit: 0, credit: 0 };
-      current.debit += parseAmount(r.debit);
-      current.credit += parseAmount(r.credit);
-      dayMap.set(key, current);
-    }
-    const dayTotals = Array.from(dayMap.entries()).map(([date, values]) => ({
-      date,
-      debit: values.debit.toString(),
-      credit: values.credit.toString(),
-      balanced: Math.abs(values.debit - values.credit) < 0.0001,
-    }));
+    let runningBalance = openingValue;
+    let totalReceipt = 0;
+    let totalPayment = 0;
+
+    const resolvePartyName = (group: Group) => {
+      if (group.meta.partyName) return group.meta.partyName;
+      const nonCash = group.entries.find((e) => !cashBankIdSet.has(e.accountId));
+      return nonCash?.accountName || "";
+    };
+
+    const resolveMode = (group: Group) => {
+      const cashEntry = group.entries.find((e) => cashBankIdSet.has(e.accountId));
+      const raw = group.meta.narration || cashEntry?.accountName || group.entries[0]?.description || "";
+      return raw ? raw.toUpperCase() : "";
+    };
+
+    groups.forEach((group, index) => {
+      const cashEntries = group.entries.filter((e) => cashBankIdSet.has(e.accountId));
+      const receipt = cashEntries.reduce((sum, e) => sum + (e.transactionType === "debit" ? parseAmount(e.amount) : 0), 0);
+      const payment = cashEntries.reduce((sum, e) => sum + (e.transactionType === "credit" ? parseAmount(e.amount) : 0), 0);
+
+      runningBalance += receipt - payment;
+      totalReceipt += receipt;
+      totalPayment += payment;
+
+      rows.push({
+        srNo: index + 1,
+        id: group.meta.voucherNo || "-",
+        type: group.meta.typeCode,
+        partyName: resolvePartyName(group),
+        mode: resolveMode(group),
+        receipt: receipt.toString(),
+        payment: payment.toString(),
+        balanceAmount: Math.abs(runningBalance).toString(),
+        balanceType: runningBalance === 0 ? "" : runningBalance >= 0 ? "DR" : "CR",
+        date: group.meta.date,
+        referenceType: group.meta.referenceType,
+        referenceId: group.meta.referenceId,
+      });
+    });
 
     return {
+      openingBalance,
       rows,
-      openingBalance: openingBalance.toString(),
-      totals: { debit: totals.debit.toString(), credit: totals.credit.toString() },
-      validation: { balanced: Math.abs(totals.debit - totals.credit) < 0.0001, difference: Math.abs(totals.debit - totals.credit).toString() },
-      dayTotals,
+      totals: {
+        receipt: totalReceipt.toString(),
+        payment: totalPayment.toString(),
+      },
     };
   }
 

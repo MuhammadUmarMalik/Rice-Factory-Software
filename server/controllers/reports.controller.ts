@@ -124,9 +124,10 @@ export async function grossProfit(req: Request, res: Response) {
 
 export async function dayBook(req: Request, res: Response) {
   try {
-    const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date();
-    const toDate = parseOptionalDate(req.query.toDate) ?? fromDate;
-    const report = await reportsService.getDayBook(fromDate, toDate);
+    const date = parseOptionalDate(req.query.date)
+      ?? parseOptionalDate(req.query.fromDate)
+      ?? new Date();
+    const report = await reportsService.getDayBook(date);
     res.json(report);
   } catch (error) {
     console.error(error);
