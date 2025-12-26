@@ -123,6 +123,12 @@
   "build": {
     "appId": "com.millmanager.app",
     "productName": "Mill Manager",
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
     "directories": {
       "output": "dist-desktop"
     },
@@ -130,8 +136,10 @@
       "dist/**",
       "electron/**",
       "package.json",
-      "node_modules/**"
+      "node_modules/**",
+      "client/public/app_icon.ico"
     ],
-    "asar": true
+    "asar": true,
+    "icon": "client/public/app_icon.ico"
   }
 }

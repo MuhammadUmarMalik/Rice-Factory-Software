@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import createMemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
+import { ensureDesktopAdmin } from "./utils/bootstrap";
 import { serveStatic } from "./config/static";
 import { createServer } from "http";
 
@@ -17,13 +18,14 @@ declare module "http" {
 
 app.use(
   express.json({
+    limit: "2mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "2mb" }));
 
 app.set("trust proxy", 1);
 app.use(
@@ -81,6 +83,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await ensureDesktopAdmin();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

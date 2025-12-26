@@ -27,13 +27,22 @@ export function PrintPreviewModal({
 }: PrintPreviewModalProps) {
   const [html, setHtml] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [layout, setLayout] = useState<"portrait" | "landscape">(orientation);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const isElectron =
+    typeof navigator !== "undefined" &&
+    navigator.userAgent.toLowerCase().includes("electron");
+
+  useEffect(() => {
+    if (!open) return;
+    setLayout(orientation);
+  }, [open, orientation]);
 
   useEffect(() => {
     if (!open) return;
     let active = true;
     setLoading(true);
-    fetchPrintPreview({ docKey, params, orientation, format: "A4" })
+    fetchPrintPreview({ docKey, params, orientation: layout, format: "A4" })
       .then((markup) => {
         if (active) setHtml(markup);
       })
@@ -43,10 +52,22 @@ export function PrintPreviewModal({
     return () => {
       active = false;
     };
-  }, [open, docKey, JSON.stringify(params), orientation]);
+  }, [open, docKey, JSON.stringify(params), layout]);
 
   const handleIframeLoad = () => {
-    if (!autoPrint) return;
+    if (!autoPrint || isElectron) return;
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    win.focus();
+    win.print();
+    onPrinted?.();
+  };
+
+  const handlePrint = () => {
+    if (isElectron) {
+      handleOpenPdf();
+      return;
+    }
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.focus();
@@ -55,7 +76,7 @@ export function PrintPreviewModal({
   };
 
   const handleDownload = async () => {
-    const blob = await fetchPrintPdf({ docKey, params, orientation, format: "A4" });
+    const blob = await fetchPrintPdf({ docKey, params, orientation: layout, format: "A4" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -64,12 +85,37 @@ export function PrintPreviewModal({
     URL.revokeObjectURL(url);
   };
 
+  const handleOpenPdf = async () => {
+    const blob = await fetchPrintPdf({ docKey, params, orientation: layout, format: "A4" });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, "_blank");
+    if (win) {
+      win.focus();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-6xl h-[90vh] flex flex-col">
         <DialogHeader className="flex flex-row items-center justify-between gap-4">
           <DialogTitle>{title || "Print Preview"}</DialogTitle>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground" htmlFor="print-layout">
+              Layout
+            </label>
+            <select
+              id="print-layout"
+              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              value={layout}
+              onChange={(event) => setLayout(event.target.value as "portrait" | "landscape")}
+            >
+              <option value="portrait">Portrait</option>
+              <option value="landscape">Landscape</option>
+            </select>
+            <Button variant="outline" onClick={handlePrint}>
+              {isElectron ? "Open PDF" : "Print"}
+            </Button>
             <Button variant="outline" onClick={handleDownload}>
               Download PDF
             </Button>

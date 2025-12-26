@@ -9,6 +9,7 @@ export const receiptLinesSchema = z
       .extend({
         debit: numericString.default("0"),
         credit: numericString.default("0"),
+        amount: numericString.optional(),
         narration: z.string().optional(),
         accountId: z.number().int().positive(),
       })

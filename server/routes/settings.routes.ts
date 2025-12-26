@@ -5,7 +5,7 @@ import { Roles } from "../utils/roles";
 
 const router = Router();
 
-router.get("/api/settings", requireRoles(Roles.settings), getSettings);
+router.get("/api/settings", requireRoles(Roles.all), getSettings);
 router.post("/api/settings", requireRoles(Roles.settings), saveSettings);
 
 export default router;

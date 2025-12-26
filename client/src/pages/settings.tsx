@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Save, Globe, Palette, Shield, Building } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuthStore } from "@/stores/auth.store";
 import { useLocation } from "wouter";
+import { defaultShortcutConfig, type ShortcutConfig } from "@/lib/shortcuts";
 
 type SettingsPayload = {
   businessName: string;
@@ -32,6 +33,7 @@ type SettingsPayload = {
   strn?: string;
   language: "en" | "ur";
   theme: "light" | "dark";
+  shortcuts?: ShortcutConfig;
 };
 
 const defaultSettings: SettingsPayload = {
@@ -44,6 +46,7 @@ const defaultSettings: SettingsPayload = {
   strn: "",
   language: "en",
   theme: "light",
+  shortcuts: defaultShortcutConfig,
 };
 
 export default function SettingsPage() {
@@ -61,6 +64,8 @@ export default function SettingsPage() {
   const [logoUrl, setLogoUrl] = useState(defaultSettings.logoUrl || "");
   const [ntn, setNtn] = useState(defaultSettings.ntn || "");
   const [strn, setStrn] = useState(defaultSettings.strn || "");
+  const [shortcuts, setShortcuts] = useState<ShortcutConfig>(defaultShortcutConfig);
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
 
   const { data: settingsData, isLoading } = useQuery<SettingsPayload>({
     queryKey: ["/api/settings"],
@@ -76,6 +81,7 @@ export default function SettingsPage() {
       setNtn(settingsData.ntn || "");
       setStrn(settingsData.strn || "");
       setTheme(settingsData.theme || "light");
+      setShortcuts(settingsData.shortcuts || defaultShortcutConfig);
     }
   }, [settingsData, setTheme]);
 
@@ -91,6 +97,7 @@ export default function SettingsPage() {
         strn,
         language,
         theme,
+        shortcuts,
       };
       await apiRequest("POST", "/api/settings", payload);
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
@@ -106,6 +113,34 @@ export default function SettingsPage() {
 
   const handleSave = () => {
     saveMutation.mutate();
+  };
+
+  const handleLogoFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Invalid file", description: "Please select an image file.", variant: "destructive" });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (result) setLogoUrl(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const shortcutFields: Array<{ key: keyof ShortcutConfig; label: string; hint: string }> = [
+    { key: "toggleSidebar", label: "Toggle sidebar", hint: "Ctrl+B" },
+    { key: "printPreview", label: "Print preview", hint: "Ctrl+P" },
+    { key: "downloadPdf", label: "Download PDF", hint: "Ctrl+Shift+P" },
+    { key: "newDialog", label: "New dialog", hint: "Ctrl+N" },
+    { key: "saveDialog", label: "Save dialog", hint: "Ctrl+Enter" },
+    { key: "addLine", label: "Add line item", hint: "Ctrl+Shift+N" },
+  ];
+
+  const updateShortcut = (key: keyof ShortcutConfig, value: string) => {
+    setShortcuts((prev) => ({ ...prev, [key]: value }));
   };
 
   return (
@@ -179,12 +214,53 @@ export default function SettingsPage() {
               <Label className={isRTL ? "font-urdu" : ""}>
                 {language === "ur" ? "Logo URL" : "Logo URL"}
               </Label>
-              <Input 
-                value={logoUrl} 
-                onChange={(e) => setLogoUrl(e.target.value)}
-                data-testid="input-logo-url"
-                disabled={isLoading || saveMutation.isPending}
-              />
+              <div className="flex flex-col gap-3">
+                <Input
+                  value={logoUrl}
+                  onChange={(e) => setLogoUrl(e.target.value)}
+                  data-testid="input-logo-url"
+                  disabled={isLoading || saveMutation.isPending}
+                />
+                <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoFile}
+                    className="hidden"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => logoInputRef.current?.click()}
+                    disabled={isLoading || saveMutation.isPending}
+                  >
+                    {language === "ur" ? "لوگو اپلوڈ کریں" : "Upload Logo"}
+                  </Button>
+                  {logoUrl && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setLogoUrl("")}
+                      disabled={isLoading || saveMutation.isPending}
+                    >
+                      {language === "ur" ? "ہٹائیں" : "Clear"}
+                    </Button>
+                  )}
+                </div>
+                {logoUrl && (
+                  <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
+                    <img
+                      src={logoUrl}
+                      alt="Company logo preview"
+                      className="h-12 w-12 rounded border object-contain bg-white"
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {language === "ur" ? "پیش نظارہ" : "Preview"}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div>
@@ -209,6 +285,59 @@ export default function SettingsPage() {
                   disabled={isLoading || saveMutation.isPending}
                 />
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className={isRTL ? "text-right" : ""}>
+            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+              <Shield className="h-4 w-4" />
+              {language === "ur" ? "O3UOUcU^OñU1UO" : "Shortcuts"}
+            </CardTitle>
+            <CardDescription>
+              {language === "ur" ? "OUOU_ UcUO OOU?OñUO OòOñUO" : "Customize keyboard shortcuts"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className={`flex items-center justify-between rounded-lg border p-3 ${isRTL ? "flex-row-reverse" : ""}`}>
+              <div className={isRTL ? "text-right" : ""}>
+                <p className="font-medium">{language === "ur" ? "U?U1U,OU?OñUO" : "Enable shortcuts"}</p>
+                <p className="text-sm text-muted-foreground">
+                  {language === "ur" ? "OUOU_ UcUO U?U1U,OU?OñUO OçOñOUÚ" : "Turn all shortcuts on/off"}
+                </p>
+              </div>
+              <Switch
+                checked={shortcuts.enabled}
+                onCheckedChange={(checked) => setShortcuts((prev) => ({ ...prev, enabled: checked }))}
+                disabled={isLoading || saveMutation.isPending}
+              />
+            </div>
+            <div className="space-y-3">
+              {shortcutFields.map((field) => (
+                <div key={field.key} className="grid gap-2 md:grid-cols-2 md:items-center">
+                  <div className={isRTL ? "text-right" : ""}>
+                    <Label className={isRTL ? "font-urdu" : ""}>{field.label}</Label>
+                    <p className="text-xs text-muted-foreground">{field.hint}</p>
+                  </div>
+                  <Input
+                    value={shortcuts[field.key] as string}
+                    onChange={(event) => updateShortcut(field.key, event.target.value)}
+                    placeholder={field.hint}
+                    disabled={isLoading || saveMutation.isPending}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className={`flex ${isRTL ? "justify-start" : "justify-end"}`}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShortcuts(defaultShortcutConfig)}
+                disabled={isLoading || saveMutation.isPending}
+              >
+                {language === "ur" ? "UóO?U1U,OU?OñUO O3U' O3U' " : "Reset defaults"}
+              </Button>
             </div>
           </CardContent>
         </Card>

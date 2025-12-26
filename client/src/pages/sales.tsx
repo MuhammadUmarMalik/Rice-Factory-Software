@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Eye, Truck, FileText } from "lucide-react";
+import { Plus, Eye, Truck, FileText, Pencil, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -60,6 +60,7 @@ export default function SalesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
   const unitOptions = [
     { value: "kg", label: "Kilogram (kg)" },
@@ -131,11 +132,56 @@ export default function SalesPage() {
       });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
       form.reset();
+      setEditingId(null);
       toast({ title: t("savedSuccessfully") });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: SaleFormData }) =>
+      apiRequest("PATCH", `/api/sales/${id}`, {
+        ...data,
+        customerId: parseInt(data.customerId),
+        items: data.items.map(item => ({
+          productId: parseInt(item.productId),
+          quantity: item.quantity,
+          unit: item.unit,
+          pricePerUnit: item.pricePerUnit,
+        })),
+      }),
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: language === "ur" ? "Stock error" : "Stock error",
+        description: error.message,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      setIsDialogOpen(false);
+      form.reset();
+      setEditingId(null);
+      toast({ title: t("savedSuccessfully") });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/sales/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      toast({ title: language === "ur" ? "Sale deleted" : "Sale deleted" });
+    },
+    onError: (error: Error) => {
+      toast({ variant: "destructive", title: "Delete failed", description: error.message });
     },
   });
 
@@ -159,7 +205,11 @@ export default function SalesPage() {
       }
     }
 
-    createMutation.mutate(data);
+    if (editingId) {
+      updateMutation.mutate({ id: editingId, data });
+    } else {
+      createMutation.mutate(data);
+    }
   };
 
   const handleAddNew = () => {
@@ -173,7 +223,42 @@ export default function SalesPage() {
       notes: "",
       items: [{ productId: "", quantity: "", unit: "", pricePerUnit: "" }],
     });
+    setEditingId(null);
     setIsDialogOpen(true);
+  };
+
+  const handleEdit = async (id: number) => {
+    try {
+      const res = await apiRequest("GET", `/api/sales/${id}`);
+      const sale = await res.json();
+      form.reset({
+        customerId: sale.customerId?.toString() || "",
+        vehicleNumber: sale.vehicleNumber || "",
+        loadingCharges: sale.loadingCharges || "0",
+        weighingCharges: sale.weighingCharges || "0",
+        otherCharges: sale.otherCharges || "0",
+        paidAmount: sale.paidAmount || "0",
+        notes: sale.notes || "",
+        items: (sale.items || []).map((item: any) => {
+          const productId = item.productId?.toString() || "";
+          return {
+            productId,
+            quantity: item.quantity?.toString() || "0",
+            unit: getUnitForProduct(productId) || "",
+            pricePerUnit: item.pricePerUnit?.toString() || "0",
+          };
+        }),
+      });
+      setEditingId(id);
+      setIsDialogOpen(true);
+    } catch (error: any) {
+      toast({ title: "Failed to load sale", description: error?.message, variant: "destructive" });
+    }
+  };
+
+  const handleDelete = (id: number) => {
+    if (!confirm("Delete this sale? This will reverse stock and ledger impact.")) return;
+    deleteMutation.mutate(id);
   };
 
   const watchItems = form.watch("items");
@@ -292,6 +377,22 @@ export default function SalesPage() {
             onClick={() => openDetail({ type: "sale", id: item.id })}
           >
             <Eye className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            data-testid={`button-edit-${item.id}`}
+            onClick={() => handleEdit(item.id)}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            data-testid={`button-delete-${item.id}`}
+            onClick={() => handleDelete(item.id)}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
           </Button>
         </div>
       ),
@@ -604,9 +705,9 @@ export default function SalesPage() {
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   {t("cancel")}
                 </Button>
-                <Button type="submit" disabled={createMutation.isPending}>
+                <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
                   <FileText className="h-4 w-4" />
-                  {createMutation.isPending ? t("loading") : t("save")}
+                  {(createMutation.isPending || updateMutation.isPending) ? t("loading") : t("save")}
                 </Button>
               </div>
             </form>

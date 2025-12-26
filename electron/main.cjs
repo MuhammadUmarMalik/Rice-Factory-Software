@@ -3,6 +3,9 @@ const path = require("path");
 const http = require("http");
 
 const isDev = !app.isPackaged;
+if (!isDev) {
+  process.env.DESKTOP_BUILD = "1";
+}
 const port = process.env.PORT || "5000";
 process.env.PORT = port;
 
@@ -47,6 +50,7 @@ function createWindow() {
     width: 1280,
     height: 800,
     show: false,
+    icon: path.join(app.getAppPath(), "client", "public", "app_icon.ico"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

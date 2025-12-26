@@ -47,6 +47,7 @@ import PayrollPage from "@/pages/hr/payroll";
 import ExpensesPage from "@/pages/expenses";
 import { useAuthStore } from "@/stores/auth.store";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { ShortcutManager } from "@/components/shortcut-manager";
 
 
 function Router() {
@@ -166,9 +167,10 @@ function App() {
                       {authChecked ? <Router /> : <div className="p-6 text-sm text-muted-foreground">Loading...</div>}
                   </main>
                 </div>
-              </Shell>
+                </Shell>
             </SidebarProvider>
             )}
+            <ShortcutManager />
             <Toaster />
           </TooltipProvider>
         </LanguageProvider>
