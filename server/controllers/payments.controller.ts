@@ -6,6 +6,7 @@ import {
   receiptLinesSchema,
 } from "../schemas/receipts.schema";
 import * as paymentsService from "../services/payments.service";
+import { notifyUsers } from "../utils/notifications";
 
 export async function listPayments(_req: Request, res: Response) {
   try {
@@ -45,6 +46,13 @@ export async function createPayment(req: Request, res: Response) {
     const header = receiptHeaderSchema.parse({ ...payload, voucherType: "DR" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
     const voucher = await paymentsService.createPayment(header, parsedLines);
+    await notifyUsers({
+      title: "Payment completed",
+      message: `Payment voucher ${voucher.voucherNumber} recorded.`,
+      type: "payment",
+      entityType: "payment",
+      entityId: voucher.id,
+    });
     res.status(201).json(voucher);
   } catch (error) {
     if (error instanceof z.ZodError) {

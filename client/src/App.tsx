@@ -21,7 +21,6 @@ import UsersAdminPage from "@/pages/admin/users";
 import Customers from "@/pages/accounts/customers";
 import Suppliers from "@/pages/accounts/suppliers";
 import Banks from "@/pages/accounts/banks";
-import Expenses from "@/pages/accounts/expenses";
 import StockReport from "@/pages/reports/stock";
 import PurchaseReport from "@/pages/reports/purchases";
 import SalesReport from "@/pages/reports/sales";
@@ -68,7 +67,6 @@ function Router() {
       <Route path="/accounts/customers" component={Customers} />
       <Route path="/accounts/suppliers" component={Suppliers} />
       <Route path="/accounts/banks" component={Banks} />
-      <Route path="/accounts/expenses" component={Expenses} />
       <Route path="/reports/stock" component={StockReport} />
       <Route path="/reports/purchases" component={PurchaseReport} />
       <Route path="/reports/sales" component={SalesReport} />

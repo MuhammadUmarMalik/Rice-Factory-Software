@@ -1,5 +1,6 @@
 import type { PrintableDocumentPayload, PrintableTableColumn } from "@shared/print";
 import { printStyles } from "./styles";
+import { renderDayBookHtml } from "./dayBook";
 
 function escapeHtml(value: unknown) {
   const text = String(value ?? "");
@@ -134,6 +135,10 @@ function renderSignatures(payload: PrintableDocumentPayload) {
 }
 
 export function renderDocumentHtml(payload: PrintableDocumentPayload) {
+  if (payload.docKey === "report.dayBook") {
+    return renderDayBookHtml(payload);
+  }
+  const docKeyClass = `doc-key-${String(payload.docKey).replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
   const watermark = payload.settings?.showWatermark
     ? `<div class="watermark">${escapeHtml(payload.settings?.watermarkText || payload.company.name)}</div>`
     : "";
@@ -147,7 +152,7 @@ export function renderDocumentHtml(payload: PrintableDocumentPayload) {
     <title>${escapeHtml(payload.title)}</title>
     <style>${printStyles}</style>
   </head>
-  <body>
+  <body class="${docKeyClass}">
     ${watermark}
     <div class="doc">
       <div class="header">

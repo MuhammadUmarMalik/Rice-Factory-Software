@@ -3,6 +3,7 @@ import { z } from "zod";
 import { insertSaleSchema } from "@shared/schema";
 import { saleItemsSchema } from "../schemas/sales.schema";
 import * as salesService from "../services/sales.service";
+import { notifyLowStock, notifyUsers } from "../utils/notifications";
 
 export async function listSales(req: Request, res: Response) {
   try {
@@ -34,6 +35,14 @@ export async function createSale(req: Request, res: Response) {
     const data = insertSaleSchema.parse(saleData);
     const parsedItems = saleItemsSchema.parse(items || []);
     const sale = await salesService.createSale(data, parsedItems);
+    await notifyUsers({
+      title: "Sale completed",
+      message: `Sale ${sale.invoiceNumber} posted.`,
+      type: "sale",
+      entityType: "sale",
+      entityId: sale.id,
+    });
+    await Promise.all(parsedItems.map((item: any) => notifyLowStock(item.productId)));
     res.status(201).json(sale);
   } catch (error) {
     if (error instanceof z.ZodError) {

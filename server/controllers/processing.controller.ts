@@ -4,6 +4,7 @@ import { insertProcessingSchema } from "@shared/schema";
 import { numericString } from "../schemas/common";
 import { processingCompleteSchema } from "../schemas/processing.schema";
 import * as processingService from "../services/processing.service";
+import { notifyLowStock, notifyUsers } from "../utils/notifications";
 
 export async function listProcessing(req: Request, res: Response) {
   try {
@@ -37,6 +38,7 @@ export async function createProcessing(req: Request, res: Response) {
     }
     parsed.sourceQuantity = numericString.parse(parsed.sourceQuantity);
     const batch = await processingService.createProcessing(parsed);
+    await notifyLowStock(parsed.sourceProductId);
     res.status(201).json(batch);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -50,10 +52,40 @@ export async function createProcessing(req: Request, res: Response) {
 export async function updateProcessing(req: Request, res: Response) {
   try {
     const id = parseInt(req.params.id);
+    const existing = await processingService.getProcessing(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Processing batch not found" });
+    }
     const data = insertProcessingSchema.partial().parse(req.body);
     const batch = await processingService.updateProcessing(id, data);
     if (!batch) {
       return res.status(404).json({ error: "Processing batch not found" });
+    }
+    const statusChanged = data.status && data.status !== existing.status;
+    if (statusChanged && data.status === "in_progress") {
+      await notifyUsers({
+        title: "Processing started",
+        message: `Batch ${existing.batchNumber} is in progress.`,
+        type: "processing_start",
+        entityType: "processing",
+        entityId: existing.id,
+      });
+    } else if (statusChanged && data.status === "completed") {
+      await notifyUsers({
+        title: "Processing completed",
+        message: `Batch ${existing.batchNumber} completed.`,
+        type: "processing_complete",
+        entityType: "processing",
+        entityId: existing.id,
+      });
+    } else if (data.status === "in_progress") {
+      await notifyUsers({
+        title: "Processing progress update",
+        message: `Batch ${existing.batchNumber} progress updated.`,
+        type: "processing_progress",
+        entityType: "processing",
+        entityId: existing.id,
+      });
     }
     res.json(batch);
   } catch (error) {
@@ -78,6 +110,13 @@ export async function startProcessing(req: Request, res: Response) {
     }
 
     const batch = await processingService.updateProcessing(id, { status: "in_progress" });
+    await notifyUsers({
+      title: "Processing started",
+      message: `Batch ${existing.batchNumber} is in progress.`,
+      type: "processing_start",
+      entityType: "processing",
+      entityId: existing.id,
+    });
     res.json(batch);
   } catch (error) {
     console.error(error);
@@ -111,6 +150,21 @@ export async function completeProcessing(req: Request, res: Response) {
       outputCategory: body.outputCategory,
     });
 
+    await notifyUsers({
+      title: "Processing completed",
+      message: `Batch ${existing.batchNumber} completed.`,
+      type: "processing_complete",
+      entityType: "processing",
+      entityId: existing.id,
+    });
+    await notifyUsers({
+      title: "New stock added",
+      message: `Output from batch ${existing.batchNumber} added to stock.`,
+      type: "stock_added",
+      entityType: "processing",
+      entityId: existing.id,
+    });
+    await notifyLowStock(existing.sourceProductId);
     res.json(batch);
   } catch (error) {
     if (error instanceof z.ZodError) {

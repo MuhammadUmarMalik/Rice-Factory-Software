@@ -24,6 +24,25 @@ export const insertUserSchema = createInsertSchema(users).omit({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
+export const notifications = sqliteTable("notifications", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  message: text("message"),
+  type: text("type"),
+  entityType: text("entity_type"),
+  entityId: integer("entity_id"),
+  isRead: integer("is_read", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;
+
 // Accounts table (Customers, Suppliers, Banks, Expense Categories)
 export const accounts = sqliteTable("accounts", {
   id: integer("id").primaryKey({ autoIncrement: true }),

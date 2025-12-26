@@ -7,6 +7,7 @@ import {
 } from "../schemas/purchases.schema";
 import * as purchasesService from "../services/purchases.service";
 import { getUserId } from "../utils/auth";
+import { notifyUsers } from "../utils/notifications";
 
 export async function getNextBillNumber(_req: Request, res: Response) {
   try {
@@ -56,6 +57,13 @@ export async function createPurchase(req: Request, res: Response) {
       parsedCharges,
       moundBaseKg,
     );
+    await notifyUsers({
+      title: "New stock added",
+      message: `Purchase ${purchase.invoiceNumber} received.`,
+      type: "stock_added",
+      entityType: "purchase",
+      entityId: purchase.id,
+    });
     res.status(201).json(purchase);
   } catch (error) {
     if (error instanceof z.ZodError) {
