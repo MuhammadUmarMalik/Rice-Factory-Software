@@ -54,7 +54,6 @@ const accountsSubmenu = [
   { title: "customers", url: "/accounts/customers" },
   { title: "suppliers", url: "/accounts/suppliers" },
   { title: "banks", url: "/accounts/banks" },
-  { title: "expenses", url: "/accounts/expenses" },
 ];
 
 const reportsSubmenuGroups = [

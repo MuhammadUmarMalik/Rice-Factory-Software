@@ -154,7 +154,49 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
     };
   });
 
-  const charges = purchase.charges || [];
+  const chargeLabel = (type: string) => {
+    switch (type) {
+      case "weight":
+        return "Weight";
+      case "freight":
+        return "Freight";
+      case "loading_filling":
+        return "Loading / Filling";
+      case "market_fee":
+        return "Market Fee";
+      case "mitha_sukri":
+        return "Mitha Sukri";
+      case "phone_analysis":
+        return "Phone / Analysis";
+      case "brokerage":
+        return "Brokerage";
+      case "commission":
+        return "Commission";
+      case "bardana":
+        return "Bardana";
+      case "broken_allowance":
+        return "Broken Allowance";
+      case "other":
+      default:
+        return "Other";
+    }
+  };
+
+  const charges = (purchase.charges || []).filter((c) => Number(c.amount || 0) !== 0);
+  const chargeRows = charges.map((charge) => {
+    const amount = parseFloat(String(charge.amount || "0"));
+    const signed = charge.mode === "less" ? -Math.abs(amount) : amount;
+    const label = `${chargeLabel(charge.type)}${charge.mode === "less" ? " (Less)" : ""}`;
+    return {
+      sr: "",
+      item: label,
+      bags: "",
+      weight: "",
+      rate: "",
+      amount: money(signed),
+    };
+  });
+  const rowsWithCharges = [...tableRows, ...chargeRows];
 
   const sections = [
     summaryCard("Supplier", supplier?.name || "-"),
@@ -179,22 +221,17 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
     sections,
     table: {
       columns: tableColumns,
-      rows: tableRows,
+      rows: rowsWithCharges,
       totalsRow: {
         sr: "",
         item: "Totals",
         bags: num(purchase.totalBags),
         weight: num(purchase.totalNetWeightKg),
         rate: "",
-        amount: money(purchase.subtotal),
+        amount: money(purchase.totalAmount),
       },
     },
-    notes: [
-      ...charges.map((c) => `${c.type}: ${money(c.amount)}`),
-      purchase.notes ? `Notes: ${purchase.notes}` : "",
-    ]
-      .filter(Boolean)
-      .join(" | "),
+    notes: purchase.notes || undefined,
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },
@@ -919,25 +956,45 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
   const toDate = params.toDate ? new Date(String(params.toDate)) : fromDate;
   const report = await storage.getDayBook(fromDate, toDate);
 
+  const dayBookDate = (value?: Date) => (value ? format(value, "dd-MM-yyyy") : "");
+  const balanceLabel = (value?: string | number | null) => {
+    const numValue = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
+    if (!Number.isFinite(numValue) || numValue === 0) return "0.00";
+    const side = numValue >= 0 ? "DR" : "CR";
+    return `${Math.abs(numValue).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${side}`;
+  };
+
   const columns = buildColumns([
-    { key: "date", label: "Date", width: "14%" },
-    { key: "voucherType", label: "Voucher Type", width: "14%" },
-    { key: "voucherNo", label: "Voucher No", width: "16%" },
-    { key: "account", label: "Account" },
-    { key: "narration", label: "Narration" },
-    { key: "debit", label: "Debit", align: "right", width: "12%" },
-    { key: "credit", label: "Credit", align: "right", width: "12%" },
+    { key: "srNo", label: "Sr.No", width: "6%" },
+    { key: "voucherNo", label: "ID", width: "12%" },
+    { key: "voucherType", label: "Type", width: "8%" },
+    { key: "particulars", label: "Particulars" },
+    { key: "receipt", label: "Receipt", align: "right", width: "14%" },
+    { key: "payment", label: "Payment", align: "right", width: "14%" },
+    { key: "balance", label: "Balance", align: "right", width: "14%" },
   ]);
 
-  const rows = report.rows.map((r: any) => ({
-    date: fmtDate(r.date),
-    voucherType: r.voucherType || "-",
-    voucherNo: r.voucherNo || "-",
-    account: r.accountName || "-",
-    narration: r.narration || "",
-    debit: parseFloat(r.debit || "0") > 0 ? money(r.debit) : "-",
-    credit: parseFloat(r.credit || "0") > 0 ? money(r.credit) : "-",
-  }));
+  const rows = [
+    {
+      srNo: "",
+      voucherNo: "",
+      voucherType: "",
+      particulars: "OPENING BALANCE",
+      receipt: "0.00",
+      payment: "0.00",
+      balance: balanceLabel(report.openingBalance),
+    },
+    ...report.rows.map((r: any, index: number) => ({
+      srNo: String(index + 1),
+      voucherNo: r.voucherNo || "-",
+      voucherType: r.voucherType || "-",
+      particulars: [r.accountName || "-", r.narration || ""].filter(Boolean).join("\n"),
+      receipt: parseFloat(r.debit || "0") > 0 ? num(r.debit) : "0.00",
+      payment: parseFloat(r.credit || "0") > 0 ? num(r.credit) : "0.00",
+      balance: balanceLabel(r.balance),
+    })),
+  ];
+  const closingBalance = report.rows.length ? report.rows[report.rows.length - 1].balance : report.openingBalance;
 
   return {
     docType: "REPORT",
@@ -945,24 +1002,20 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
     title: "Day Book",
     company: ctx.company,
     meta: baseMeta(ctx, {
-      dateFrom: fmtDate(fromDate),
-      dateTo: fmtDate(toDate),
+      dateFrom: dayBookDate(fromDate),
+      dateTo: dayBookDate(toDate),
     }),
-    sections: [
-      summaryCard("Total Debit", money(report.totals.debit), true),
-      summaryCard("Total Credit", money(report.totals.credit), true),
-    ],
     table: {
       columns,
       rows,
       totalsRow: {
-        date: "",
-        voucherType: "",
+        srNo: "",
         voucherNo: "",
-        account: "Totals",
-        narration: "",
-        debit: money(report.totals.debit),
-        credit: money(report.totals.credit),
+        voucherType: "",
+        particulars: "TOTALS",
+        receipt: num(report.totals.debit),
+        payment: num(report.totals.credit),
+        balance: balanceLabel(closingBalance),
       },
     },
     settings: { currency: "PKR" },

@@ -504,7 +504,8 @@ export default function PurchasesPage() {
   const watchItems = form.watch("items");
   const watchCharges = form.watch("charges");
   const watchCommission = form.watch("brokerCommissionPercent");
-  const moundBaseKg = parseFloat(form.watch("moundBaseKg") || "40") || 40;
+  const watchMoundBase = form.watch("moundBaseKg");
+  const moundBaseKg = watchMoundBase === "60" ? 60 : 40;
   const computedItems = watchItems.map((item) => {
     const bags = parseFloat(item.bags) || 0;
     const filling = parseFloat(item.fillingPerBagKg) || 0;
@@ -548,6 +549,7 @@ export default function PurchasesPage() {
   const totalBags = watchItems.reduce((sum, i) => sum + (parseFloat(i.bags) || 0), 0);
   const totalGross = computedItems.reduce((sum, i) => sum + i.grossWeight, 0);
   const totalNet = computedItems.reduce((sum, i) => sum + i.netWeight, 0);
+  const totalWeightPerBag = totalBags > 0 ? totalNet / totalBags : 0;
   const totalMound = Math.floor(totalNet / moundBaseKg);
   const totalMoundRemainder = Math.max(totalNet - totalMound * moundBaseKg, 0);
   const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
@@ -721,7 +723,7 @@ export default function PurchasesPage() {
             <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
               {purchaseMode !== "view" && (
                 <fieldset>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                 <FormField
                   control={form.control}
                   name="supplierId"
@@ -764,62 +766,12 @@ export default function PurchasesPage() {
                 />
                 <FormField
                   control={form.control}
-                  name="moundBaseKg"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Mound Base</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="40">40 kg (standard)</SelectItem>
-                          <SelectItem value="60">60 kg</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
                   name="vehicleNumber"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("vehicleNumber")}</FormLabel>
                       <FormControl>
                         <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <FormField
-                  control={form.control}
-                  name="billNo"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Bill No</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder={nextBill?.billNo || "Auto"} readOnly />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="bookNo"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Book No</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="Book#" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -852,7 +804,33 @@ export default function PurchasesPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField
+                  control={form.control}
+                  name="billNo"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Bill No</FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder={nextBill?.billNo || "Auto"} readOnly />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="bookNo"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Book No</FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder="Book#" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
                 <FormField
                   control={form.control}
                   name="brokerCommissionPercent"
@@ -866,20 +844,21 @@ export default function PurchasesPage() {
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="notes"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Notes</FormLabel>
-                      <FormControl>
-                        <Textarea {...field} rows={1} data-testid="input-notes" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
               </div>
+
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Notes</FormLabel>
+                    <FormControl>
+                      <Textarea {...field} rows={2} data-testid="input-notes" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <div className="space-y-4">
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -1053,7 +1032,7 @@ export default function PurchasesPage() {
                                   </FormControl>
                                   <SelectContent>
                                     <SelectItem value="kg">Kg</SelectItem>
-                                    <SelectItem value="mound">Mound</SelectItem>
+                                    <SelectItem value="mound">Maund</SelectItem>
                                     <SelectItem value="bag">Bag</SelectItem>
                                     <SelectItem value="quintal">Quintal</SelectItem>
                                     <SelectItem value="ton">Ton</SelectItem>
@@ -1177,7 +1156,8 @@ export default function PurchasesPage() {
                       <div className="flex justify-between"><span>Total Bags</span><span className="font-mono">{totalBags.toFixed(2)}</span></div>
                       <div className="flex justify-between"><span>Total Weight</span><span className="font-mono">{totalGross.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Net Weight</span><span className="font-mono">{totalNet.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Mound ({moundBaseKg}kg)</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
+                      <div className="flex justify-between"><span>Weight per Bag</span><span className="font-mono">{totalWeightPerBag.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>Maund ({moundBaseKg} kg)</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
                       <div className="flex justify-between"><span>Line Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Commission</span><span className="font-mono">Rs. {commissionAmount.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Charges +</span><span className="font-mono">Rs. {chargesAdd.toLocaleString()}</span></div>

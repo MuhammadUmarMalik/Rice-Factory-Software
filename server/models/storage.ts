@@ -10,6 +10,7 @@ import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
   processing, sales, saleItems, ledgerEntries,
   type User, type InsertUser, type Account, type InsertAccount,
+  notifications, type Notification, type InsertNotification,
   employees, employeeSalaryStructures, payrolls, payrollAuditLogs,
   type Employee, type InsertEmployee,
   type EmployeeSalaryStructure, type InsertEmployeeSalaryStructure,
@@ -80,6 +81,11 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: number, updates: Partial<InsertUser>): Promise<User | undefined>;
   getUsers(): Promise<User[]>;
+  // Notifications
+  listNotifications(userId: number, limit?: number): Promise<Notification[]>;
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  markNotificationRead(id: number, userId: number): Promise<boolean>;
+  markAllNotificationsRead(userId: number): Promise<number>;
 
   // Fiscal Year / Periods
   getFiscalYears(): Promise<any[]>;
@@ -301,15 +307,20 @@ export interface IStorage {
     rows: Array<{
       entryId: number;
       date: Date;
+      accountId?: number | null;
       accountName: string;
+      accountType?: string | null;
+      isSystemAccount?: boolean | null;
       voucherType: string;
       voucherNo: string;
       narration: string;
       debit: string;
       credit: string;
+      balance: string;
       referenceType?: string | null;
       referenceId?: number | null;
     }>;
+    openingBalance: string;
     totals: { debit: string; credit: string };
     validation: { balanced: boolean; difference: string };
     dayTotals: Array<{ date: string; debit: string; credit: string; balanced: boolean }>;
@@ -600,6 +611,40 @@ export class DatabaseStorage implements IStorage {
 
   async getUsers(): Promise<User[]> {
     return db.select().from(users).orderBy(users.fullName).all();
+  }
+
+  // Notifications
+  async listNotifications(userId: number, limit = 50): Promise<Notification[]> {
+    return db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.id))
+      .limit(limit)
+      .all();
+  }
+
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    const [created] = await db.insert(notifications).values(notification).returning();
+    return created;
+  }
+
+  async markNotificationRead(id: number, userId: number): Promise<boolean> {
+    const result = await db
+      .update(notifications)
+      .set({ isRead: true })
+      .where(and(eq(notifications.id, id), eq(notifications.userId, userId)))
+      .run();
+    return result.changes > 0;
+  }
+
+  async markAllNotificationsRead(userId: number): Promise<number> {
+    const result = await db
+      .update(notifications)
+      .set({ isRead: true })
+      .where(eq(notifications.userId, userId))
+      .run();
+    return result.changes || 0;
   }
 
   // Fiscal Years / Periods
@@ -4769,6 +4814,15 @@ export class DatabaseStorage implements IStorage {
     const from = startDate;
     const to = endOfDay(endDate);
 
+    const [openingRow] = db
+      .select({
+        total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
+      })
+      .from(ledgerEntries)
+      .where(lt(ledgerEntries.entryDate, from))
+      .all();
+    const openingBalance = parseAmount(openingRow?.total || "0");
+
     const entries = db
       .select({
         id: ledgerEntries.id,
@@ -4778,12 +4832,15 @@ export class DatabaseStorage implements IStorage {
         description: ledgerEntries.description,
         referenceType: ledgerEntries.referenceType,
         referenceId: ledgerEntries.referenceId,
+        accountId: ledgerEntries.accountId,
         accountName: accounts.name,
+        accountType: accounts.type,
+        isSystemAccount: accounts.isSystemAccount,
       })
       .from(ledgerEntries)
       .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
       .where(and(gte(ledgerEntries.entryDate, from), lte(ledgerEntries.entryDate, to)))
-      .orderBy(ledgerEntries.entryDate)
+      .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
       .all();
 
     const byType = entries.reduce(
@@ -4848,7 +4905,22 @@ export class DatabaseStorage implements IStorage {
         : [],
     );
 
+    const typeMap: Record<string, string> = {
+      receipt: "RV",
+      payment: "PV",
+      journal_voucher: "JV",
+      sale: "SV",
+      purchase: "PU",
+      expense: "EV",
+      contra: "CV",
+    };
+
+    let runningBalance = openingBalance;
     const rows = entries.map((e) => {
+      const amount = parseAmount(e.amount);
+      const debitValue = e.transactionType === "debit" ? amount : 0;
+      const creditValue = e.transactionType === "credit" ? amount : 0;
+      runningBalance += debitValue - creditValue;
       let voucherNo = "-";
       if (e.referenceType && e.referenceId) {
         if (e.referenceType === "purchase") voucherNo = purchaseNoById.get(e.referenceId) || "-";
@@ -4861,12 +4933,16 @@ export class DatabaseStorage implements IStorage {
       return {
         entryId: e.id,
         date: new Date(e.entryDate as any),
+        accountId: e.accountId,
         accountName: e.accountName || "",
-        voucherType: (e.referenceType || "").toUpperCase(),
+        accountType: e.accountType,
+        isSystemAccount: e.isSystemAccount,
+        voucherType: typeMap[e.referenceType || ""] || (e.referenceType || "").toUpperCase(),
         voucherNo,
         narration: e.description || "",
-        debit: e.transactionType === "debit" ? e.amount : "0",
-        credit: e.transactionType === "credit" ? e.amount : "0",
+        debit: debitValue.toString(),
+        credit: creditValue.toString(),
+        balance: runningBalance.toString(),
         referenceType: e.referenceType,
         referenceId: e.referenceId,
       };
@@ -4898,6 +4974,7 @@ export class DatabaseStorage implements IStorage {
 
     return {
       rows,
+      openingBalance: openingBalance.toString(),
       totals: { debit: totals.debit.toString(), credit: totals.credit.toString() },
       validation: { balanced: Math.abs(totals.debit - totals.credit) < 0.0001, difference: Math.abs(totals.debit - totals.credit).toString() },
       dayTotals,

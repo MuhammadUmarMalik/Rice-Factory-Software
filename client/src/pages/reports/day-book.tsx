@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/data-table";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
-import { format } from "date-fns";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
 import { Input } from "@/components/ui/input";
 import { PrintActions } from "@/components/print/PrintActions";
@@ -19,12 +18,14 @@ type DayBookRow = {
   narration: string;
   debit: string;
   credit: string;
+  balance: string;
   referenceType?: string | null;
   referenceId?: number | null;
 };
 
 type DayBookReport = {
   rows: DayBookRow[];
+  openingBalance: string;
   totals: { debit: string; credit: string };
   validation: { balanced: boolean; difference: string };
   dayTotals: Array<{ date: string; debit: string; credit: string; balanced: boolean }>;
@@ -53,36 +54,84 @@ export default function DayBookPage() {
   const totals = data?.totals || { debit: "0", credit: "0" };
   const balanced = data?.validation.balanced ?? true;
   const dayMismatches = (data?.dayTotals || []).filter((d) => !d.balanced);
+  const openingBalance = data?.openingBalance || "0";
 
-  const columns: Column<DayBookRow>[] = useMemo(
+  const formatAmount = (value?: string | number) => {
+    const num = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
+    if (!Number.isFinite(num)) return "0.00";
+    return num.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const formatBalance = (value?: string | number) => {
+    const num = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
+    if (!Number.isFinite(num) || num === 0) return "0.00";
+    const side = num >= 0 ? "DR" : "CR";
+    return `${Math.abs(num).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${side}`;
+  };
+
+  const displayRows: Array<DayBookRow & { isOpening?: boolean }> = useMemo(
     () => [
       {
-        key: "date",
-        title: "Date",
-        render: (r) => <span className="font-mono">{format(new Date(r.date), "dd-MM-yyyy")}</span>,
+        entryId: 0,
+        date: fromDate || today,
+        accountName: "OPENING BALANCE",
+        voucherType: "",
+        voucherNo: "",
+        narration: "",
+        debit: "0",
+        credit: "0",
+        balance: openingBalance,
+        isOpening: true,
       },
-      { key: "voucherType", title: "Voucher Type" },
+      ...rows,
+    ],
+    [fromDate, openingBalance, rows, today],
+  );
+
+  const columns: Column<DayBookRow & { isOpening?: boolean }>[] = useMemo(
+    () => [
+      {
+        key: "srNo",
+        title: "Sr.No",
+        render: (r, index) => (r.isOpening ? "" : <span className="font-mono">{index}</span>),
+        align: "center",
+      },
       {
         key: "voucherNo",
-        title: "Voucher No",
-        render: (r) => <span className="font-mono text-sm">{r.voucherNo}</span>,
+        title: "ID",
+        render: (r) => <span className="font-mono text-sm">{r.voucherNo || "-"}</span>,
       },
-      { key: "accountName", title: "Account" },
-      { key: "narration", title: "Narration" },
+      { key: "voucherType", title: "Type", align: "center" },
+      {
+        key: "particulars",
+        title: "Particulars",
+        render: (r) => (
+          <div className="whitespace-pre-line">
+            {r.accountName}
+            {r.narration ? `\n${r.narration}` : ""}
+          </div>
+        ),
+      },
       {
         key: "debit",
-        title: "Debit",
+        title: "Receipt",
         align: "right",
-        render: (r) => <span className="font-mono text-emerald-600">Rs. {Number(r.debit || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">{formatAmount(r.debit)}</span>,
       },
       {
         key: "credit",
-        title: "Credit",
+        title: "Payment",
         align: "right",
-        render: (r) => <span className="font-mono text-red-600">Rs. {Number(r.credit || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">{formatAmount(r.credit)}</span>,
+      },
+      {
+        key: "balance",
+        title: "Balance",
+        align: "right",
+        render: (r) => <span className="font-mono">{formatBalance(r.balance)}</span>,
       },
     ],
-    [],
+    [formatAmount, formatBalance],
   );
 
   return (
@@ -135,11 +184,12 @@ export default function DayBookPage() {
           )}
           <DataTable
             columns={columns}
-            data={rows}
+            data={displayRows}
             isLoading={isLoading}
             searchable
             emptyMessage="No entries found"
             onRowClick={(row) => {
+              if ("isOpening" in row && row.isOpening) return;
               const allowed = ["purchase", "sale", "receipt", "payment", "journal_voucher"];
               if (row.referenceType && row.referenceId && allowed.includes(row.referenceType)) {
                 openDetail({ type: row.referenceType as any, id: Number(row.referenceId) });

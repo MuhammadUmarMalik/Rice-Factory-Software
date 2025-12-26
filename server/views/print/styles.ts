@@ -96,11 +96,12 @@ export const printStyles = `
 
   .meta {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 8px 16px;
     font-size: 11px;
     color: var(--muted);
     margin-bottom: 12px;
+    overflow: hidden;
   }
 
   .meta-chip {
@@ -108,6 +109,7 @@ export const printStyles = `
     border: 1px solid var(--border);
     padding: 4px 8px;
     border-radius: 999px;
+    white-space: nowrap;
   }
 
   .sections {
@@ -115,6 +117,11 @@ export const printStyles = `
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 8px;
     margin-bottom: 12px;
+  }
+
+  .doc-key-invoice-purchase .sections,
+  .doc-key-invoice-sales .sections {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .section-card {
@@ -236,5 +243,91 @@ export const printStyles = `
 
   .page-break {
     page-break-after: always;
+  }
+`;
+
+export const dayBookStyles = `
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    font-family: "Arial", "Helvetica", sans-serif;
+    color: #111111;
+    background: #ffffff;
+    margin: 0;
+    padding: 0;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .doc {
+    width: 100%;
+  }
+
+  .company-line {
+    text-align: center;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .title-bar {
+    border: 2px solid #111111;
+    background: #c9c9c9;
+    text-align: center;
+    font-weight: 700;
+    padding: 4px 6px;
+    margin-bottom: 4px;
+    font-size: 14px;
+    letter-spacing: 0.2px;
+  }
+
+  .print-line {
+    border: 1px solid #111111;
+    padding: 3px 6px;
+    margin-bottom: 4px;
+    font-size: 10.5px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  thead th {
+    background: #d6d6d6;
+    border: 1px solid #111111;
+    padding: 4px 4px;
+    font-weight: 700;
+  }
+
+  tbody td {
+    border: 1px solid #111111;
+    padding: 4px 4px;
+    vertical-align: top;
+  }
+
+  tbody tr {
+    page-break-inside: avoid;
+  }
+
+  .align-right {
+    text-align: right;
+  }
+
+  .align-center {
+    text-align: center;
+  }
+
+  .totals-row td {
+    font-weight: 700;
+    background: #efefef;
   }
 `;
