@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil, Minus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -108,11 +109,13 @@ function numberToWords(num: number) {
 export default function PaymentsPage() {
   const { t, isRTL } = useLanguage();
   const { toast } = useToast();
+  const [location] = useLocation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [viewId, setViewId] = useState<number | null>(null);
   const isReadOnly = viewId !== null;
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const consumedEditId = useRef<number | null>(null);
 
   const buildDefaults = (): PaymentFormData => ({
     voucherType: "DR",
@@ -282,6 +285,16 @@ export default function PaymentsPage() {
       toast({ title: "Failed to load voucher", description: err?.message, variant: "destructive" });
     }
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.split("?")[1] || "");
+    const editParam = params.get("editId");
+    if (!editParam) return;
+    const id = Number(editParam);
+    if (!Number.isFinite(id) || consumedEditId.current === id) return;
+    consumedEditId.current = id;
+    handleEdit(id);
+  }, [location]);
 
   const handleSubmit = async (data: PaymentFormData) => {
     if (isReadOnly) {

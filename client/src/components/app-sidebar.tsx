@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard,
@@ -117,6 +118,7 @@ export function AppSidebar() {
   const user = useAuthStore((state) => state.user);
   const isAdmin = user?.role === "admin";
   const clearSession = useAuthStore((state) => state.logout);
+  const [reportsOpen, setReportsOpen] = useState(false);
 
   const initials = (() => {
     const name = user?.fullName || user?.username || "";
@@ -139,6 +141,16 @@ export function AppSidebar() {
     if (url === "/") return location === "/";
     return location === url || location.startsWith(`${url}/`);
   };
+
+  const isReportsRoute = reportsSubmenuGroups.some((group) =>
+    group.items.some((item) => isActive(item.url))
+  );
+
+  useEffect(() => {
+    if (isReportsRoute) {
+      setReportsOpen(true);
+    }
+  }, [isReportsRoute]);
 
   return (
     <Sidebar>
@@ -213,7 +225,11 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               </Collapsible>
 
-              <Collapsible className="group/collapsible">
+              <Collapsible
+                className="group/collapsible"
+                open={isReportsRoute || reportsOpen}
+                onOpenChange={setReportsOpen}
+              >
                 <SidebarMenuItem>
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
