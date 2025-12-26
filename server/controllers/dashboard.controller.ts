@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
-import { getDashboardCharts, getDashboardStats, getRecentActivity } from "../services/dashboard.service";
+import { parseOptionalDate, parseOptionalInt } from "../utils/parse";
+import { getDashboardAlerts, getDashboardCharts, getDashboardSummary, getDashboardStats, getRecentActivity } from "../services/dashboard.service";
 
 export async function getStats(_req: Request, res: Response) {
   try {
@@ -21,12 +22,41 @@ export async function getRecent(_req: Request, res: Response) {
   }
 }
 
-export async function getCharts(_req: Request, res: Response) {
+export async function getCharts(req: Request, res: Response) {
   try {
-    const charts = await getDashboardCharts();
+    const fromDate = parseOptionalDate(req.query.fromDate);
+    const toDate = parseOptionalDate(req.query.toDate);
+    const fiscalYearId = parseOptionalInt(req.query.fiscalYearId);
+    const charts = await getDashboardCharts({ fromDate, toDate, fiscalYearId });
     res.json(charts);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch chart data" });
+  }
+}
+
+export async function getSummary(req: Request, res: Response) {
+  try {
+    const fromDate = parseOptionalDate(req.query.fromDate);
+    const toDate = parseOptionalDate(req.query.toDate);
+    const fiscalYearId = parseOptionalInt(req.query.fiscalYearId);
+    const summary = await getDashboardSummary({ fromDate, toDate, fiscalYearId });
+    res.json(summary);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch dashboard summary" });
+  }
+}
+
+export async function getAlerts(req: Request, res: Response) {
+  try {
+    const fromDate = parseOptionalDate(req.query.fromDate);
+    const toDate = parseOptionalDate(req.query.toDate);
+    const fiscalYearId = parseOptionalInt(req.query.fiscalYearId);
+    const alerts = await getDashboardAlerts({ fromDate, toDate, fiscalYearId });
+    res.json(alerts);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch dashboard alerts" });
   }
 }

@@ -22,10 +22,13 @@ export function PrintActions({
   const [open, setOpen] = useState(false);
   const [autoPrint, setAutoPrint] = useState(false);
   const safeParams = useMemo(() => params || {}, [params]);
+  const isElectron =
+    typeof navigator !== "undefined" &&
+    navigator.userAgent.toLowerCase().includes("electron");
 
   const handlePrint = () => {
     if (disabled) return;
-    setAutoPrint(true);
+    setAutoPrint(!isElectron);
     setOpen(true);
   };
 
@@ -42,10 +45,10 @@ export function PrintActions({
 
   return (
     <div className="flex gap-2">
-      <Button variant="outline" onClick={handlePrint} disabled={disabled}>
+      <Button variant="outline" onClick={handlePrint} disabled={disabled} data-shortcut="print-preview">
         Print
       </Button>
-      <Button variant="outline" onClick={handleDownload} disabled={disabled}>
+      <Button variant="outline" onClick={handleDownload} disabled={disabled} data-shortcut="download-pdf">
         Download PDF
       </Button>
       <PrintPreviewModal

@@ -11,7 +11,7 @@ export const printStyles = `
 
   @page {
     size: A4;
-    margin: 14mm 12mm 16mm;
+    margin: 4mm;
   }
 
   * {
@@ -39,7 +39,7 @@ export const printStyles = `
   .doc {
     position: relative;
     min-height: 100%;
-    padding: 10mm 12mm 18mm;
+    padding: 4mm;
   }
 
   .header {
@@ -47,8 +47,8 @@ export const printStyles = `
     grid-template-columns: 1fr auto;
     gap: 12px;
     border-bottom: 1px solid var(--border);
-    padding-bottom: 10px;
-    margin-bottom: 12px;
+    padding-bottom: 6px;
+    margin-bottom: 8px;
   }
 
   .brand {
@@ -96,12 +96,11 @@ export const printStyles = `
 
   .meta {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 8px 16px;
     font-size: 11px;
     color: var(--muted);
-    margin-bottom: 12px;
-    overflow: hidden;
+    margin-bottom: 8px;
   }
 
   .meta-chip {
@@ -116,7 +115,7 @@ export const printStyles = `
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
 
   .doc-key-invoice-purchase .sections,
@@ -146,7 +145,7 @@ export const printStyles = `
   table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     table-layout: fixed;
   }
 
@@ -158,6 +157,9 @@ export const printStyles = `
     text-transform: uppercase;
     letter-spacing: 0.3px;
     vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   thead {
     display: table-header-group;
@@ -167,6 +169,9 @@ export const printStyles = `
     border: 1px solid var(--border);
     padding: 7px 6px;
     vertical-align: top;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   tbody tr {
@@ -198,14 +203,14 @@ export const printStyles = `
     padding: 8px 10px;
     border-radius: 8px;
     background: var(--soft);
-    margin-bottom: 12px;
+    margin-bottom: 8px;
   }
 
   .signatures {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 18px;
-    margin-top: 18px;
+    margin-top: 12px;
   }
 
   .signature {
@@ -218,9 +223,9 @@ export const printStyles = `
 
   .footer {
     position: fixed;
-    bottom: 8mm;
-    left: 12mm;
-    right: 12mm;
+    bottom: 4mm;
+    left: 4mm;
+    right: 4mm;
     font-size: 10px;
     color: var(--muted);
     display: flex;
@@ -249,7 +254,7 @@ export const printStyles = `
 export const dayBookStyles = `
   @page {
     size: A4;
-    margin: 12mm;
+    margin: 4mm;
   }
 
   * {
@@ -306,12 +311,18 @@ export const dayBookStyles = `
     border: 1px solid #111111;
     padding: 4px 4px;
     font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   tbody td {
     border: 1px solid #111111;
     padding: 4px 4px;
     vertical-align: top;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   tbody tr {

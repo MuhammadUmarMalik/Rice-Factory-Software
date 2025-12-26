@@ -152,6 +152,8 @@ export interface IStorage {
   getSales(): Promise<Sale[]>;
   getSale(id: number): Promise<Sale | undefined>;
   createSale(sale: InsertSale, items: SaleItemInput[]): Promise<Sale>;
+  updateSale(id: number, sale: Partial<InsertSale>, items: SaleItemInput[]): Promise<Sale | undefined>;
+  deleteSale(id: number): Promise<boolean>;
   getNextSaleInvoiceNumber(): Promise<string>;
   getNextGatePassNumber(): Promise<string>;
 
@@ -465,13 +467,33 @@ export interface IStorage {
   deletePeriodLock(id: number): Promise<boolean>;
 }
 
-function parseAmount(value: string | number | null | undefined): number {
-  const num = typeof value === "number" ? value : parseFloat(value || "0");
-  if (!Number.isFinite(num)) {
-    throw new Error("Invalid numeric value");
+  function parseAmount(value: string | number | null | undefined): number {
+    const num = typeof value === "number" ? value : parseFloat(value || "0");
+    if (!Number.isFinite(num)) {
+      throw new Error("Invalid numeric value");
+    }
+    return num;
   }
-  return num;
-}
+
+  function toValidDate(value?: string | number | Date | null): Date {
+    const dt = value instanceof Date ? value : new Date(value ?? Date.now());
+    return Number.isNaN(dt.getTime()) ? new Date() : dt;
+  }
+
+  function normalizeReceiptVoucherType(value?: string | null): "CR" | "DR" {
+    const v = (value || "CR").toString().trim().toUpperCase();
+    if (v === "CR" || v === "DR") return v;
+    if (v === "RECEIPT" || v === "CRV" || v === "BRV") return "CR";
+    if (v === "PAYMENT" || v === "CPV" || v === "BPV") return "DR";
+    return "CR";
+  }
+
+  function resolveReceiptLineAmount(line: ReceiptLineInput & { amount?: string | number | null }): number {
+    const debitValue = parseAmount(line.debit || "0");
+    const creditValue = parseAmount(line.credit || "0");
+    const amountValue = line.amount != null ? parseAmount(line.amount) : 0;
+    return Math.max(debitValue, creditValue, amountValue);
+  }
 
 function endOfDay(d: Date): Date {
   const dt = new Date(d);
@@ -1536,8 +1558,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   private assertPostingAllowed(client: DbClient, postingDate: Date, context: string) {
-    this.assertPeriodNotLocked(client, postingDate, context);
-    this.assertFiscalPeriodOpen(client, postingDate, context);
+    const safeDate = toValidDate(postingDate);
+    this.assertPeriodNotLocked(client, safeDate, context);
+    this.assertFiscalPeriodOpen(client, safeDate, context);
   }
 
   // Products
@@ -2547,9 +2570,225 @@ export class DatabaseStorage implements IStorage {
         });
       }
 
-      return newSale;
-    });
-  }
+        return newSale;
+      });
+    }
+
+    async updateSale(id: number, sale: Partial<InsertSale>, items: SaleItemInput[]): Promise<Sale | undefined> {
+      const existing = await this.getSale(id);
+      if (!existing) return undefined;
+      const existingItems = await this.getSaleItems(id);
+
+      return db.transaction((tx) => {
+        const client = tx as unknown as DbClient;
+        const postingDate = toValidDate(sale.saleDate ?? existing.saleDate);
+        this.assertPostingAllowed(client, postingDate, "sale");
+
+        // Reverse prior ledger impact
+        const priorEntries = tx
+          .select()
+          .from(ledgerEntries)
+          .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
+          .all();
+        for (const le of priorEntries) {
+          this.postLedgerEntry(client, {
+            accountId: le.accountId,
+            transactionType: le.transactionType === "debit" ? "credit" : "debit",
+            amount: le.amount,
+            description: `Reversal Sale ${existing.invoiceNumber}`,
+            referenceType: "sale",
+            referenceId: id,
+            entryDate: postingDate,
+          });
+        }
+
+        // Rollback previous stock impact
+        for (const item of existingItems) {
+          this.updateProductStockInternal(client, item.productId, item.quantity, "add");
+        }
+
+        let subtotal = 0;
+        const normalizedItems = items.map((item) => {
+          const qty = parseAmount(item.quantity);
+          const price = parseAmount(item.pricePerUnit);
+          const total = qty * price;
+          subtotal += total;
+          return {
+            ...item,
+            quantity: qty.toString(),
+            pricePerUnit: price.toString(),
+            totalPrice: total.toString(),
+          };
+        });
+
+        // Validate stock after rollback
+        for (const item of normalizedItems) {
+          const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+          const currentStock = parseAmount(product?.currentStock || "0");
+          const qty = parseAmount(item.quantity);
+          if (currentStock < qty) {
+            throw new Error(`Insufficient stock for product ${product?.name || item.productId}. Available: ${currentStock}, Required: ${qty}`);
+          }
+        }
+
+        const loadingCharge = parseAmount(sale.loadingCharges ?? existing.loadingCharges ?? "0");
+        const weighingCharge = parseAmount(sale.weighingCharges ?? existing.weighingCharges ?? "0");
+        const otherCharge = parseAmount(sale.otherCharges ?? existing.otherCharges ?? "0");
+        const charges = loadingCharge + weighingCharge + otherCharge;
+        const taxAmount = parseAmount((sale as any).taxAmount ?? existing.taxAmount ?? 0);
+        const totalAmount = subtotal + charges + taxAmount;
+        const paidAmount = parseAmount(sale.paidAmount ?? existing.paidAmount ?? 0);
+
+        const updatedSale = tx.update(sales).set({
+          ...sale,
+          subtotal: subtotal.toString(),
+          totalAmount: totalAmount.toString(),
+          taxAmount: taxAmount.toString(),
+          taxTypeId: (sale as any).taxTypeId ?? existing.taxTypeId ?? null,
+          paidAmount: paidAmount.toString(),
+        }).where(eq(sales.id, id)).returning().get();
+
+        tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
+        for (const item of normalizedItems) {
+          tx.insert(saleItems).values({
+            ...item,
+            saleId: id,
+          }).run();
+          this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
+        }
+
+        tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "sale"), eq(taxLedgers.sourceId, id))).run();
+
+        const customerId = sale.customerId ?? existing.customerId;
+        const ledgerLines: Omit<InsertLedgerEntry, "balance">[] = [];
+        const revenueAccount = this.ensureSystemAccount(client, "Sales Revenue", "income");
+        const saleBaseLabel = `SALE ${existing.invoiceNumber}`;
+        const pushLine = (line: Omit<InsertLedgerEntry, "balance">) => ledgerLines.push(line);
+
+        const baseRevenue = Math.max(subtotal, 0);
+        if (baseRevenue > 0) {
+          const amount = baseRevenue.toString();
+          pushLine({
+            accountId: customerId,
+            transactionType: "debit",
+            amount,
+            description: saleBaseLabel,
+            referenceType: "sale",
+            referenceId: id,
+            entryDate: postingDate,
+          });
+          pushLine({
+            accountId: revenueAccount.id,
+            transactionType: "credit",
+            amount,
+            description: saleBaseLabel,
+            referenceType: "sale",
+            referenceId: id,
+            entryDate: postingDate,
+          });
+        }
+
+        const chargeLines = [
+          { label: "LOADING", amount: loadingCharge },
+          { label: "WEIGHING", amount: weighingCharge },
+          { label: "OTHER", amount: otherCharge },
+        ];
+        for (const line of chargeLines) {
+          if (line.amount === 0) continue;
+          const entryType = line.amount > 0 ? "credit" : "debit";
+          const amount = Math.abs(line.amount).toString();
+          pushLine({
+            accountId: revenueAccount.id,
+            transactionType: entryType,
+            amount,
+            description: line.label,
+            referenceType: "sale",
+            referenceId: id,
+            entryDate: postingDate,
+          });
+          pushLine({
+            accountId: customerId,
+            transactionType: entryType === "credit" ? "debit" : "credit",
+            amount,
+            description: line.label,
+            referenceType: "sale",
+            referenceId: id,
+            entryDate: postingDate,
+          });
+        }
+
+        if (taxAmount > 0) {
+          const taxTypeId = (sale as any).taxTypeId ?? existing.taxTypeId;
+          let taxAccountId: number;
+          if (taxTypeId) {
+            const [tt] = tx.select().from(taxTypes).where(eq(taxTypes.id, taxTypeId as any)).all();
+            const taxAcct = tt?.outputAccountId ? tx.select().from(accounts).where(eq(accounts.id, tt.outputAccountId)).all()[0] : undefined;
+            taxAccountId = taxAcct?.id ?? this.ensureSystemAccount(client, "Tax Output", "liability").id;
+          } else {
+            taxAccountId = this.ensureSystemAccount(client, "Tax Output", "liability").id;
+          }
+          const taxLabel = "TAX";
+          pushLine({
+            accountId: taxAccountId,
+            transactionType: "credit",
+            amount: taxAmount.toString(),
+            description: taxLabel,
+            referenceType: "sale",
+            referenceId: id,
+            entryDate: postingDate,
+          });
+          pushLine({
+            accountId: customerId,
+            transactionType: "debit",
+            amount: taxAmount.toString(),
+            description: taxLabel,
+            referenceType: "sale",
+            referenceId: id,
+            entryDate: postingDate,
+          });
+          tx.insert(taxLedgers).values({
+            taxTypeId: taxTypeId ?? null,
+            sourceType: "sale",
+            sourceId: id,
+            taxBase: subtotal.toString(),
+            taxAmount: taxAmount.toString(),
+            postingDate,
+            createdAt: new Date(),
+          } as any).run();
+        }
+
+        this.postBalancedLedgerEntries(client, ledgerLines, `sale ${existing.invoiceNumber}`);
+
+        return updatedSale;
+      });
+    }
+
+    async deleteSale(id: number): Promise<boolean> {
+      const existing = await this.getSale(id);
+      if (!existing) return false;
+      const paidAmount = parseAmount(existing.paidAmount || "0");
+      if (paidAmount > 0) {
+        throw new Error("Cannot delete a sale that has recorded payments");
+      }
+      const items = await this.getSaleItems(id);
+
+      return db.transaction((tx) => {
+        const client = tx as unknown as DbClient;
+        const postingDate = toValidDate(existing.saleDate);
+        this.assertPostingAllowed(client, postingDate, "sale");
+
+        for (const item of items) {
+          this.updateProductStockInternal(client, item.productId, item.quantity, "add");
+        }
+
+        tx.delete(ledgerEntries).where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id))).run();
+        tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "sale"), eq(taxLedgers.sourceId, id))).run();
+        tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
+        tx.delete(sales).where(eq(sales.id, id)).run();
+
+        return true;
+      });
+    }
 
   // Sale Items
   async getSaleItems(saleId: number): Promise<SaleItem[]> {
@@ -3601,27 +3840,22 @@ export class DatabaseStorage implements IStorage {
       const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : new Date();
       this.assertPostingAllowed(client, postingDate, "receipt/payment voucher");
 
-      const voucherType = (data.voucherType || "CR").toUpperCase();
-      const settlementAccount =
-        data.settlementAccountId ||
-        (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
+        const voucherType = normalizeReceiptVoucherType(data.voucherType);
+        const settlementAccount =
+          data.settlementAccountId ||
+          (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
 
-      const cleanLines = (lines || []).map((line) => {
-        const debitValue = parseAmount(line.debit || "0");
-        const creditValue = parseAmount(line.credit || "0");
-        const amt = Math.max(debitValue, creditValue).toString();
-        return {
-          ...line,
-          debit: voucherType === "DR" ? amt : "0",
-          credit: voucherType === "CR" ? amt : "0",
-        };
-      });
+        const cleanLines = (lines || []).map((line) => {
+          const amt = resolveReceiptLineAmount(line).toString();
+          return {
+            ...line,
+            debit: voucherType === "DR" ? amt : "0",
+            credit: voucherType === "CR" ? amt : "0",
+          };
+        });
 
-      const total = cleanLines.reduce(
-        (sum, l) => sum + Math.max(parseAmount(l.debit || "0"), parseAmount(l.credit || "0")),
-        0,
-      );
-      if (total <= 0) throw new Error("Voucher amount must be greater than 0");
+        const total = cleanLines.reduce((sum, l) => sum + resolveReceiptLineAmount(l), 0);
+        if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
       // Append counter-entry for settlement account to enforce double-entry
       const settlementLine: ReceiptLineInput = voucherType === "CR"
@@ -3705,28 +3939,23 @@ export class DatabaseStorage implements IStorage {
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
       tx.delete(ledgerEntries).where(and(eq(ledgerEntries.referenceType, existing.voucherType === "CR" ? "receipt" : "payment"), eq(ledgerEntries.referenceId, id))).run();
 
-      const voucherType = (data.voucherType || existing.voucherType || "CR").toUpperCase();
-      const settlementAccount =
-        data.settlementAccountId ||
-        existing.settlementAccountId ||
-        (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
+        const voucherType = normalizeReceiptVoucherType(data.voucherType || existing.voucherType || "CR");
+        const settlementAccount =
+          data.settlementAccountId ||
+          existing.settlementAccountId ||
+          (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
 
-      const cleanLines = (lines || []).map((line) => {
-        const debitValue = parseAmount(line.debit || "0");
-        const creditValue = parseAmount(line.credit || "0");
-        const amt = Math.max(debitValue, creditValue).toString();
-        return {
-          ...line,
-          debit: voucherType === "DR" ? amt : "0",
-          credit: voucherType === "CR" ? amt : "0",
-        };
-      });
+        const cleanLines = (lines || []).map((line) => {
+          const amt = resolveReceiptLineAmount(line).toString();
+          return {
+            ...line,
+            debit: voucherType === "DR" ? amt : "0",
+            credit: voucherType === "CR" ? amt : "0",
+          };
+        });
 
-      const total = cleanLines.reduce(
-        (sum, l) => sum + Math.max(parseAmount(l.debit || "0"), parseAmount(l.credit || "0")),
-        0,
-      );
-      if (total <= 0) throw new Error("Voucher amount must be greater than 0");
+        const total = cleanLines.reduce((sum, l) => sum + resolveReceiptLineAmount(l), 0);
+        if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
       const settlementLine: ReceiptLineInput = voucherType === "CR"
         ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: "Settlement (Cash/Bank)" }

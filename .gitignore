@@ -6,3 +6,5 @@ vite.config.ts.*
 *.tar.gz
 .replit
 agents.md
+dist
+dist-desktop

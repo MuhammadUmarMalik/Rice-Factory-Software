@@ -55,3 +55,43 @@ export async function createSale(req: Request, res: Response) {
     res.status(500).json({ error: "Failed to create sale" });
   }
 }
+
+export async function updateSale(req: Request, res: Response) {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await salesService.getSale(id);
+    if (!existing) {
+      return res.status(404).json({ error: "Sale not found" });
+    }
+    const { items, ...saleData } = req.body;
+    const data = insertSaleSchema.partial().parse(saleData);
+    const parsedItems = saleItemsSchema.parse(items || []);
+    const sale = await salesService.updateSale(id, data, parsedItems);
+    if (!sale) return res.status(404).json({ error: "Sale not found" });
+    res.json(sale);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.errors });
+    }
+    if (error instanceof Error) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to update sale" });
+  }
+}
+
+export async function deleteSale(req: Request, res: Response) {
+  try {
+    const id = parseInt(req.params.id);
+    const ok = await salesService.deleteSale(id);
+    if (!ok) return res.status(404).json({ error: "Sale not found" });
+    res.status(204).send();
+  } catch (error) {
+    if (error instanceof Error) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to delete sale" });
+  }
+}
