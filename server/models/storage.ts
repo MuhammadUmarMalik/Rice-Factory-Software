@@ -1382,6 +1382,27 @@ export class DatabaseStorage implements IStorage {
       .where(eq(accounts.id, id));
   }
 
+  private recomputeAccountBalances(client: DbClient, accountIds: number[]) {
+    const uniqueIds = Array.from(new Set(accountIds)).filter((id) => Number.isFinite(id));
+    for (const accountId of uniqueIds) {
+      const [account] = client.select().from(accounts).where(eq(accounts.id, accountId)).all();
+      if (!account) continue;
+      const normal = normalSideForAccountType(account.type);
+      const [row] = client
+        .select({ total: ledgerSumByNormal(normal) })
+        .from(ledgerEntries)
+        .where(eq(ledgerEntries.accountId, accountId))
+        .all();
+      const opening = parseAmount(account.openingBalance || "0");
+      const delta = parseAmount(row?.total || "0");
+      client
+        .update(accounts)
+        .set({ currentBalance: (opening + delta).toString() })
+        .where(eq(accounts.id, accountId))
+        .run();
+    }
+  }
+
   private applyAccountBalanceInternal(client: DbClient, account: Account, transactionType: "debit" | "credit", amount: number): number {
     const normal = normalSideForAccountType(account.type);
     const current = parseAmount(account.currentBalance || "0");
@@ -1469,6 +1490,52 @@ export class DatabaseStorage implements IStorage {
       isSystemAccount: true,
     }).returning().get();
     return created as any;
+  }
+
+  private ensurePurchaseChargeAccount(client: DbClient, type: string): Account {
+    const label = (() => {
+      switch (type) {
+        case "weight":
+          return "Purchase - Weight Charges";
+        case "freight":
+          return "Purchase - Freight Charges";
+        case "loading_filling":
+          return "Purchase - Loading/Unloading Charges";
+        case "market_fee":
+          return "Purchase - Market Fee";
+        case "mitha_sukri":
+          return "Purchase - Mitha Sukri";
+        case "phone_analysis":
+          return "Purchase - Phone/Analysis";
+        case "brokerage":
+          return "Purchase - Brokerage";
+        case "commission":
+          return "Purchase - Commission";
+        case "bardana":
+          return "Purchase - Bardana";
+        case "broken_allowance":
+          return "Purchase - Broken Allowance";
+        case "other":
+        default:
+          return "Purchase - Other Charges";
+      }
+    })();
+    return this.ensureSystemAccount(client, label, "expense");
+  }
+
+  private ensureSalesChargeAccount(client: DbClient, label: "LOADING" | "WEIGHING" | "OTHER"): Account {
+    const name = (() => {
+      switch (label) {
+        case "LOADING":
+          return "Sales - Loading Charges";
+        case "WEIGHING":
+          return "Sales - Weighing Charges";
+        case "OTHER":
+        default:
+          return "Sales - Other Charges";
+      }
+    })();
+    return this.ensureSystemAccount(client, name, "income");
   }
 
   private ensureFiscalCalendarInitialized(client: DbClient, performedBy?: { userId?: number }) {
@@ -1894,7 +1961,7 @@ export class DatabaseStorage implements IStorage {
         if (amt <= 0) continue;
         const entryType = charge.mode === "less" ? "credit" : "debit";
         const label = chargeLabel(charge.type);
-        const targetAccountId = charge.accountId ?? debitAccountId;
+        const targetAccountId = charge.accountId ?? this.ensurePurchaseChargeAccount(client, charge.type).id;
         pushLine({
           accountId: targetAccountId,
           transactionType: entryType,
@@ -1982,23 +2049,17 @@ export class DatabaseStorage implements IStorage {
           : new Date();
       this.assertPostingAllowed(client, postingDate, "purchase");
 
-      // Reverse prior ledger impact (post reversing entries for balance integrity)
+      // Remove previous ledger entries instead of posting reversals.
       const priorEntries = tx
         .select()
         .from(ledgerEntries)
         .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
         .all();
-      for (const le of priorEntries) {
-        this.postLedgerEntry(client, {
-          accountId: le.accountId,
-          transactionType: le.transactionType === "debit" ? "credit" : "debit",
-          amount: le.amount,
-          description: `Reversal Purchase ${existing.invoiceNumber}`,
-          referenceType: "purchase",
-          referenceId: id,
-          entryDate: postingDate,
-        });
-      }
+      const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
+        .run();
+      this.recomputeAccountBalances(client, affectedAccountIds);
 
       // Rollback previous stock impact
       for (const item of existing.items) {
@@ -2160,7 +2221,7 @@ export class DatabaseStorage implements IStorage {
         if (amt <= 0) continue;
         const entryType = charge.mode === "less" ? "credit" : "debit";
         const label = chargeLabel(charge.type);
-        const targetAccountId = charge.accountId ?? debitAccountId;
+        const targetAccountId = charge.accountId ?? this.ensurePurchaseChargeAccount(client, charge.type).id;
         pushLine({
           accountId: targetAccountId,
           transactionType: entryType,
@@ -2232,23 +2293,17 @@ export class DatabaseStorage implements IStorage {
       const postingDate = existing.purchaseDate ? new Date(existing.purchaseDate as any) : new Date();
       this.assertPostingAllowed(client, postingDate, "purchase");
 
-      // Reverse prior ledger impact and soft delete ledger rows
+      // Remove prior ledger entries instead of posting reversals.
       const priorEntries = tx
         .select()
         .from(ledgerEntries)
         .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
         .all();
-      for (const le of priorEntries) {
-        this.postLedgerEntry(client, {
-          accountId: le.accountId,
-          transactionType: le.transactionType === "debit" ? "credit" : "debit",
-          amount: le.amount,
-          description: `Reversal Purchase ${existing.invoiceNumber}`,
-          referenceType: "purchase",
-          referenceId: id,
-          entryDate: postingDate,
-        });
-      }
+      const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
+        .run();
+      this.recomputeAccountBalances(client, affectedAccountIds);
 
       // Rollback stock impact
       for (const item of existing.items.filter((i) => !i.deletedAt)) {
@@ -2476,8 +2531,9 @@ export class DatabaseStorage implements IStorage {
         if (line.amount === 0) continue;
         const entryType = line.amount > 0 ? "credit" : "debit";
         const amount = Math.abs(line.amount).toString();
+        const chargeAccount = this.ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER");
         pushLine({
-          accountId: revenueAccount.id,
+          accountId: chargeAccount.id,
           transactionType: entryType,
           amount,
           description: line.label,
@@ -2584,23 +2640,17 @@ export class DatabaseStorage implements IStorage {
         const postingDate = toValidDate(sale.saleDate ?? existing.saleDate);
         this.assertPostingAllowed(client, postingDate, "sale");
 
-        // Reverse prior ledger impact
-        const priorEntries = tx
-          .select()
-          .from(ledgerEntries)
-          .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
-          .all();
-        for (const le of priorEntries) {
-          this.postLedgerEntry(client, {
-            accountId: le.accountId,
-            transactionType: le.transactionType === "debit" ? "credit" : "debit",
-            amount: le.amount,
-            description: `Reversal Sale ${existing.invoiceNumber}`,
-            referenceType: "sale",
-            referenceId: id,
-            entryDate: postingDate,
-          });
-        }
+          // Remove previous ledger entries instead of posting reversals.
+          const priorEntries = tx
+            .select()
+            .from(ledgerEntries)
+            .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
+            .all();
+          const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+          tx.delete(ledgerEntries)
+            .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
+            .run();
+          this.recomputeAccountBalances(client, affectedAccountIds);
 
         // Rollback previous stock impact
         for (const item of existingItems) {
@@ -2772,18 +2822,26 @@ export class DatabaseStorage implements IStorage {
       }
       const items = await this.getSaleItems(id);
 
-      return db.transaction((tx) => {
-        const client = tx as unknown as DbClient;
-        const postingDate = toValidDate(existing.saleDate);
-        this.assertPostingAllowed(client, postingDate, "sale");
+        return db.transaction((tx) => {
+          const client = tx as unknown as DbClient;
+          const postingDate = toValidDate(existing.saleDate);
+          this.assertPostingAllowed(client, postingDate, "sale");
 
-        for (const item of items) {
-          this.updateProductStockInternal(client, item.productId, item.quantity, "add");
-        }
+          const priorEntries = tx
+            .select()
+            .from(ledgerEntries)
+            .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
+            .all();
+          const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
 
-        tx.delete(ledgerEntries).where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id))).run();
-        tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "sale"), eq(taxLedgers.sourceId, id))).run();
-        tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
+          for (const item of items) {
+            this.updateProductStockInternal(client, item.productId, item.quantity, "add");
+          }
+
+          tx.delete(ledgerEntries).where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id))).run();
+          this.recomputeAccountBalances(client, affectedAccountIds);
+          tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "sale"), eq(taxLedgers.sourceId, id))).run();
+          tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
         tx.delete(sales).where(eq(sales.id, id)).run();
 
         return true;
@@ -4016,38 +4074,23 @@ export class DatabaseStorage implements IStorage {
   async deleteReceiptVoucher(id: number): Promise<boolean> {
     const existing = await this.getReceiptVoucher(id);
     if (!existing) return false;
-    return db.transaction((tx) => {
-      const client = tx as unknown as DbClient;
-      for (const line of existing.lines) {
-        const debit = parseAmount(line.debit);
-        const credit = parseAmount(line.credit);
-        if (debit > 0) {
-          this.postLedgerEntry(client, {
-            accountId: line.accountId,
-            transactionType: "credit",
-            amount: debit.toString(),
-            description: `Reversal of voucher ${existing.voucherNumber}`,
-            referenceType: existing.voucherType === "CR" ? "receipt" : "payment",
-            referenceId: id,
-            entryDate: new Date(),
-          });
-        }
-        if (credit > 0) {
-          this.postLedgerEntry(client, {
-            accountId: line.accountId,
-            transactionType: "debit",
-            amount: credit.toString(),
-            description: `Reversal of voucher ${existing.voucherNumber}`,
-            referenceType: existing.voucherType === "CR" ? "receipt" : "payment",
-            referenceId: id,
-            entryDate: new Date(),
-          });
-        }
-      }
-      tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
-      tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
-      return true;
-    });
+      return db.transaction((tx) => {
+        const client = tx as unknown as DbClient;
+        const refType = existing.voucherType === "CR" ? "receipt" : "payment";
+        const priorEntries = tx
+          .select()
+          .from(ledgerEntries)
+          .where(and(eq(ledgerEntries.referenceType, refType), eq(ledgerEntries.referenceId, id)))
+          .all();
+        const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+        tx.delete(ledgerEntries)
+          .where(and(eq(ledgerEntries.referenceType, refType), eq(ledgerEntries.referenceId, id)))
+          .run();
+        this.recomputeAccountBalances(client, affectedAccountIds);
+        tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
+        tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
+        return true;
+      });
   }
 
   // Journal Vouchers

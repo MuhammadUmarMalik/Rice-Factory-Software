@@ -5,8 +5,15 @@ import type { PrintableDocumentPayload } from "@shared/print";
 export type PrintRequest = {
   docKey: DocKey;
   params?: Record<string, unknown>;
-  format?: "A4";
+  format?: "A4" | "A5" | "Letter" | "Legal" | "Custom";
   orientation?: "portrait" | "landscape";
+  widthMm?: number;
+  heightMm?: number;
+  marginMm?: number;
+  marginTopMm?: number;
+  marginRightMm?: number;
+  marginBottomMm?: number;
+  marginLeftMm?: number;
 };
 
 export async function fetchPrintPreview(request: PrintRequest): Promise<string> {
