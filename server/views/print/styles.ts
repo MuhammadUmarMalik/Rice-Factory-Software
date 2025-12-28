@@ -7,11 +7,19 @@ export const printStyles = `
     --bg: #ffffff;
     --soft: #f8fafc;
     --soft-strong: #f1f5f9;
+    --page-width: 210mm;
+    --page-height: 297mm;
+    --page-margin-top: 10mm;
+    --page-margin-right: 10mm;
+    --page-margin-bottom: 10mm;
+    --page-margin-left: 10mm;
+    --preview-bg: #e2e8f0;
+    --preview-scale: 1;
   }
 
   @page {
-    size: A4;
-    margin: 4mm;
+    size: var(--page-width) var(--page-height);
+    margin: var(--page-margin-top) var(--page-margin-right) var(--page-margin-bottom) var(--page-margin-left);
   }
 
   * {
@@ -39,7 +47,7 @@ export const printStyles = `
   .doc {
     position: relative;
     min-height: 100%;
-    padding: 4mm;
+    padding: var(--page-margin-top) var(--page-margin-right) var(--page-margin-bottom) var(--page-margin-left);
   }
 
   .header {
@@ -223,9 +231,9 @@ export const printStyles = `
 
   .footer {
     position: fixed;
-    bottom: 4mm;
-    left: 4mm;
-    right: 4mm;
+    bottom: var(--page-margin-bottom);
+    left: var(--page-margin-left);
+    right: var(--page-margin-right);
     font-size: 10px;
     color: var(--muted);
     display: flex;
@@ -248,13 +256,52 @@ export const printStyles = `
 
   .page-break {
     page-break-after: always;
+    break-after: page;
+  }
+
+  .no-break,
+  .no-break * {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .page {
+    position: relative;
+    width: var(--page-width);
+    min-height: var(--page-height);
+    margin: 0 auto;
+    background: var(--bg);
+  }
+
+  @media print {
+    .page {
+      transform: none;
+      box-shadow: none;
+    }
+  }
+
+  @media screen {
+    body {
+      background: var(--preview-bg);
+    }
+
+    .page {
+      margin: 16px auto;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+      transform: scale(var(--preview-scale));
+      transform-origin: top center;
+    }
+
+    .footer {
+      position: absolute;
+    }
   }
 `;
 
 export const dayBookStyles = `
   @page {
-    size: A4;
-    margin: 4mm;
+    size: var(--page-width) var(--page-height);
+    margin: var(--page-margin-top) var(--page-margin-right) var(--page-margin-bottom) var(--page-margin-left);
   }
 
   * {
@@ -263,62 +310,82 @@ export const dayBookStyles = `
 
   html,
   body {
-    font-family: "Arial", "Helvetica", sans-serif;
-    color: #111111;
-    background: #ffffff;
+    font-family: "Cambria", "Times New Roman", serif;
+    color: var(--ink);
+    background: var(--bg);
     margin: 0;
     padding: 0;
-    font-size: 11px;
-    line-height: 1.35;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .page {
+    position: relative;
+    width: var(--page-width);
+    min-height: var(--page-height);
+    margin: 0 auto;
+    background: var(--bg);
   }
 
   .doc {
     width: 100%;
+    padding: var(--page-margin-top) var(--page-margin-right) var(--page-margin-bottom) var(--page-margin-left);
   }
 
   .company-line {
-    text-align: center;
+    text-align: left;
     font-weight: 700;
-    margin-bottom: 4px;
+    font-size: 16px;
+    margin-bottom: 6px;
   }
 
   .title-bar {
-    border: 2px solid #111111;
-    background: #c9c9c9;
-    text-align: center;
+    border: 1px solid var(--border);
+    background: var(--soft-strong);
+    text-align: left;
     font-weight: 700;
-    padding: 4px 6px;
-    margin-bottom: 4px;
+    padding: 6px 10px;
+    margin-bottom: 6px;
     font-size: 14px;
-    letter-spacing: 0.2px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
   }
 
   .print-line {
-    border: 1px solid #111111;
-    padding: 3px 6px;
-    margin-bottom: 4px;
-    font-size: 10.5px;
+    border: 1px solid var(--border);
+    background: var(--soft);
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--muted);
   }
 
   table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
+    margin-bottom: 8px;
   }
 
   thead th {
-    background: #d6d6d6;
-    border: 1px solid #111111;
-    padding: 4px 4px;
+    background: var(--soft-strong);
+    border: 1px solid var(--border);
+    padding: 7px 6px;
     font-weight: 700;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  thead {
+    display: table-header-group;
+  }
 
   tbody td {
-    border: 1px solid #111111;
-    padding: 4px 4px;
+    border: 1px solid var(--border);
+    padding: 7px 6px;
     vertical-align: top;
     white-space: nowrap;
     overflow: hidden;
@@ -327,6 +394,7 @@ export const dayBookStyles = `
 
   tbody tr {
     page-break-inside: avoid;
+    break-inside: avoid;
   }
 
   .align-right {
@@ -339,6 +407,19 @@ export const dayBookStyles = `
 
   .totals-row td {
     font-weight: 700;
-    background: #efefef;
+    background: #e5e7eb;
+  }
+
+  @media screen {
+    body {
+      background: #e2e8f0;
+    }
+
+    .page {
+      margin: 16px auto;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+      transform: scale(var(--preview-scale));
+      transform-origin: top center;
+    }
   }
 `;

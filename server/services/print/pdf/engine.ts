@@ -1,7 +1,14 @@
-import type { PrintOrientation } from "../types";
+import type { PrintFormat, PrintOrientation } from "../types";
 
 type PdfOptions = {
   orientation: PrintOrientation;
+  format: PrintFormat;
+  widthMm?: number;
+  heightMm?: number;
+  marginTopMm: number;
+  marginRightMm: number;
+  marginBottomMm: number;
+  marginLeftMm: number;
 };
 
 let browserPromise: Promise<import("playwright").Browser> | null = null;
@@ -28,11 +35,30 @@ export async function renderPdf(html: string, options: PdfOptions): Promise<Buff
     </div>
   `;
 
+  const safeMarginTop = Math.max(options.marginTopMm, 4);
+  const safeMarginRight = Math.max(options.marginRightMm, 4);
+  const safeMarginBottom = Math.max(options.marginBottomMm, 4);
+  const safeMarginLeft = Math.max(options.marginLeftMm, 4);
+  const useCustomSize =
+    options.format === "Custom" && Number.isFinite(options.widthMm) && Number.isFinite(options.heightMm);
+  const customWidth = Number(options.widthMm || 0);
+  const customHeight = Number(options.heightMm || 0);
+  const customSize = {
+    width: options.orientation === "landscape" ? customHeight : customWidth,
+    height: options.orientation === "landscape" ? customWidth : customHeight,
+  };
   const pdf = await page.pdf({
-    format: "A4",
-    landscape: options.orientation === "landscape",
+    format: useCustomSize ? undefined : options.format,
+    width: useCustomSize ? `${customSize.width}mm` : undefined,
+    height: useCustomSize ? `${customSize.height}mm` : undefined,
+    landscape: useCustomSize ? false : options.orientation === "landscape",
     printBackground: true,
-    margin: { top: "14mm", bottom: "16mm", left: "12mm", right: "12mm" },
+    margin: {
+      top: `${safeMarginTop}mm`,
+      bottom: `${safeMarginBottom}mm`,
+      left: `${safeMarginLeft}mm`,
+      right: `${safeMarginRight}mm`,
+    },
     displayHeaderFooter: true,
     footerTemplate: footer,
     headerTemplate: `<div></div>`,
@@ -41,4 +67,3 @@ export async function renderPdf(html: string, options: PdfOptions): Promise<Buff
   await page.close();
   return Buffer.from(pdf);
 }
-

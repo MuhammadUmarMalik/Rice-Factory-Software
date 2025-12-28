@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import type { PrintableDocumentPayload, PrintableTableColumn } from "@shared/print";
+import type { PrintFormat, PrintOrientation } from "../../services/print/types";
 import { dayBookStyles } from "./styles";
 
 function escapeHtml(value: unknown) {
@@ -27,7 +28,33 @@ function formatPrintedDate(value?: string) {
   }
 }
 
-export function renderDayBookHtml(payload: PrintableDocumentPayload) {
+type PrintPageOptions = {
+  format: PrintFormat;
+  orientation: PrintOrientation;
+  widthMm?: number;
+  heightMm?: number;
+  marginTopMm: number;
+  marginRightMm: number;
+  marginBottomMm: number;
+  marginLeftMm: number;
+};
+
+function resolvePageSize(options: PrintPageOptions) {
+  const formats: Record<Exclude<PrintFormat, "Custom">, { width: number; height: number }> = {
+    A4: { width: 210, height: 297 },
+    A5: { width: 148, height: 210 },
+    Letter: { width: 216, height: 279 },
+    Legal: { width: 216, height: 356 },
+  };
+  const base = options.format === "Custom"
+    ? { width: options.widthMm || 210, height: options.heightMm || 297 }
+    : formats[options.format];
+  const width = options.orientation === "landscape" ? base.height : base.width;
+  const height = options.orientation === "landscape" ? base.width : base.height;
+  return { widthMm: `${width}mm`, heightMm: `${height}mm` };
+}
+
+export function renderDayBookHtml(payload: PrintableDocumentPayload, options: PrintPageOptions) {
   const meta = payload.meta;
   const dateFrom = meta?.dateFrom || "";
   const dateTo = meta?.dateTo || "";
@@ -84,6 +111,7 @@ export function renderDayBookHtml(payload: PrintableDocumentPayload) {
         </tr>
       `
       : "";
+  const pageSize = resolvePageSize(options);
 
   return `
 <!DOCTYPE html>
@@ -92,14 +120,26 @@ export function renderDayBookHtml(payload: PrintableDocumentPayload) {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>${escapeHtml(payload.title)}</title>
-    <style>${dayBookStyles}</style>
+    <style>
+      :root {
+        --page-width: ${pageSize.widthMm};
+        --page-height: ${pageSize.heightMm};
+        --page-margin-top: ${options.marginTopMm}mm;
+        --page-margin-right: ${options.marginRightMm}mm;
+        --page-margin-bottom: ${options.marginBottomMm}mm;
+        --page-margin-left: ${options.marginLeftMm}mm;
+      }
+      ${dayBookStyles}
+    </style>
   </head>
   <body>
-    <div class="doc">
-      <div class="company-line">${escapeHtml(companyLine)}${escapeHtml(phoneSuffix)}</div>
-      <div class="title-bar">DAY BOOK${rangeLabel ? ` (${escapeHtml(rangeLabel)})` : ""}</div>
-      <div class="print-line">Printing Date: ${escapeHtml(formatPrintedDate(meta?.createdAt))}</div>
-      ${table ? `<table>${header}<tbody>${rows}${totalsRow}</tbody></table>` : ""}
+    <div class="page">
+      <div class="doc">
+        <div class="company-line">${escapeHtml(companyLine)}${escapeHtml(phoneSuffix)}</div>
+        <div class="title-bar">DAY BOOK${rangeLabel ? ` (${escapeHtml(rangeLabel)})` : ""}</div>
+        <div class="print-line">Printing Date: ${escapeHtml(formatPrintedDate(meta?.createdAt))}</div>
+        ${table ? `<table>${header}<tbody>${rows}${totalsRow}</tbody></table>` : ""}
+      </div>
     </div>
   </body>
 </html>

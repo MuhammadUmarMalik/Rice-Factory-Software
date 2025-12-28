@@ -15,6 +15,7 @@ process.env.PORT = String(port);
 let serverStarted = false;
 const serverWaitTimeoutMs = parseInt(process.env.SERVER_WAIT_TIMEOUT_MS || "90000", 10);
 let splashWindow = null;
+let quitTimer = null;
 
 if (!isDev || process.env.DISABLE_GPU === "true") {
   app.disableHardwareAcceleration();
@@ -305,5 +306,10 @@ app.on("activate", () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
+    if (!quitTimer) {
+      quitTimer = setTimeout(() => {
+        app.exit(0);
+      }, 3000);
+    }
   }
 });
