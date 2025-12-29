@@ -28,11 +28,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { useReportDetail } from "@/components/report-detail-hook";
 
 const DashboardCharts = lazy(() => import("@/components/dashboard/DashboardCharts").then((mod) => ({
   default: mod.DashboardCharts,
 })));
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
 
 type DashboardSummary = {
   filters: { fromDate: string; toDate: string; fiscalYearId?: number | null };
@@ -264,7 +269,7 @@ export default function Dashboard() {
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
-      <div className={`flex items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
+      <div className={`flex min-h-[72px] items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("dashboard")}</h1>
           <p className="text-sm text-muted-foreground">
@@ -328,7 +333,7 @@ export default function Dashboard() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat, index) => (
           <Link key={index} href={stat.href}>
-            <Card className="cursor-pointer hover:shadow-sm" data-testid={`card-stat-${index}`}>
+            <Card className="min-h-[120px] cursor-pointer hover:shadow-sm" data-testid={`card-stat-${index}`}>
               <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
                 <CardTitle className="text-sm font-medium text-muted-foreground">
                   {stat.title}
@@ -354,7 +359,7 @@ export default function Dashboard() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {kpiCards.map((stat, index) => (
           <Link key={index} href={stat.href}>
-            <Card className="cursor-pointer hover:shadow-sm" data-testid={`card-kpi-${index}`}>
+            <Card className="min-h-[120px] cursor-pointer hover:shadow-sm" data-testid={`card-kpi-${index}`}>
               <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
                 <CardTitle className="text-sm font-medium text-muted-foreground">
                   {stat.title}
@@ -651,13 +656,17 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <ReportDetailDialog
-        reference={reference}
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={detailLoading}
-      />
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={detailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

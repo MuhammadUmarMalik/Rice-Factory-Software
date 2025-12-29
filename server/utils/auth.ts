@@ -3,7 +3,11 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { storage } from "../models/storage";
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || "dev-secret";
+const isProduction = process.env.NODE_ENV === "production";
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || (isProduction ? "" : "dev-secret");
+if (isProduction && !JWT_SECRET) {
+  throw new Error("JWT_SECRET or SESSION_SECRET must be set in production.");
+}
 const JWT_ISSUER = "mill-manager";
 const JWT_AUDIENCE = "mill-manager-ui";
 const HASH_PREFIX = "pbkdf2";

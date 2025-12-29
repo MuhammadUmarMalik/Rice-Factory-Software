@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { Plus, Eye, Truck, FileText, Pencil, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { useReportDetail } from "@/components/report-detail-hook";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +37,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import type { Sale, Account, Product } from "@shared/schema";
 import { format } from "date-fns";
+
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
 
 const saleFormSchema = z.object({
   customerId: z.string().min(1, "Customer is required"),
@@ -715,13 +721,17 @@ export default function SalesPage() {
         </DialogContent>
       </Dialog>
 
-      <ReportDetailDialog
-        reference={reference}
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={isDetailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

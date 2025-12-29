@@ -7,6 +7,7 @@ import {
 } from "../schemas/receipts.schema";
 import * as receiptsService from "../services/receipts.service";
 import { notifyUsers } from "../utils/notifications";
+import { parseRequiredInt } from "../utils/parse";
 
 export async function listReceipts(_req: Request, res: Response) {
   try {
@@ -31,7 +32,8 @@ export async function getNextReceiptNumber(req: Request, res: Response) {
 
 export async function getReceipt(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const voucher = await receiptsService.getReceipt(id);
     if (!voucher || voucher.voucherType != "CR") return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
@@ -69,7 +71,8 @@ export async function createReceipt(req: Request, res: Response) {
 
 export async function updateReceipt(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const current = await receiptsService.getReceipt(id);
     if (!current || current.voucherType != "CR") {
       return res.status(404).json({ error: "Voucher not found" });
@@ -94,7 +97,8 @@ export async function updateReceipt(req: Request, res: Response) {
 
 export async function deleteReceipt(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const current = await receiptsService.getReceipt(id);
     if (!current || current.voucherType != "CR") {
       return res.status(404).json({ error: "Voucher not found" });

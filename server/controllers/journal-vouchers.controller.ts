@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { journalVoucherInputSchema } from "../schemas/journal.schema";
 import * as journalService from "../services/journal-vouchers.service";
+import { parseOptionalInt, parseRequiredInt } from "../utils/parse";
 
 export async function listJournalVouchers(_req: Request, res: Response) {
   try {
@@ -25,7 +26,8 @@ export async function getNextJournalNumber(_req: Request, res: Response) {
 
 export async function getJournalVoucher(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const voucher = await journalService.getJournalVoucher(id);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
@@ -54,7 +56,8 @@ export async function createJournalVoucher(req: Request, res: Response) {
 
 export async function updateJournalVoucher(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const parsed = journalVoucherInputSchema.parse(req.body);
     const voucher = await journalService.updateJournalVoucher(id, parsed);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
@@ -73,9 +76,9 @@ export async function updateJournalVoucher(req: Request, res: Response) {
 
 export async function approveJournalVoucher(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
-    const approverIdRaw = req.body?.approvedBy;
-    const approverId = approverIdRaw ? parseInt(approverIdRaw) : undefined;
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
+    const approverId = parseOptionalInt(req.body?.approvedBy);
     const voucher = await journalService.approveJournalVoucher(id, approverId);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
@@ -90,7 +93,8 @@ export async function approveJournalVoucher(req: Request, res: Response) {
 
 export async function deleteJournalVoucher(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const ok = await journalService.deleteJournalVoucher(id);
     if (!ok) return res.status(404).json({ error: "Voucher not found" });
     res.status(204).send();

@@ -70,6 +70,7 @@ export function Header({ title }: HeaderProps) {
             placeholder={t("search")}
             className={`w-64 ${isRTL ? "pr-9 pl-4 font-urdu text-right" : "pl-9 pr-4"}`}
             data-testid="input-search"
+            aria-label={t("search")}
           />
         </div>
 
@@ -80,6 +81,7 @@ export function Header({ title }: HeaderProps) {
               variant="ghost"
               data-testid="button-notifications"
               className="relative"
+              aria-label="Notifications"
             >
               <Bell className="h-4 w-4" />
               {unreadCount > 0 && (
@@ -129,6 +131,7 @@ export function Header({ title }: HeaderProps) {
               size="icon" 
               variant="ghost"
               data-testid="button-language-toggle"
+              aria-label="Change language"
             >
               <Globe className="h-4 w-4" />
             </Button>
@@ -158,6 +161,7 @@ export function Header({ title }: HeaderProps) {
           variant="ghost" 
           onClick={toggleTheme}
           data-testid="button-theme-toggle"
+          aria-label="Toggle theme"
         >
           {theme === "light" ? (
             <Moon className="h-4 w-4" />

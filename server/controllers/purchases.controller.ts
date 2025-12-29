@@ -8,6 +8,7 @@ import {
 import * as purchasesService from "../services/purchases.service";
 import { getUserId } from "../utils/auth";
 import { notifyUsers } from "../utils/notifications";
+import { parseRequiredInt } from "../utils/parse";
 
 export async function getNextBillNumber(_req: Request, res: Response) {
   try {
@@ -31,7 +32,8 @@ export async function listPurchases(req: Request, res: Response) {
 
 export async function getPurchase(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid purchase id" });
     const purchase = await purchasesService.getPurchase(id);
     if (!purchase) {
       return res.status(404).json({ error: "Purchase not found" });
@@ -76,7 +78,8 @@ export async function createPurchase(req: Request, res: Response) {
 
 export async function updatePurchase(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid purchase id" });
     const { items, charges, ...purchaseBody } = req.body;
     const data = purchaseInputSchema.partial().parse(purchaseBody);
     const parsedItems = items ? purchaseItemsSchema.parse(items) : [];
@@ -105,7 +108,8 @@ export async function updatePurchase(req: Request, res: Response) {
 
 export async function deletePurchase(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid purchase id" });
     const ok = await purchasesService.deletePurchase(id, getUserId(req));
     if (!ok) return res.status(404).json({ error: "Purchase not found" });
     res.json({ success: true, message: "Purchase deleted successfully" });

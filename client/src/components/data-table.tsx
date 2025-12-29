@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Table,
   TableBody,
@@ -50,20 +50,31 @@ export function DataTable<T extends Record<string, any>>({
   const { t, isRTL, language } = useLanguage();
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  // Debounce to avoid re-filtering on every keystroke for large datasets.
+  const debouncedQuery = useDebouncedValue(searchQuery, 200);
 
-  const filteredData = searchable
-    ? data.filter((item) =>
-        Object.values(item).some((value) =>
-          String(value).toLowerCase().includes(searchQuery.toLowerCase())
-        )
-      )
-    : data;
+  const filteredData = useMemo(() => {
+    if (!searchable) return data;
+    const q = debouncedQuery.trim().toLowerCase();
+    if (!q) return data;
+    // Next step for very large datasets: move filtering to a Web Worker or server-side pagination.
+    return data.filter((item) =>
+      Object.values(item).some((value) => String(value).toLowerCase().includes(q)),
+    );
+  }, [data, searchable, debouncedQuery]);
 
   const totalPages = Math.ceil(filteredData.length / pageSize);
-  const paginatedData = filteredData.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
+  const paginatedData = useMemo(
+    () => filteredData.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [filteredData, currentPage, pageSize],
   );
+
+  useEffect(() => {
+    // Clamp to a valid page when filters shrink the dataset.
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(1);
+    }
+  }, [currentPage, totalPages]);
 
   const getCellValue = (item: T, column: Column<T>, index: number) => {
     if (column.render) {
@@ -203,4 +214,13 @@ export function DataTable<T extends Record<string, any>>({
       )}
     </div>
   );
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const handle = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(handle);
+  }, [value, delayMs]);
+  return debounced;
 }

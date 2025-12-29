@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { Download, ShoppingCart, Truck, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Account, Product } from "@shared/schema";
 import { format } from "date-fns";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import {
@@ -20,6 +20,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
 
 type PurchaseReportRow = {
   id: number;
@@ -340,13 +346,17 @@ export default function PurchaseReportPage() {
         </CardContent>
       </Card>
 
-      <ReportDetailDialog
-        reference={reference}
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={isDetailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { insertAccountSchema } from "@shared/schema";
 import * as accountsService from "../services/accounts.service";
+import { parseRequiredInt } from "../utils/parse";
 
 export async function listAccounts(req: Request, res: Response) {
   try {
@@ -16,7 +17,10 @@ export async function listAccounts(req: Request, res: Response) {
 
 export async function getAccount(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) {
+      return res.status(400).json({ error: "Invalid account id" });
+    }
     const account = await accountsService.getAccount(id);
     if (!account) {
       return res.status(404).json({ error: "Account not found" });
@@ -44,7 +48,10 @@ export async function createAccount(req: Request, res: Response) {
 
 export async function updateAccount(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) {
+      return res.status(400).json({ error: "Invalid account id" });
+    }
     const data = insertAccountSchema.partial().parse(req.body);
     const account = await accountsService.updateAccount(id, data);
     if (!account) {

@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import * as periodLocksService from "../services/period-locks.service";
-import { parseOptionalInt, parseRequiredDate } from "../utils/parse";
+import { parseOptionalInt, parseRequiredDate, parseRequiredInt } from "../utils/parse";
 
 export async function listPeriodLocks(_req: Request, res: Response) {
   try {
@@ -28,7 +28,8 @@ export async function createPeriodLock(req: Request, res: Response) {
 
 export async function deletePeriodLock(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid period lock id" });
     const ok = await periodLocksService.deletePeriodLock(id);
     res.json({ success: ok });
   } catch (error) {

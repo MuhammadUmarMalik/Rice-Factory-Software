@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/data-table";
 import { Input } from "@/components/ui/input";
@@ -13,10 +13,16 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
 import { format } from "date-fns";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
 
 type OutstandingSupplierRow = {
   purchaseId: number;
@@ -164,13 +170,17 @@ export default function OutstandingSuppliersPage() {
         </CardContent>
       </Card>
 
-      <ReportDetailDialog
-        reference={reference}
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={isDetailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

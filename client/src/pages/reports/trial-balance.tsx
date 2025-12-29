@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { Download, Users, Wallet, ArrowUpRight, ArrowDownRight, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,11 +7,17 @@ import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import type { Account } from "@shared/schema";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
 
 type TrialBalanceRow = {
   account: Account;
@@ -250,13 +256,17 @@ export default function TrialBalancePage() {
         </CardContent>
       </Card>
 
-      <ReportDetailDialog
-        reference={reference}
-        open={!!reference}
-        onOpenChange={(open: boolean) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open: boolean) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={isDetailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

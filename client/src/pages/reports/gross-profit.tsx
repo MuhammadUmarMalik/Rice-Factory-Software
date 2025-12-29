@@ -1,14 +1,20 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import { DataTable, type Column } from "@/components/data-table";
-import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+import { useReportDetail } from "@/components/report-detail-hook";
 import { format } from "date-fns";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
 
 type GrossProfitReport = {
   netSales: string;
@@ -138,13 +144,17 @@ export default function GrossProfitPage() {
         </Card>
       )}
 
-      <ReportDetailDialog
-        reference={reference}
-        open={!!reference}
-        onOpenChange={(open) => (!open ? closeDetail() : null)}
-        detail={detail || null}
-        isLoading={isDetailLoading}
-      />
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={isDetailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

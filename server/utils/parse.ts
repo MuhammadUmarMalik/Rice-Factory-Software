@@ -17,3 +17,12 @@ export function parseOptionalInt(value: unknown): number | undefined {
   const n = typeof value == "string" ? parseInt(value, 10) : Number(value);
   return Number.isFinite(n) ? n : undefined;
 }
+
+export function parseRequiredInt(value: unknown, label: string): number | undefined {
+  if (value == undefined || value == null || value === "") return undefined;
+  const n = typeof value === "string" ? parseInt(value, 10) : Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  if (!Number.isInteger(n)) return undefined;
+  if (n < 0) return undefined;
+  return n;
+}
