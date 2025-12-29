@@ -15,6 +15,7 @@ const httpServer = createServer(app);
 const MemoryStore = createMemoryStore(session);
 const isProduction = process.env.NODE_ENV === "production";
 const sessionSecret = process.env.SESSION_SECRET || process.env.JWT_SECRET;
+const forceHttps = process.env.FORCE_HTTPS === "true";
 
 if (isProduction && !sessionSecret) {
   throw new Error("SESSION_SECRET or JWT_SECRET must be set in production.");
@@ -28,12 +29,23 @@ declare module "http" {
 
 app.disable("x-powered-by");
 app.use(compression());
+app.set("etag", "weak");
 app.use(
   helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
   }),
 );
+
+if (isProduction && forceHttps) {
+  app.use((req, res, next) => {
+    const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
+    if (proto === "https") return next();
+    const host = req.headers.host;
+    if (!host) return res.status(400).json({ message: "Invalid host" });
+    return res.redirect(301, `https://${host}${req.originalUrl}`);
+  });
+}
 
 const corsOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
@@ -87,6 +99,14 @@ const authLimiter = rateLimit({
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/bootstrap", authLimiter);
 
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api", apiLimiter);
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -112,6 +132,21 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api")) return next();
+  if (req.method === "GET") {
+    if (req.path.startsWith("/api/auth")) {
+      res.setHeader("Cache-Control", "no-store");
+      return next();
+    }
+    res.setHeader("Cache-Control", "private, max-age=60, stale-while-revalidate=30");
+    res.setHeader("Vary", "Authorization, Accept-Encoding");
+    return next();
+  }
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 (async () => {
   await ensureDesktopAdmin();
   await registerRoutes(httpServer, app);
@@ -121,7 +156,10 @@ app.use((req, res, next) => {
     const message = err.message || "Internal Server Error";
 
     console.error(err);
-    res.status(status).json({ message });
+    if (isProduction && status >= 500) {
+      return res.status(status).json({ message: "Internal Server Error" });
+    }
+    return res.status(status).json({ message });
   });
 
   // importantly only setup vite in development and after

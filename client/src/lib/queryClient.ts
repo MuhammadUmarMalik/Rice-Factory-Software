@@ -36,7 +36,7 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const token = useAuthStore.getState().token;
     const res = await fetch(queryKey.join("/") as string, {
-      cache: "no-store",
+      cache: "no-cache",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       credentials: "include",
     });

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { insertEmployeeSchema, insertEmployeeSalaryStructureSchema } from "@shared/schema";
 import * as employeesService from "../services/employees.service";
 import { getUserId } from "../utils/auth";
+import { parseRequiredInt } from "../utils/parse";
 
 export async function listEmployees(req: Request, res: Response) {
   try {
@@ -16,7 +17,8 @@ export async function listEmployees(req: Request, res: Response) {
 
 export async function getEmployee(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid employee id" });
     const row = await employeesService.getEmployee(id);
     if (!row) return res.status(404).json({ error: "Employee not found" });
     res.json(row);
@@ -40,7 +42,8 @@ export async function createEmployee(req: Request, res: Response) {
 
 export async function updateEmployee(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid employee id" });
     const data = insertEmployeeSchema.partial().parse(req.body);
     const updated = await employeesService.updateEmployee(id, data);
     if (!updated) return res.status(404).json({ error: "Employee not found" });
@@ -54,7 +57,8 @@ export async function updateEmployee(req: Request, res: Response) {
 
 export async function getSalaryStructures(req: Request, res: Response) {
   try {
-    const employeeId = parseInt(req.params.id, 10);
+    const employeeId = parseRequiredInt(req.params.id, "id");
+    if (employeeId === undefined) return res.status(400).json({ error: "Invalid employee id" });
     const rows = await employeesService.getSalaryStructures(employeeId);
     res.json(rows);
   } catch (error) {
@@ -65,7 +69,8 @@ export async function getSalaryStructures(req: Request, res: Response) {
 
 export async function createSalaryStructure(req: Request, res: Response) {
   try {
-    const employeeId = parseInt(req.params.id, 10);
+    const employeeId = parseRequiredInt(req.params.id, "id");
+    if (employeeId === undefined) return res.status(400).json({ error: "Invalid employee id" });
     const body = insertEmployeeSalaryStructureSchema.omit({ employeeId: true }).parse({
       ...req.body,
       effectiveFrom: req.body?.effectiveFrom ? new Date(req.body.effectiveFrom) : undefined,
@@ -81,8 +86,11 @@ export async function createSalaryStructure(req: Request, res: Response) {
 
 export async function updateSalaryStructure(req: Request, res: Response) {
   try {
-    const employeeId = parseInt(req.params.id, 10);
-    const structureId = parseInt(req.params.structureId, 10);
+    const employeeId = parseRequiredInt(req.params.id, "id");
+    const structureId = parseRequiredInt(req.params.structureId, "structureId");
+    if (employeeId === undefined || structureId === undefined) {
+      return res.status(400).json({ error: "Invalid salary structure id" });
+    }
     const body = insertEmployeeSalaryStructureSchema
       .omit({ employeeId: true })
       .partial()
@@ -102,8 +110,11 @@ export async function updateSalaryStructure(req: Request, res: Response) {
 
 export async function deleteSalaryStructure(req: Request, res: Response) {
   try {
-    const employeeId = parseInt(req.params.id, 10);
-    const structureId = parseInt(req.params.structureId, 10);
+    const employeeId = parseRequiredInt(req.params.id, "id");
+    const structureId = parseRequiredInt(req.params.structureId, "structureId");
+    if (employeeId === undefined || structureId === undefined) {
+      return res.status(400).json({ error: "Invalid salary structure id" });
+    }
     const deleted = await employeesService.deleteSalaryStructure(employeeId, structureId);
     if (!deleted) return res.status(404).json({ error: "Salary structure not found" });
     res.json({ success: true });

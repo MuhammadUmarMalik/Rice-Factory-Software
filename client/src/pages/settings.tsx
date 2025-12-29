@@ -36,6 +36,48 @@ type SettingsPayload = {
   shortcuts?: ShortcutConfig;
 };
 
+const MAX_LOGO_SIZE = 512;
+
+const loadImage = (file: File) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load image"));
+    };
+    img.src = url;
+  });
+
+const resizeLogo = async (file: File) => {
+  const img = await loadImage(file);
+  const scale = Math.min(1, MAX_LOGO_SIZE / Math.max(img.width, img.height));
+  const width = Math.max(1, Math.round(img.width * scale));
+  const height = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, width, height);
+  const webp = canvas.toDataURL("image/webp", 0.9);
+  if (webp.startsWith("data:image/webp")) return webp;
+  return canvas.toDataURL(file.type || "image/png", 0.92);
+};
+
+const shortcutFields: Array<{ key: keyof ShortcutConfig; label: string; hint: string }> = [
+  { key: "toggleSidebar", label: "Toggle sidebar", hint: "Ctrl+B" },
+  { key: "printPreview", label: "Print preview", hint: "Ctrl+P" },
+  { key: "downloadPdf", label: "Download PDF", hint: "Ctrl+Shift+P" },
+  { key: "newDialog", label: "New dialog", hint: "Ctrl+N" },
+  { key: "saveDialog", label: "Save dialog", hint: "Ctrl+Enter" },
+  { key: "addLine", label: "Add line item", hint: "Ctrl+Shift+N" },
+];
+
 const defaultSettings: SettingsPayload = {
   businessName: "Rice Mill Enterprise",
   businessNameUrdu: "چاول مل ادارہ",
@@ -122,22 +164,14 @@ export default function SettingsPage() {
       toast({ title: "Invalid file", description: "Please select an image file.", variant: "destructive" });
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      if (result) setLogoUrl(result);
-    };
-    reader.readAsDataURL(file);
+    resizeLogo(file)
+      .then((result) => {
+        if (result) setLogoUrl(result);
+      })
+      .catch(() => {
+        toast({ title: "Logo error", description: "Unable to process logo image.", variant: "destructive" });
+      });
   };
-
-  const shortcutFields: Array<{ key: keyof ShortcutConfig; label: string; hint: string }> = [
-    { key: "toggleSidebar", label: "Toggle sidebar", hint: "Ctrl+B" },
-    { key: "printPreview", label: "Print preview", hint: "Ctrl+P" },
-    { key: "downloadPdf", label: "Download PDF", hint: "Ctrl+Shift+P" },
-    { key: "newDialog", label: "New dialog", hint: "Ctrl+N" },
-    { key: "saveDialog", label: "Save dialog", hint: "Ctrl+Enter" },
-    { key: "addLine", label: "Add line item", hint: "Ctrl+Shift+N" },
-  ];
 
   const updateShortcut = (key: keyof ShortcutConfig, value: string) => {
     setShortcuts((prev) => ({ ...prev, [key]: value }));
@@ -254,6 +288,8 @@ export default function SettingsPage() {
                       src={logoUrl}
                       alt="Company logo preview"
                       className="h-12 w-12 rounded border object-contain bg-white"
+                      width={48}
+                      height={48}
                     />
                     <span className="text-xs text-muted-foreground">
                       {language === "ur" ? "پیش نظارہ" : "Preview"}

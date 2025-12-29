@@ -153,7 +153,8 @@ export function AppSidebar() {
   }, [isReportsRoute]);
 
   return (
-    <Sidebar>
+    <nav aria-label="Primary">
+      <Sidebar>
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -347,11 +348,13 @@ export function AppSidebar() {
             className="h-8 w-8"
             data-testid="button-logout"
             onClick={handleLogout}
+            aria-label="Log out"
           >
             <LogOut className="h-4 w-4" />
           </SidebarMenuButton>
         </div>
       </SidebarFooter>
-    </Sidebar>
+      </Sidebar>
+    </nav>
   );
 }

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { payrollMonthSchema, payrollPaymentSchema } from "../schemas/payroll.schema";
 import * as payrollService from "../services/payroll.service";
 import { getUserId, getUserRole } from "../utils/auth";
-import { parseOptionalDate, parseOptionalInt } from "../utils/parse";
+import { parseOptionalDate, parseOptionalInt, parseRequiredInt } from "../utils/parse";
 
 export async function listPayrolls(req: Request, res: Response) {
   try {
@@ -35,7 +35,8 @@ export async function generatePayroll(req: Request, res: Response) {
 
 export async function approvePayroll(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid payroll id" });
     const postingDate = parseOptionalDate(req.body?.postingDate);
     const updated = await payrollService.approvePayroll(
       id,
@@ -52,7 +53,8 @@ export async function approvePayroll(req: Request, res: Response) {
 
 export async function paySalary(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid payroll id" });
     const payload = payrollPaymentSchema.parse(req.body);
     const paymentDate = parseOptionalDate(payload.paymentDate);
     const updated = await payrollService.paySalary(
@@ -71,7 +73,8 @@ export async function paySalary(req: Request, res: Response) {
 
 export async function getPayrollAudit(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid payroll id" });
     const rows = await payrollService.getPayrollAudit(id);
     res.json(rows);
   } catch (error) {

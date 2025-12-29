@@ -4,6 +4,7 @@ import { insertSaleSchema } from "@shared/schema";
 import { saleItemsSchema } from "../schemas/sales.schema";
 import * as salesService from "../services/sales.service";
 import { notifyLowStock, notifyUsers } from "../utils/notifications";
+import { parseRequiredInt } from "../utils/parse";
 
 export async function listSales(req: Request, res: Response) {
   try {
@@ -17,7 +18,8 @@ export async function listSales(req: Request, res: Response) {
 
 export async function getSale(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid sale id" });
     const sale = await salesService.getSale(id);
     if (!sale) {
       return res.status(404).json({ error: "Sale not found" });
@@ -58,7 +60,8 @@ export async function createSale(req: Request, res: Response) {
 
 export async function updateSale(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid sale id" });
     const existing = await salesService.getSale(id);
     if (!existing) {
       return res.status(404).json({ error: "Sale not found" });
@@ -83,7 +86,8 @@ export async function updateSale(req: Request, res: Response) {
 
 export async function deleteSale(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid sale id" });
     const ok = await salesService.deleteSale(id);
     if (!ok) return res.status(404).json({ error: "Sale not found" });
     res.status(204).send();

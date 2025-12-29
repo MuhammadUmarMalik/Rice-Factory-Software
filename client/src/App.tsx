@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -7,12 +7,18 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { LanguageProvider } from "@/contexts/language-context";
 import { ThemeProvider } from "@/contexts/theme-context";
-import { AppSidebar } from "@/components/app-sidebar";
-import { Header } from "@/components/header";
+const AppSidebar = lazy(() =>
+  import("@/components/app-sidebar").then((mod) => ({ default: mod.AppSidebar })),
+);
+const Header = lazy(() =>
+  import("@/components/header").then((mod) => ({ default: mod.Header })),
+);
 import { useLanguage } from "@/contexts/language-context";
 import { useAuthStore } from "@/stores/auth.store";
 import { fetchWithAuth } from "@/lib/authFetch";
-import { ShortcutManager } from "@/components/shortcut-manager";
+const ShortcutManager = lazy(() =>
+  import("@/components/shortcut-manager").then((mod) => ({ default: mod.ShortcutManager })),
+);
 
 const LoginPage = lazy(() => import("@/pages/login"));
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -138,10 +144,13 @@ function App() {
     if (user && location === "/login") setLocation("/");
   }, [authChecked, user, location, setLocation]);
 
-  const sidebarStyle = {
-    "--sidebar-width": "16rem",
-    "--sidebar-width-icon": "3rem",
-  };
+  const sidebarStyle = useMemo(
+    () => ({
+      "--sidebar-width": "16rem",
+      "--sidebar-width-icon": "3rem",
+    }),
+    [],
+  );
 
   const Shell = ({ children }: { children: React.ReactNode }) => {
     const { isRTL } = useLanguage();
@@ -157,6 +166,12 @@ function App() {
       <ThemeProvider>
         <LanguageProvider>
           <TooltipProvider>
+            <a
+              href="#main-content"
+              className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:shadow-md"
+            >
+              Skip to content
+            </a>
             {location === "/login" ? (
               <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading...</div>}>
                 <LoginPage />
@@ -164,17 +179,34 @@ function App() {
             ) : (
               <SidebarProvider style={sidebarStyle as React.CSSProperties}>
                 <Shell>
-                  <AppSidebar />
+                  <Suspense
+                    fallback={
+                      <div
+                        className="h-screen shrink-0 border-r border-border bg-sidebar"
+                        style={{ width: "var(--sidebar-width)" }}
+                      />
+                    }
+                  >
+                    <AppSidebar />
+                  </Suspense>
                   <div className="flex flex-col flex-1 overflow-hidden">
-                  <Header />
-                  <main className="flex-1 overflow-auto bg-background">
+                    <Suspense
+                      fallback={<div className="h-14 w-full border-b border-border bg-background" />}
+                    >
+                      <Header />
+                    </Suspense>
+                    <main id="main-content" className="flex-1 overflow-auto bg-background">
                       {authChecked ? <Router /> : <div className="p-6 text-sm text-muted-foreground">Loading...</div>}
-                  </main>
-                </div>
+                    </main>
+                  </div>
                 </Shell>
-            </SidebarProvider>
+              </SidebarProvider>
             )}
-            <ShortcutManager />
+            {user ? (
+              <Suspense fallback={null}>
+                <ShortcutManager />
+              </Suspense>
+            ) : null}
             <Toaster />
           </TooltipProvider>
         </LanguageProvider>

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { productSchema, productUpdateSchema } from "../schemas/products.schema";
 import * as productsService from "../services/products.service";
+import { parseRequiredInt } from "../utils/parse";
 
 export async function listProducts(req: Request, res: Response) {
   try {
@@ -15,7 +16,8 @@ export async function listProducts(req: Request, res: Response) {
 
 export async function getProduct(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid product id" });
     const product = await productsService.getProduct(id);
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
@@ -49,7 +51,8 @@ export async function createProduct(req: Request, res: Response) {
 
 export async function updateProduct(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid product id" });
     const parsed = productUpdateSchema.parse(req.body);
     const data = {
       ...parsed,
@@ -73,7 +76,8 @@ export async function updateProduct(req: Request, res: Response) {
 
 export async function deleteProduct(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid product id" });
     const deleted = await productsService.deleteProduct(id);
     if (!deleted) {
       return res.status(404).json({ error: "Product not found" });

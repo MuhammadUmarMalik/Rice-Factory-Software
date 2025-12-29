@@ -35,9 +35,9 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/30 px-4">
-      <Card className="w-full max-w-md shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-2xl">Sign in</CardTitle>
+      <Card className="w-full max-w-md min-h-[420px] shadow-sm">
+        <CardHeader className="min-h-[84px]">
+          <CardTitle className="text-2xl leading-tight">Sign in</CardTitle>
           <p className="text-sm text-muted-foreground">
             Use your account credentials to access Mill Manager.
           </p>
