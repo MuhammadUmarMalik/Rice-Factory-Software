@@ -1,8 +1,17 @@
 {
-  "name": "rest-express",
+  "name": "Rice-Mill-Manager",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "author": {
+    "name": "Muhammad Umar Malik",
+    "url": "https://www.umarmalik-dev.com"
+  },
+  "homepage": "https://www.umarmalik-dev.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Muhammadumarmalik"
+  },
   "scripts": {
     "dev": "cross-env NODE_ENV=development tsx server/index.ts",
     "build": "tsx script/build.ts",
@@ -11,7 +20,7 @@
     "db:push": "drizzle-kit push",
     "test": "tsx script/test-reports.ts",
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:5000 && electron .\"",
-    "electron:build": "node script/clean-desktop.js && npm run build && electron-builder",
+    "electron:build": "node script/clean-desktop.js && tsx script/prepare-seed-db.ts && npm run build && electron-builder",
     "db:seed": "tsx script/seed-admin.ts"
   },
   "dependencies": {
@@ -49,16 +58,20 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "compression": "^1.7.5",
+    "cors": "^2.8.5",
     "connect-pg-simple": "^10.0.0",
     "date-fns": "^3.6.0",
     "drizzle-orm": "^0.39.3",
     "drizzle-zod": "^0.7.0",
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
+    "express-rate-limit": "^7.4.0",
     "express-session": "^1.18.1",
     "framer-motion": "^11.13.1",
     "input-otp": "^1.4.2",
     "jsonwebtoken": "^9.0.2",
+    "helmet": "^7.1.0",
     "lucide-react": "^0.453.0",
     "memorystore": "^1.6.7",
     "next-themes": "^0.4.6",
@@ -123,7 +136,13 @@
   "build": {
     "appId": "com.millmanager.app",
     "productName": "Mill Manager",
+    "extraMetadata": {
+      "homepage": "https://www.umarmalik-dev.com",
+      "website": "https://www.ai-codinghub.com",
+      "author": "Muhammad Umar Malik"
+    },
     "win": {
+      "publisherName": "Muhammad Umar Malik",
       "target": [
         "nsis",
         "portable"
@@ -138,7 +157,7 @@
       "package.json",
       "node_modules/**",
       "client/public/app_icon.ico",
-      ".local/data.db"
+      ".local/seed.db"
     ],
     "asar": true,
     "icon": "client/public/app_icon.ico"

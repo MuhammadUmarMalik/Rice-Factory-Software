@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { fetchPrintPreview, fetchPrintPdf } from "@/services/printApi";
@@ -15,7 +15,7 @@ type PrintPreviewModalProps = {
   onPrinted?: () => void;
 };
 
-export function PrintPreviewModal({
+function PrintPreviewModalComponent({
   open,
   onOpenChange,
   docKey,
@@ -41,6 +41,32 @@ export function PrintPreviewModal({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const serializedParams = useMemo(() => JSON.stringify(params || {}), [params]);
+  const requestPayload = useMemo(
+    () => ({
+      docKey,
+      params,
+      orientation: layout,
+      format,
+      widthMm: format === "Custom" ? customWidthMm : undefined,
+      heightMm: format === "Custom" ? customHeightMm : undefined,
+      marginTopMm,
+      marginRightMm,
+      marginBottomMm,
+      marginLeftMm,
+    }),
+    [
+      docKey,
+      params,
+      layout,
+      format,
+      customWidthMm,
+      customHeightMm,
+      marginTopMm,
+      marginRightMm,
+      marginBottomMm,
+      marginLeftMm,
+    ],
+  );
   const isElectron =
     typeof navigator !== "undefined" &&
     navigator.userAgent.toLowerCase().includes("electron");
@@ -87,20 +113,7 @@ export function PrintPreviewModal({
     if (!open) return;
     let active = true;
     setLoading(true);
-    const widthMm = format === "Custom" ? customWidthMm : undefined;
-    const heightMm = format === "Custom" ? customHeightMm : undefined;
-    fetchPrintPreview({
-      docKey,
-      params,
-      orientation: layout,
-      format,
-      widthMm,
-      heightMm,
-      marginTopMm,
-      marginRightMm,
-      marginBottomMm,
-      marginLeftMm,
-    })
+    fetchPrintPreview(requestPayload)
       .then((markup) => {
         if (active) setHtml(markup);
       })
@@ -110,21 +123,9 @@ export function PrintPreviewModal({
     return () => {
       active = false;
     };
-  }, [
-    open,
-    docKey,
-    serializedParams,
-    layout,
-    format,
-    customWidthMm,
-    customHeightMm,
-    marginTopMm,
-    marginRightMm,
-    marginBottomMm,
-    marginLeftMm,
-  ]);
+  }, [open, requestPayload, serializedParams]);
 
-  const updatePreviewScale = () => {
+  const updatePreviewScale = useCallback(() => {
     const iframe = iframeRef.current;
     const scroll = scrollRef.current;
     if (!iframe || !scroll) return;
@@ -157,9 +158,9 @@ export function PrintPreviewModal({
     const scaledWidth = Math.ceil(contentWidth * scale);
     iframe.style.height = `${scaledHeight}px`;
     iframe.style.width = `${scaledWidth}px`;
-  };
+  }, [layout]);
 
-  const handleIframeLoad = () => {
+  const handleIframeLoad = useCallback(() => {
     setReady(true);
     updatePreviewScale();
     window.setTimeout(() => updatePreviewScale(), 50);
@@ -171,7 +172,7 @@ export function PrintPreviewModal({
       win.print();
       onPrinted?.();
     }, 0);
-  };
+  }, [autoPrint, onPrinted, updatePreviewScale]);
 
   useEffect(() => {
     if (!open) return;
@@ -190,19 +191,9 @@ export function PrintPreviewModal({
       window.cancelAnimationFrame(raf);
       scroll?.removeEventListener("wheel", handleWheel);
     };
-  }, [
-    open,
-    html,
-    format,
-    customWidthMm,
-    customHeightMm,
-    marginTopMm,
-    marginRightMm,
-    marginBottomMm,
-    marginLeftMm,
-  ]);
+  }, [open, html, updatePreviewScale]);
 
-  const handlePrint = async () => {
+  const handlePrint = useCallback(async () => {
     if (!ready) return;
     if (isElectron && window.electronPrintPreview?.printHtml) {
       await window.electronPrintPreview.printHtml({
@@ -220,30 +211,17 @@ export function PrintPreviewModal({
       win.print();
       onPrinted?.();
     }, 0);
-  };
+  }, [ready, isElectron, html, printerName, onPrinted]);
 
-  const handleDownload = async () => {
-    const widthMm = format === "Custom" ? customWidthMm : undefined;
-    const heightMm = format === "Custom" ? customHeightMm : undefined;
-    const blob = await fetchPrintPdf({
-      docKey,
-      params,
-      orientation: layout,
-      format,
-      widthMm,
-      heightMm,
-      marginTopMm,
-      marginRightMm,
-      marginBottomMm,
-      marginLeftMm,
-    });
+  const handleDownload = useCallback(async () => {
+    const blob = await fetchPrintPdf(requestPayload);
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
     link.download = `${docKey}.pdf`;
     link.click();
     URL.revokeObjectURL(url);
-  };
+  }, [docKey, requestPayload]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -464,3 +442,5 @@ export function PrintPreviewModal({
     </Dialog>
   );
 }
+
+export const PrintPreviewModal = memo(PrintPreviewModalComponent);

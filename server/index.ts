@@ -5,15 +5,47 @@ import { registerRoutes } from "./routes";
 import { ensureDesktopAdmin } from "./utils/bootstrap";
 import { serveStatic } from "./config/static";
 import { createServer } from "http";
+import helmet from "helmet";
+import cors from "cors";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
 
 const app = express();
 const httpServer = createServer(app);
 const MemoryStore = createMemoryStore(session);
+const isProduction = process.env.NODE_ENV === "production";
+const sessionSecret = process.env.SESSION_SECRET || process.env.JWT_SECRET;
+
+if (isProduction && !sessionSecret) {
+  throw new Error("SESSION_SECRET or JWT_SECRET must be set in production.");
+}
 
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
   }
+}
+
+app.disable("x-powered-by");
+app.use(compression());
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  }),
+);
+
+const corsOrigins = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+if (corsOrigins.length > 0) {
+  app.use(
+    cors({
+      origin: corsOrigins,
+      credentials: true,
+    }),
+  );
 }
 
 app.use(
@@ -30,13 +62,13 @@ app.use(express.urlencoded({ extended: false, limit: "2mb" }));
 app.set("trust proxy", 1);
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || process.env.JWT_SECRET || "dev-secret",
+    secret: sessionSecret || "dev-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: isProduction,
       maxAge: 1000 * 60 * 60 * 8,
     },
     store: new MemoryStore({
@@ -44,6 +76,16 @@ app.use(
     }),
   }),
 );
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts, please try again later." },
+});
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/bootstrap", authLimiter);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -59,23 +101,11 @@ export function log(message: string, source = "express") {
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
 
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      log(logLine);
+      log(`${req.method} ${path} ${res.statusCode} in ${duration}ms`);
     }
   });
 

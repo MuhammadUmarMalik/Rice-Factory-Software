@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -9,95 +9,95 @@ import { LanguageProvider } from "@/contexts/language-context";
 import { ThemeProvider } from "@/contexts/theme-context";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Header } from "@/components/header";
-import NotFound from "@/pages/not-found";
-import LoginPage from "@/pages/login";
-import Dashboard from "@/pages/dashboard";
-import Products from "@/pages/products";
-import Purchases from "@/pages/purchases";
-import Processing from "@/pages/processing";
-import Sales from "@/pages/sales";
-import Settings from "@/pages/settings";
-import UsersAdminPage from "@/pages/admin/users";
-import Customers from "@/pages/accounts/customers";
-import Suppliers from "@/pages/accounts/suppliers";
-import Banks from "@/pages/accounts/banks";
-import StockReport from "@/pages/reports/stock";
-import PurchaseReport from "@/pages/reports/purchases";
-import SalesReport from "@/pages/reports/sales";
-import Ledger from "@/pages/reports/ledger";
-import TrialBalance from "@/pages/reports/trial-balance";
-import ProfitLoss from "@/pages/reports/profit-loss";
-import PrintPreviewPage from "@/pages/print-preview";
-import PeriodPurchases from "@/pages/reports/period-purchases";
-import PeriodSales from "@/pages/reports/period-sales";
-import GrossProfit from "@/pages/reports/gross-profit";
-import DayBook from "@/pages/reports/day-book";
-import OutstandingCustomers from "@/pages/reports/outstanding-customers";
-import OutstandingSuppliers from "@/pages/reports/outstanding-suppliers";
-import IncomeStatement from "@/pages/reports/income-statement";
-import BalanceSheet from "@/pages/reports/balance-sheet";
-import Capital from "@/pages/reports/capital";
-import SalaryAccount from "@/pages/reports/salary";
-import Receipts from "@/pages/receipts";
-import PaymentsPage from "@/pages/payments";
 import { useLanguage } from "@/contexts/language-context";
-import Journal from "@/pages/journal";
-import Cash from "@/pages/cash";
-import EmployeesPage from "@/pages/hr/employees";
-import PayrollPage from "@/pages/hr/payroll";
-import ExpensesPage from "@/pages/expenses";
 import { useAuthStore } from "@/stores/auth.store";
 import { fetchWithAuth } from "@/lib/authFetch";
 import { ShortcutManager } from "@/components/shortcut-manager";
 
+const LoginPage = lazy(() => import("@/pages/login"));
+const NotFound = lazy(() => import("@/pages/not-found"));
+const Dashboard = lazy(() => import("@/pages/dashboard"));
+const Products = lazy(() => import("@/pages/products"));
+const Purchases = lazy(() => import("@/pages/purchases"));
+const Processing = lazy(() => import("@/pages/processing"));
+const Sales = lazy(() => import("@/pages/sales"));
+const Settings = lazy(() => import("@/pages/settings"));
+const UsersAdminPage = lazy(() => import("@/pages/admin/users"));
+const Customers = lazy(() => import("@/pages/accounts/customers"));
+const Suppliers = lazy(() => import("@/pages/accounts/suppliers"));
+const Banks = lazy(() => import("@/pages/accounts/banks"));
+const StockReport = lazy(() => import("@/pages/reports/stock"));
+const PurchaseReport = lazy(() => import("@/pages/reports/purchases"));
+const SalesReport = lazy(() => import("@/pages/reports/sales"));
+const Ledger = lazy(() => import("@/pages/reports/ledger"));
+const TrialBalance = lazy(() => import("@/pages/reports/trial-balance"));
+const ProfitLoss = lazy(() => import("@/pages/reports/profit-loss"));
+const PrintPreviewPage = lazy(() => import("@/pages/print-preview"));
+const PeriodPurchases = lazy(() => import("@/pages/reports/period-purchases"));
+const PeriodSales = lazy(() => import("@/pages/reports/period-sales"));
+const GrossProfit = lazy(() => import("@/pages/reports/gross-profit"));
+const DayBook = lazy(() => import("@/pages/reports/day-book"));
+const OutstandingCustomers = lazy(() => import("@/pages/reports/outstanding-customers"));
+const OutstandingSuppliers = lazy(() => import("@/pages/reports/outstanding-suppliers"));
+const IncomeStatement = lazy(() => import("@/pages/reports/income-statement"));
+const BalanceSheet = lazy(() => import("@/pages/reports/balance-sheet"));
+const Capital = lazy(() => import("@/pages/reports/capital"));
+const SalaryAccount = lazy(() => import("@/pages/reports/salary"));
+const Receipts = lazy(() => import("@/pages/receipts"));
+const PaymentsPage = lazy(() => import("@/pages/payments"));
+const Journal = lazy(() => import("@/pages/journal"));
+const EmployeesPage = lazy(() => import("@/pages/hr/employees"));
+const PayrollPage = lazy(() => import("@/pages/hr/payroll"));
+const ExpensesPage = lazy(() => import("@/pages/expenses"));
 
 function Router() {
   return (
-    <Switch>
-      <Route path="/" component={Dashboard} />
-      <Route path="/products" component={Products} />
-      <Route path="/purchases" component={Purchases} />
-      <Route path="/receipts" component={Receipts} />
-      <Route path="/payments" component={PaymentsPage} />
-      <Route path="/expenses" component={ExpensesPage} />
-      <Route path="/journal" component={Journal} />
-      {/* <Route path="/cash" component={Cash} /> */}
-      <Route path="/processing" component={Processing} />
-      <Route path="/sales" component={Sales} />
-      <Route path="/settings" component={Settings} />
-      <Route path="/admin/users" component={UsersAdminPage} />
-      <Route path="/accounts/customers" component={Customers} />
-      <Route path="/accounts/suppliers" component={Suppliers} />
-      <Route path="/accounts/banks" component={Banks} />
-      <Route path="/reports/stock" component={StockReport} />
-      <Route path="/reports/purchases" component={PurchaseReport} />
-      <Route path="/reports/sales" component={SalesReport} />
-      <Route path="/reports/period-purchases" component={PeriodPurchases} />
-      <Route path="/reports/period-sales" component={PeriodSales} />
-      <Route path="/reports/gross-profit" component={GrossProfit} />
-      <Route path="/reports/day-book" component={DayBook} />
-      <Route path="/reports/outstanding-customers" component={OutstandingCustomers} />
-      <Route path="/reports/outstanding-suppliers" component={OutstandingSuppliers} />
-      <Route path="/reports/income-statement" component={IncomeStatement} />
-      <Route path="/reports/balance-sheet" component={BalanceSheet} />
-      <Route path="/reports/capital" component={Capital} />
-      <Route path="/reports/salary" component={SalaryAccount} />
-      <Route path="/hr/employees" component={EmployeesPage} />
-      <Route path="/hr/payroll" component={PayrollPage} />
-      <Route path="/reports/ledger" component={Ledger} />
-      <Route path="/reports/ledger-sales" component={Ledger} />
-      <Route path="/reports/ledger-purchases" component={Ledger} />
-      <Route path="/reports/ledger-journal" component={Ledger} />
-      <Route path="/reports/ledger-expenses" component={Ledger} />
-      <Route path="/reports/ledger-payroll" component={Ledger} />
-      <Route path="/reports/ledger-employee" component={Ledger} />
-      <Route path="/reports/ledger-cash" component={Ledger} />
-      <Route path="/reports/ledger-bank" component={Ledger} />
-      <Route path="/reports/trial-balance" component={TrialBalance} />
-      <Route path="/reports/profit-loss" component={ProfitLoss} />
-      <Route path="/print-preview" component={PrintPreviewPage} />
-      <Route component={NotFound} />
-    </Switch>
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading...</div>}>
+      <Switch>
+        <Route path="/" component={Dashboard} />
+        <Route path="/products" component={Products} />
+        <Route path="/purchases" component={Purchases} />
+        <Route path="/receipts" component={Receipts} />
+        <Route path="/payments" component={PaymentsPage} />
+        <Route path="/expenses" component={ExpensesPage} />
+        <Route path="/journal" component={Journal} />
+        <Route path="/processing" component={Processing} />
+        <Route path="/sales" component={Sales} />
+        <Route path="/settings" component={Settings} />
+        <Route path="/admin/users" component={UsersAdminPage} />
+        <Route path="/accounts/customers" component={Customers} />
+        <Route path="/accounts/suppliers" component={Suppliers} />
+        <Route path="/accounts/banks" component={Banks} />
+        <Route path="/reports/stock" component={StockReport} />
+        <Route path="/reports/purchases" component={PurchaseReport} />
+        <Route path="/reports/sales" component={SalesReport} />
+        <Route path="/reports/period-purchases" component={PeriodPurchases} />
+        <Route path="/reports/period-sales" component={PeriodSales} />
+        <Route path="/reports/gross-profit" component={GrossProfit} />
+        <Route path="/reports/day-book" component={DayBook} />
+        <Route path="/reports/outstanding-customers" component={OutstandingCustomers} />
+        <Route path="/reports/outstanding-suppliers" component={OutstandingSuppliers} />
+        <Route path="/reports/income-statement" component={IncomeStatement} />
+        <Route path="/reports/balance-sheet" component={BalanceSheet} />
+        <Route path="/reports/capital" component={Capital} />
+        <Route path="/reports/salary" component={SalaryAccount} />
+        <Route path="/hr/employees" component={EmployeesPage} />
+        <Route path="/hr/payroll" component={PayrollPage} />
+        <Route path="/reports/ledger" component={Ledger} />
+        <Route path="/reports/ledger-sales" component={Ledger} />
+        <Route path="/reports/ledger-purchases" component={Ledger} />
+        <Route path="/reports/ledger-journal" component={Ledger} />
+        <Route path="/reports/ledger-expenses" component={Ledger} />
+        <Route path="/reports/ledger-payroll" component={Ledger} />
+        <Route path="/reports/ledger-employee" component={Ledger} />
+        <Route path="/reports/ledger-cash" component={Ledger} />
+        <Route path="/reports/ledger-bank" component={Ledger} />
+        <Route path="/reports/trial-balance" component={TrialBalance} />
+        <Route path="/reports/profit-loss" component={ProfitLoss} />
+        <Route path="/print-preview" component={PrintPreviewPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </Suspense>
   );
 }
 
@@ -158,7 +158,9 @@ function App() {
         <LanguageProvider>
           <TooltipProvider>
             {location === "/login" ? (
-              <LoginPage />
+              <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading...</div>}>
+                <LoginPage />
+              </Suspense>
             ) : (
               <SidebarProvider style={sidebarStyle as React.CSSProperties}>
                 <Shell>
