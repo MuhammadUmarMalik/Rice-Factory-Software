@@ -39,24 +39,40 @@ function resolvePageSize(options: PrintPageOptions) {
   return { widthMm: `${width}mm`, heightMm: `${height}mm` };
 }
 
+function isPartyLabel(label: string) {
+  const normalized = label.trim().toLowerCase();
+  return ["party", "customer", "supplier", "account"].includes(normalized);
+}
+
 function renderMeta(payload: PrintableDocumentPayload) {
   const meta = payload.meta;
   if (!meta) return "";
-  const chips: string[] = [];
+  const chips: Array<{ text: string; className?: string }> = [];
   if (meta.dateFrom || meta.dateTo) {
-    chips.push(`Period: ${escapeHtml(meta.dateFrom || "-")} - ${escapeHtml(meta.dateTo || "-")}`);
+    chips.push({
+      text: `Period: ${escapeHtml(meta.dateFrom || "-")} - ${escapeHtml(meta.dateTo || "-")}`,
+    });
   }
-  if (meta.createdBy) chips.push(`Prepared By: ${escapeHtml(meta.createdBy)}`);
-  if (meta.createdAt) chips.push(`Prepared At: ${escapeHtml(meta.createdAt)}`);
+  if (meta.createdBy) chips.push({ text: `Prepared By: ${escapeHtml(meta.createdBy)}` });
+  if (meta.createdAt) chips.push({ text: `Prepared At: ${escapeHtml(meta.createdAt)}` });
   if (meta.filters) {
     for (const [key, val] of Object.entries(meta.filters)) {
-      chips.push(`${escapeHtml(key)}: ${escapeHtml(val)}`);
+      const isParty = isPartyLabel(key);
+      chips.push({
+        text: `${escapeHtml(key)}: ${escapeHtml(val)}`,
+        className: isParty ? "party-chip" : undefined,
+      });
     }
   }
   if (chips.length === 0) return "";
   return `
     <div class="meta">
-      ${chips.map((chip) => `<div class="meta-chip">${chip}</div>`).join("")}
+      ${chips
+        .map(
+          (chip) =>
+            `<div class="meta-chip${chip.className ? ` ${chip.className}` : ""}">${chip.text}</div>`,
+        )
+        .join("")}
     </div>
   `;
 }
@@ -68,7 +84,7 @@ function renderSections(payload: PrintableDocumentPayload) {
       ${payload.sections
         .map(
           (s) => `
-        <div class="section-card${s.highlight ? " highlight" : ""}">
+        <div class="section-card${s.highlight ? " highlight" : ""}${isPartyLabel(s.label) ? " party" : ""}">
           <div class="label">${escapeHtml(s.label)}</div>
           <div class="value">${escapeHtml(s.value)}</div>
         </div>
@@ -179,6 +195,7 @@ export function renderDocumentHtml(payload: PrintableDocumentPayload, options: P
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>${escapeHtml(payload.title)}</title>
     <style>
+      ${printStyles}
       :root {
         --page-width: ${pageSize.widthMm};
         --page-height: ${pageSize.heightMm};
@@ -187,7 +204,6 @@ export function renderDocumentHtml(payload: PrintableDocumentPayload, options: P
         --page-margin-bottom: ${options.marginBottomMm}mm;
         --page-margin-left: ${options.marginLeftMm}mm;
       }
-      ${printStyles}
     </style>
   </head>
   <body class="${docKeyClass}">

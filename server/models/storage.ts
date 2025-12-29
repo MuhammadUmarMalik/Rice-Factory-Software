@@ -2748,7 +2748,7 @@ export class DatabaseStorage implements IStorage {
           const entryType = line.amount > 0 ? "credit" : "debit";
           const amount = Math.abs(line.amount).toString();
           pushLine({
-            accountId: revenueAccount.id,
+            accountId: this.ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER").id,
             transactionType: entryType,
             amount,
             description: line.label,

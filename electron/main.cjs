@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const path = require("path");
 const http = require("http");
 const net = require("net");
@@ -16,6 +16,7 @@ let serverStarted = false;
 const serverWaitTimeoutMs = parseInt(process.env.SERVER_WAIT_TIMEOUT_MS || "90000", 10);
 let splashWindow = null;
 let quitTimer = null;
+let appUrl = null;
 
 if (!isDev || process.env.DISABLE_GPU === "true") {
   app.disableHardwareAcceleration();
@@ -227,6 +228,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(app.getAppPath(), "electron", "preload.cjs"),
     },
   });
 
@@ -260,7 +262,7 @@ async function startApp() {
     await ensureServerReady();
 
     const win = createWindow();
-    const appUrl = `http://127.0.0.1:${port}`;
+    appUrl = `http://127.0.0.1:${port}`;
     await waitForServer(appUrl).catch(() => {});
     await win.loadURL(appUrl);
     closeSplashWindow();
@@ -275,6 +277,110 @@ async function startApp() {
 }
 
 app.whenReady().then(startApp);
+
+function createPreviewWindow(url) {
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 900,
+    show: true,
+    icon: path.join(app.getAppPath(), "client", "public", "app_icon.ico"),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(app.getAppPath(), "electron", "preload.cjs"),
+      sandbox: true,
+    },
+  });
+  win.loadURL(url);
+  return win;
+}
+
+async function createHiddenPrintWindow(html) {
+  const win = new BrowserWindow({
+    width: 800,
+    height: 600,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  return win;
+}
+
+ipcMain.handle("print-preview:open", (_event, payload) => {
+  if (!appUrl) return undefined;
+  const url = new URL("/print-preview", appUrl);
+  const encoded = Buffer.from(JSON.stringify(payload || {}), "utf8").toString("base64");
+  url.searchParams.set("payload", encoded);
+  const win = createPreviewWindow(url.toString());
+  return win.id;
+});
+
+ipcMain.handle("print-preview:render-pdf", async (_event, payload) => {
+  const html = payload?.html || "";
+  const opts = payload?.options || {};
+  const win = await createHiddenPrintWindow(html);
+  try {
+    const isCustom = opts.format === "Custom" && Number.isFinite(opts.widthMm) && Number.isFinite(opts.heightMm);
+    const width = Number(opts.widthMm || 0);
+    const height = Number(opts.heightMm || 0);
+    const customSize = {
+      width: opts.orientation === "landscape" ? height : width,
+      height: opts.orientation === "landscape" ? width : height,
+    };
+    const pdf = await win.webContents.printToPDF({
+      landscape: !isCustom && opts.orientation === "landscape",
+      printBackground: true,
+      pageSize: isCustom
+        ? { width: Math.round(customSize.width * 1000), height: Math.round(customSize.height * 1000) }
+        : opts.format || "A4",
+      marginsType: 1,
+    });
+    return Buffer.from(pdf).toString("base64");
+  } finally {
+    win.destroy();
+  }
+});
+
+ipcMain.handle("print-preview:print-html", async (_event, payload) => {
+  const html = payload?.html || "";
+  const silent = payload?.silent !== false;
+  const deviceName = payload?.deviceName;
+  const win = await createHiddenPrintWindow(html);
+  try {
+    const result = await new Promise((resolve) => {
+      win.webContents.print(
+        { silent, printBackground: true, deviceName: deviceName || "" },
+        (success, failureReason) => {
+        if (!success) {
+          resolve(false);
+          return;
+        }
+        if (failureReason) {
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      });
+    });
+    return result;
+  } finally {
+    win.destroy();
+  }
+});
+
+ipcMain.handle("print-preview:get-printers", async () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return [];
+  try {
+    return await win.webContents.getPrintersAsync();
+  } catch {
+    return [];
+  }
+});
 
 app.on("second-instance", () => {
   const win = BrowserWindow.getAllWindows()[0];

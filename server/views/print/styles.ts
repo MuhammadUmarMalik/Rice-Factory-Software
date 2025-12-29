@@ -33,7 +33,7 @@ export const printStyles = `
     background: var(--bg);
     margin: 0;
     padding: 0;
-    font-size: 12.5px;
+    font-size: 13.5px;
     line-height: 1.5;
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -106,7 +106,7 @@ export const printStyles = `
     display: flex;
     flex-wrap: wrap;
     gap: 8px 16px;
-    font-size: 11px;
+    font-size: 16.5px;
     color: var(--muted);
     margin-bottom: 8px;
   }
@@ -114,9 +114,18 @@ export const printStyles = `
   .meta-chip {
     background: var(--soft);
     border: 1px solid var(--border);
-    padding: 4px 8px;
+    padding: 6px 10px;
     border-radius: 999px;
     white-space: nowrap;
+  }
+
+  .meta-chip.party-chip {
+    background: #e0f2fe;
+    border: 2px solid var(--accent);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 6px 10px;
   }
 
   .sections {
@@ -148,6 +157,16 @@ export const printStyles = `
   .section-card .value {
     font-size: 14px;
     font-weight: 700;
+  }
+
+  .section-card.party {
+    border: 2px solid var(--accent);
+    background: #e0f2fe;
+  }
+
+  .section-card.party .value {
+    font-size: 16px;
+    font-weight: 800;
   }
 
   table {
