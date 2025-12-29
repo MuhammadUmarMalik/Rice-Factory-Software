@@ -118,6 +118,7 @@ function ensureSeedDatabase() {
   }
 
   const candidates = [
+    path.join(app.getAppPath(), ".local", "seed.db"),
     path.join(app.getAppPath(), ".local", "data.db"),
     path.join(app.getAppPath(), "data.db"),
     path.join(process.resourcesPath, "data.db"),

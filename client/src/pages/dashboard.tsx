@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useMemo, useState } from "react";
 import {
   ShoppingCart,
   TrendingUp,
@@ -18,18 +18,6 @@ import { useLanguage } from "@/contexts/language-context";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  LabelList,
-} from "recharts";
 import { format } from "date-fns";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,6 +29,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ReportDetailDialog, useReportDetail } from "@/components/report-detail";
+
+const DashboardCharts = lazy(() => import("@/components/dashboard/DashboardCharts").then((mod) => ({
+  default: mod.DashboardCharts,
+})));
 
 type DashboardSummary = {
   filters: { fromDate: string; toDate: string; fiscalYearId?: number | null };
@@ -162,86 +154,113 @@ export default function Dashboard() {
     refetchOnWindowFocus: true,
   });
 
-  const money = (value?: number) =>
-    `Rs. ${(value || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+  const money = useCallback(
+    (value?: number) =>
+      `Rs. ${(value || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`,
+    [],
+  );
 
-  const statCards = [
-    {
-      title: t("totalPurchases"),
-      value: money(summary?.kpis.totalPurchases),
-      icon: ShoppingCart,
-      color: "text-chart-2",
-      bgColor: "bg-chart-2/10",
-      href: `/reports/purchases?fromDate=${fromDate}&toDate=${toDate}`,
-    },
-    {
-      title: t("totalSales"),
-      value: money(summary?.kpis.totalSales),
-      icon: TrendingUp,
-      color: "text-primary",
-      bgColor: "bg-primary/10",
-      href: `/reports/sales?fromDate=${fromDate}&toDate=${toDate}`,
-    },
-    {
-      title: t("stockValue"),
-      value: money(summary?.kpis.stockValue),
-      icon: Package,
-      color: "text-chart-3",
-      bgColor: "bg-chart-3/10",
-      href: `/reports/stock?fromDate=${fromDate}&toDate=${toDate}`,
-    },
-    {
-      title: "Net Profit",
-      value: money(summary?.kpis.netProfit),
-      icon: DollarSign,
-      color: "text-chart-5",
-      bgColor: "bg-chart-5/10",
-      href: `/reports/profit-loss?startDate=${fromDate}&endDate=${toDate}`,
-    },
-  ];
+  const statCards = useMemo(
+    () => [
+      {
+        title: t("totalPurchases"),
+        value: money(summary?.kpis.totalPurchases),
+        icon: ShoppingCart,
+        color: "text-chart-2",
+        bgColor: "bg-chart-2/10",
+        href: `/reports/purchases?fromDate=${fromDate}&toDate=${toDate}`,
+      },
+      {
+        title: t("totalSales"),
+        value: money(summary?.kpis.totalSales),
+        icon: TrendingUp,
+        color: "text-primary",
+        bgColor: "bg-primary/10",
+        href: `/reports/sales?fromDate=${fromDate}&toDate=${toDate}`,
+      },
+      {
+        title: t("stockValue"),
+        value: money(summary?.kpis.stockValue),
+        icon: Package,
+        color: "text-chart-3",
+        bgColor: "bg-chart-3/10",
+        href: `/reports/stock?fromDate=${fromDate}&toDate=${toDate}`,
+      },
+      {
+        title: "Net Profit",
+        value: money(summary?.kpis.netProfit),
+        icon: DollarSign,
+        color: "text-chart-5",
+        bgColor: "bg-chart-5/10",
+        href: `/reports/profit-loss?startDate=${fromDate}&endDate=${toDate}`,
+      },
+    ],
+    [t, money, summary?.kpis, fromDate, toDate],
+  );
 
-  const kpiCards = [
-    {
-      title: "Cash Balance",
-      value: money(summary?.kpis.cashBalance),
-      icon: Banknote,
-      color: "text-emerald-600",
-      bgColor: "bg-emerald-500/10",
-      href: `/reports/ledger-cash?startDate=${fromDate}&endDate=${toDate}`,
-    },
-    {
-      title: "Bank Balance",
-      value: money(summary?.kpis.bankBalance),
-      icon: Landmark,
-      color: "text-sky-600",
-      bgColor: "bg-sky-500/10",
-      href: `/reports/ledger-bank?startDate=${fromDate}&endDate=${toDate}`,
-    },
-    {
-      title: "Outstanding Customers",
-      value: money(summary?.kpis.outstandingCustomers),
-      icon: Users,
-      color: "text-amber-600",
-      bgColor: "bg-amber-500/10",
-      href: `/reports/outstanding-customers?asOfDate=${toDate}`,
-    },
-    {
-      title: "Outstanding Suppliers",
-      value: money(summary?.kpis.outstandingSuppliers),
-      icon: UserMinus,
-      color: "text-rose-600",
-      bgColor: "bg-rose-500/10",
-      href: `/reports/outstanding-suppliers?asOfDate=${toDate}`,
-    },
-  ];
+  const kpiCards = useMemo(
+    () => [
+      {
+        title: "Cash Balance",
+        value: money(summary?.kpis.cashBalance),
+        icon: Banknote,
+        color: "text-emerald-600",
+        bgColor: "bg-emerald-500/10",
+        href: `/reports/ledger-cash?startDate=${fromDate}&endDate=${toDate}`,
+      },
+      {
+        title: "Bank Balance",
+        value: money(summary?.kpis.bankBalance),
+        icon: Landmark,
+        color: "text-sky-600",
+        bgColor: "bg-sky-500/10",
+        href: `/reports/ledger-bank?startDate=${fromDate}&endDate=${toDate}`,
+      },
+      {
+        title: "Outstanding Customers",
+        value: money(summary?.kpis.outstandingCustomers),
+        icon: Users,
+        color: "text-amber-600",
+        bgColor: "bg-amber-500/10",
+        href: `/reports/outstanding-customers?asOfDate=${toDate}`,
+      },
+      {
+        title: "Outstanding Suppliers",
+        value: money(summary?.kpis.outstandingSuppliers),
+        icon: UserMinus,
+        color: "text-rose-600",
+        bgColor: "bg-rose-500/10",
+        href: `/reports/outstanding-suppliers?asOfDate=${toDate}`,
+      },
+    ],
+    [money, summary?.kpis, fromDate, toDate],
+  );
 
-  const quickActions = [
-    { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, color: "bg-chart-2 text-white" },
-    { title: t("newSale"), url: "/sales", icon: TrendingUp, color: "bg-primary text-primary-foreground" },
-    { title: t("processStock"), url: "/processing", icon: Factory, color: "bg-chart-3 text-white" },
-  ];
+  const quickActions = useMemo(
+    () => [
+      { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, color: "bg-chart-2 text-white" },
+      { title: t("newSale"), url: "/sales", icon: TrendingUp, color: "bg-primary text-primary-foreground" },
+      { title: t("processStock"), url: "/processing", icon: Factory, color: "bg-chart-3 text-white" },
+    ],
+    [t],
+  );
 
-  const dayBookRows = summary?.dayBook.rows || [];
+  const dayBookRows = useMemo(() => summary?.dayBook.rows || [], [summary?.dayBook.rows]);
+  const pendingBatches = useMemo(
+    () => processingBatches.filter((p: any) => p.status !== "completed"),
+    [processingBatches],
+  );
+  const handleFiscalYearChange = useCallback(
+    (val: string) => {
+      setFiscalYearId(val);
+      const fy = summary?.fiscalYears.find((f) => String(f.id) === val);
+      if (fy) {
+        setFromDate(format(new Date(fy.startDate), "yyyy-MM-dd"));
+        setToDate(format(new Date(fy.endDate), "yyyy-MM-dd"));
+      }
+    },
+    [summary?.fiscalYears],
+  );
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
@@ -277,17 +296,7 @@ export default function Dashboard() {
             </div>
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>Financial Year</Label>
-              <Select
-                value={fiscalYearId}
-                onValueChange={(val) => {
-                  setFiscalYearId(val);
-                  const fy = summary?.fiscalYears.find((f) => String(f.id) === val);
-                  if (fy) {
-                    setFromDate(format(new Date(fy.startDate), "yyyy-MM-dd"));
-                    setToDate(format(new Date(fy.endDate), "yyyy-MM-dd"));
-                  }
-                }}
-              >
+              <Select value={fiscalYearId} onValueChange={handleFiscalYearChange}>
                 <SelectTrigger>
                   <SelectValue placeholder="All years" />
                 </SelectTrigger>
@@ -422,99 +431,36 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <div className="grid gap-6">
-        <Card>
-          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <div className={isRTL ? "text-right" : ""}>
-              <CardTitle className="text-base font-semibold">Purchases vs Sales</CardTitle>
-              <p className="text-sm text-muted-foreground">Monthly comparison</p>
-            </div>
-            <div className={`flex gap-4 text-sm ${isRTL ? "flex-row-reverse" : ""}`}>
-              <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                <div className="h-3 w-3 rounded-full bg-chart-2" />
-                <span className="text-muted-foreground">{t("purchases")}</span>
-              </div>
-              <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                <div className="h-3 w-3 rounded-full bg-primary" />
-                <span className="text-muted-foreground">{t("sales")}</span>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[420px]">
-              {chartLoading ? (
-                <div className="flex items-center justify-center h-full">
-                  <Skeleton className="h-16 w-1/2" />
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData?.monthlyTotals || []}>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis dataKey="name" className="text-xs" />
-                    <YAxis className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "6px",
-                      }}
-                      formatter={(value: number) => [`Rs. ${value.toLocaleString()}`, ""]}
-                    />
-                    <Line type="monotone" dataKey="purchases" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="sales" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className={isRTL ? "text-right" : ""}>
-            <CardTitle className="text-base font-semibold">Product Stock</CardTitle>
-            <p className="text-sm text-muted-foreground">Closing balances</p>
-          </CardHeader>
-          <CardContent>
-            <div className="h-96">
-              {chartLoading ? (
-                <div className="flex items-center justify-center h-full">
-                  <Skeleton className="h-36 w-1/2" />
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData?.productStock || []} barCategoryGap={16}>
-                    <defs>
-                      <linearGradient id="productStockGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.9} />
-                        <stop offset="100%" stopColor="hsl(var(--chart-2))" stopOpacity={0.9} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
-                    <XAxis dataKey="name" className="text-xs" interval={0} angle={-25} textAnchor="end" height={70} />
-                    <YAxis className="text-xs" tickFormatter={(value) => value.toLocaleString()} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "6px",
-                      }}
-                      formatter={(value: number) => [`${value.toLocaleString()}`, ""]}
-                    />
-                    <Bar dataKey="stock" fill="url(#productStockGradient)" radius={[8, 8, 0, 0]}>
-                      <LabelList
-                        dataKey="stock"
-                        position="top"
-                        formatter={(value: number) => value.toLocaleString()}
-                        className="fill-muted-foreground text-xs"
-                      />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <Suspense
+        fallback={
+          <div className="grid gap-6">
+            <Card>
+              <CardHeader>
+                <Skeleton className="h-5 w-48" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-[420px] w-full" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <Skeleton className="h-5 w-32" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-96 w-full" />
+              </CardContent>
+            </Card>
+          </div>
+        }
+      >
+        <DashboardCharts
+          chartLoading={chartLoading}
+          chartData={chartData}
+          isRTL={isRTL}
+          purchasesLabel={t("purchases")}
+          salesLabel={t("sales")}
+        />
+      </Suspense>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
@@ -577,7 +523,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-4">
-                {processingBatches.filter((p: any) => p.status !== "completed").slice(0, 3).map((item: any, index: number) => (
+                {pendingBatches.slice(0, 3).map((item: any, index: number) => (
                   <div
                     key={index}
                     className={`flex items-center gap-3 p-3 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}
@@ -603,7 +549,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                 ))}
-                {processingBatches.filter((p: any) => p.status !== "completed").length === 0 && (
+                {pendingBatches.length === 0 && (
                   <p className="text-sm text-muted-foreground text-center py-4">
                     No pending processing.
                   </p>

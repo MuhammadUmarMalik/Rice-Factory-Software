@@ -1,8 +1,11 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { PrintPreviewModal } from "./PrintPreviewModal";
 import type { DocKey } from "@/print/docRegistry";
 import { fetchPrintPdf } from "@/services/printApi";
+
+const PrintPreviewModal = lazy(() =>
+  import("./PrintPreviewModal").then((module) => ({ default: module.PrintPreviewModal })),
+);
 
 type PrintActionsProps = {
   docKey: DocKey;
@@ -51,19 +54,23 @@ export function PrintActions({
       <Button variant="outline" onClick={handleDownload} disabled={disabled} data-shortcut="download-pdf">
         Download PDF
       </Button>
-      <PrintPreviewModal
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) setAutoPrint(false);
-        }}
-        docKey={docKey}
-        params={safeParams}
-        orientation={orientation}
-        title={title}
-        autoPrint={autoPrint}
-        onPrinted={() => setAutoPrint(false)}
-      />
+      {open ? (
+        <Suspense fallback={null}>
+          <PrintPreviewModal
+            open={open}
+            onOpenChange={(next) => {
+              setOpen(next);
+              if (!next) setAutoPrint(false);
+            }}
+            docKey={docKey}
+            params={safeParams}
+            orientation={orientation}
+            title={title}
+            autoPrint={autoPrint}
+            onPrinted={() => setAutoPrint(false)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }
