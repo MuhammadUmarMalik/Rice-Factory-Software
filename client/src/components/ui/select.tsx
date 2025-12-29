@@ -5,6 +5,7 @@ import * as SelectPrimitive from "@radix-ui/react-select"
 import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { moveFocusByArrowKey } from "@/lib/keyboard-nav"
 import { Input } from "@/components/ui/input"
 
 const Select = SelectPrimitive.Root
@@ -16,13 +17,25 @@ const SelectValue = SelectPrimitive.Value
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onKeyDown, ...props }, ref) => (
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
       "flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background data-[placeholder]:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
       className
     )}
+    onKeyDown={(event) => {
+      onKeyDown?.(event)
+      if (event.defaultPrevented) return
+      if (event.currentTarget.getAttribute("data-state") !== "closed") return
+      if (event.key === "ArrowDown") {
+        moveFocusByArrowKey(event, "next")
+        return
+      }
+      if (event.key === "ArrowUp") {
+        moveFocusByArrowKey(event, "prev")
+      }
+    }}
     {...props}
   >
     {children}
@@ -90,7 +103,6 @@ const SelectContent = React.forwardRef<
       position = "popper",
       searchable = true,
       searchPlaceholder = "Search...",
-      onOpenAutoFocus,
       ...props
     },
     ref
@@ -98,6 +110,13 @@ const SelectContent = React.forwardRef<
     const [search, setSearch] = React.useState("")
     const inputRef = React.useRef<HTMLInputElement>(null)
     const query = search.trim().toLowerCase()
+
+    React.useEffect(() => {
+      setSearch("")
+      if (searchable) {
+        requestAnimationFrame(() => inputRef.current?.focus())
+      }
+    }, [searchable])
 
     const { filteredChildren, matchCount } = React.useMemo(() => {
       if (!query) {
@@ -120,15 +139,6 @@ const SelectContent = React.forwardRef<
       return { filteredChildren: mapped, matchCount: count }
     }, [children, query])
 
-    const handleOpenAutoFocus = (event: Event) => {
-      setSearch("")
-      if (searchable) {
-        event.preventDefault()
-        requestAnimationFrame(() => inputRef.current?.focus())
-      }
-      onOpenAutoFocus?.(event)
-    }
-
     return (
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
@@ -140,7 +150,6 @@ const SelectContent = React.forwardRef<
             className
           )}
           position={position}
-          onOpenAutoFocus={handleOpenAutoFocus}
           {...props}
         >
           <SelectScrollUpButton />
@@ -160,6 +169,7 @@ const SelectContent = React.forwardRef<
                   onKeyDown={(event) => event.stopPropagation()}
                   placeholder={searchPlaceholder}
                   className="h-8"
+                  data-arrow-nav="false"
                 />
               </div>
             )}

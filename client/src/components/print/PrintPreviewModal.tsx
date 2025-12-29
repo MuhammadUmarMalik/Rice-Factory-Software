@@ -36,15 +36,52 @@ export function PrintPreviewModal({
   const [marginBottomMm, setMarginBottomMm] = useState(10);
   const [marginLeftMm, setMarginLeftMm] = useState(10);
   const [ready, setReady] = useState(false);
+  const [printers, setPrinters] = useState<Array<{ name: string; displayName?: string }>>([]);
+  const [printerName, setPrinterName] = useState("");
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const previewRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const serializedParams = useMemo(() => JSON.stringify(params || {}), [params]);
+  const isElectron =
+    typeof navigator !== "undefined" &&
+    navigator.userAgent.toLowerCase().includes("electron");
+  const pageAspectClass = layout === "portrait" ? "aspect-[210/297]" : "aspect-[297/210]";
+  const pageMaxWidthClass = layout === "portrait" ? "max-w-[820px]" : "max-w-none";
 
   useEffect(() => {
     if (!open) return;
     setLayout(orientation);
     setReady(false);
   }, [open, orientation]);
+
+  useEffect(() => {
+    if (!open) return;
+    setReady(false);
+  }, [
+    open,
+    layout,
+    format,
+    customWidthMm,
+    customHeightMm,
+    marginTopMm,
+    marginRightMm,
+    marginBottomMm,
+    marginLeftMm,
+  ]);
+
+  useEffect(() => {
+    if (!open || !isElectron || !window.electronPrintPreview?.getPrinters) return;
+    let active = true;
+    window.electronPrintPreview.getPrinters().then((list) => {
+      if (!active) return;
+      setPrinters(list || []);
+      if (!printerName && list?.length) {
+        setPrinterName(list[0].name);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [open, isElectron, printerName]);
 
   useEffect(() => {
     if (!open) return;
@@ -89,25 +126,43 @@ export function PrintPreviewModal({
 
   const updatePreviewScale = () => {
     const iframe = iframeRef.current;
-    const container = previewRef.current;
-    if (!iframe || !container) return;
+    const scroll = scrollRef.current;
+    if (!iframe || !scroll) return;
     const doc = iframe.contentDocument;
     if (!doc) return;
-    const page = doc.querySelector(".page") as HTMLElement | null;
-    if (!page) return;
-    const pageWidth = page.offsetWidth || page.getBoundingClientRect().width;
-    const pageHeight = page.offsetHeight || page.getBoundingClientRect().height;
-    if (!pageWidth || !pageHeight) return;
-    const padding = 24;
-    const maxWidth = Math.max(container.clientWidth - padding, 1);
-    const maxHeight = Math.max(container.clientHeight - padding, 1);
-    const scale = Math.min(1, maxWidth / pageWidth, maxHeight / pageHeight);
+    const pages = Array.from(doc.querySelectorAll(".page")) as HTMLElement[];
+    const firstPage = pages[0];
+    if (!firstPage) return;
+    const pageWidth = firstPage.offsetWidth || firstPage.getBoundingClientRect().width;
+    if (!pageWidth) return;
+    const viewportWidth = Math.max(scroll.clientWidth, 1);
+    const metrics = pages.reduce(
+      (acc, page) => {
+        const width = page.offsetWidth || page.getBoundingClientRect().width;
+        const bottom = page.offsetTop + page.offsetHeight;
+        return {
+          maxWidth: Math.max(acc.maxWidth, width),
+          maxBottom: Math.max(acc.maxBottom, bottom),
+        };
+      },
+      { maxWidth: pageWidth, maxBottom: firstPage.offsetHeight },
+    );
+    const contentWidth = metrics.maxWidth;
+    const contentHeight = metrics.maxBottom;
+    const scaleByWidth = viewportWidth / contentWidth;
+    const scale = layout === "landscape" ? scaleByWidth : Math.min(1, scaleByWidth);
     doc.documentElement.style.setProperty("--preview-scale", scale.toFixed(3));
+
+    const scaledHeight = Math.ceil(contentHeight * scale);
+    const scaledWidth = Math.ceil(contentWidth * scale);
+    iframe.style.height = `${scaledHeight}px`;
+    iframe.style.width = `${scaledWidth}px`;
   };
 
   const handleIframeLoad = () => {
     setReady(true);
     updatePreviewScale();
+    window.setTimeout(() => updatePreviewScale(), 50);
     if (!autoPrint) return;
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
@@ -123,9 +178,17 @@ export function PrintPreviewModal({
     const handleResize = () => updatePreviewScale();
     window.addEventListener("resize", handleResize);
     const raf = window.requestAnimationFrame(() => updatePreviewScale());
+    const scroll = scrollRef.current;
+    const handleWheel = (event: WheelEvent) => {
+      if (scroll?.dataset.previewScroll === "none") {
+        event.preventDefault();
+      }
+    };
+    scroll?.addEventListener("wheel", handleWheel, { passive: false });
     return () => {
       window.removeEventListener("resize", handleResize);
       window.cancelAnimationFrame(raf);
+      scroll?.removeEventListener("wheel", handleWheel);
     };
   }, [
     open,
@@ -139,8 +202,17 @@ export function PrintPreviewModal({
     marginLeftMm,
   ]);
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!ready) return;
+    if (isElectron && window.electronPrintPreview?.printHtml) {
+      await window.electronPrintPreview.printHtml({
+        html,
+        silent: true,
+        deviceName: printerName || undefined,
+      });
+      onPrinted?.();
+      return;
+    }
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.focus();
@@ -175,163 +247,218 @@ export function PrintPreviewModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[96vw] max-w-6xl h-[92vh] flex flex-col">
-        <DialogHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <DialogTitle className="text-left">{title || "Print Preview"}</DialogTitle>
-          <div className="flex flex-wrap items-center gap-2 md:justify-end">
-            <label className="text-xs text-muted-foreground" htmlFor="print-paper">
-              Paper
-            </label>
-            <select
-              id="print-paper"
-              className="h-9 min-w-[120px] rounded-md border border-input bg-background px-2 text-sm"
-              value={format}
-              onChange={(event) =>
-                setFormat(event.target.value as "A4" | "A5" | "Letter" | "Legal" | "Custom")
-              }
-            >
-              <option value="A4">A4</option>
-              <option value="A5">A5</option>
-              <option value="Letter">Letter</option>
-              <option value="Legal">Legal</option>
-              <option value="Custom">Custom</option>
-            </select>
-            {format === "Custom" && (
-              <>
-                <label className="text-xs text-muted-foreground" htmlFor="print-width">
-                  W (mm)
-                </label>
-                <input
-                  id="print-width"
-                  type="number"
-                  min={80}
-                  max={400}
-                  step={1}
-                  className="h-9 w-[88px] rounded-md border border-input bg-background px-2 text-sm"
-                  value={customWidthMm}
-                  onChange={(event) => {
-                    const next = Number(event.target.value);
-                    if (Number.isFinite(next)) setCustomWidthMm(next);
-                  }}
-                />
-                <label className="text-xs text-muted-foreground" htmlFor="print-height">
-                  H (mm)
-                </label>
-                <input
-                  id="print-height"
-                  type="number"
-                  min={80}
-                  max={600}
-                  step={1}
-                  className="h-9 w-[88px] rounded-md border border-input bg-background px-2 text-sm"
-                  value={customHeightMm}
-                  onChange={(event) => {
-                    const next = Number(event.target.value);
-                    if (Number.isFinite(next)) setCustomHeightMm(next);
-                  }}
-                />
-              </>
-            )}
-            <label className="text-xs text-muted-foreground" htmlFor="print-layout">
-              Layout
-            </label>
-            <select
-              id="print-layout"
-              className="h-9 min-w-[140px] rounded-md border border-input bg-background px-2 text-sm"
-              value={layout}
-              onChange={(event) => setLayout(event.target.value as "portrait" | "landscape")}
-            >
-              <option value="portrait">Portrait</option>
-              <option value="landscape">Landscape</option>
-            </select>
-            <label className="text-xs text-muted-foreground" htmlFor="print-margin-top">
-              T (mm)
-            </label>
-            <input
-              id="print-margin-top"
-              type="number"
-              min={0}
-              max={40}
-              step={1}
-              className="h-9 w-[72px] rounded-md border border-input bg-background px-2 text-sm"
-              value={marginTopMm}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isFinite(next)) setMarginTopMm(next);
-              }}
-            />
-            <label className="text-xs text-muted-foreground" htmlFor="print-margin-right">
-              R (mm)
-            </label>
-            <input
-              id="print-margin-right"
-              type="number"
-              min={0}
-              max={40}
-              step={1}
-              className="h-9 w-[72px] rounded-md border border-input bg-background px-2 text-sm"
-              value={marginRightMm}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isFinite(next)) setMarginRightMm(next);
-              }}
-            />
-            <label className="text-xs text-muted-foreground" htmlFor="print-margin-bottom">
-              B (mm)
-            </label>
-            <input
-              id="print-margin-bottom"
-              type="number"
-              min={0}
-              max={40}
-              step={1}
-              className="h-9 w-[72px] rounded-md border border-input bg-background px-2 text-sm"
-              value={marginBottomMm}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isFinite(next)) setMarginBottomMm(next);
-              }}
-            />
-            <label className="text-xs text-muted-foreground" htmlFor="print-margin-left">
-              L (mm)
-            </label>
-            <input
-              id="print-margin-left"
-              type="number"
-              min={0}
-              max={40}
-              step={1}
-              className="h-9 w-[72px] rounded-md border border-input bg-background px-2 text-sm"
-              value={marginLeftMm}
-              onChange={(event) => {
-                const next = Number(event.target.value);
-                if (Number.isFinite(next)) setMarginLeftMm(next);
-              }}
-            />
-            <Button variant="outline" size="sm" onClick={handlePrint}>
-              Print
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleDownload}>
-              Download PDF
-            </Button>
+      <DialogContent className="max-h-[90vh] w-full max-w-6xl overflow-auto border-0 bg-transparent p-4 pr-4 shadow-none">
+        <div className="flex min-h-[480px] w-full flex-col overflow-hidden rounded-xl bg-white shadow-xl">
+          <DialogHeader className="flex-row items-center justify-between space-y-0 border-b px-4 py-3 pr-4 text-left">
+            <DialogTitle className="text-left">{title || "Print Preview"}</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
+            <div className="w-full shrink-0 border-r bg-slate-50 p-4 lg:w-80 min-h-0 overflow-y-auto">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-lg font-semibold">Print</div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={handlePrint}>
+                    Print
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={handleDownload}>
+                    Download PDF
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-4 space-y-4">
+                {isElectron && printers.length > 0 && (
+                  <div>
+                    <div className="text-xs font-semibold uppercase text-muted-foreground">
+                      Printer
+                    </div>
+                    <select
+                      id="print-printer"
+                      className="mt-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                      value={printerName}
+                      onChange={(event) => setPrinterName(event.target.value)}
+                    >
+                      {printers.map((printer) => (
+                        <option key={printer.name} value={printer.name}>
+                          {printer.displayName || printer.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <div className="text-xs font-semibold uppercase text-muted-foreground">Settings</div>
+                  <div className="mt-2 grid gap-3">
+                    <label className="text-xs text-muted-foreground" htmlFor="print-paper">
+                      Paper
+                    </label>
+                    <select
+                      id="print-paper"
+                      className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                      value={format}
+                      onChange={(event) =>
+                        setFormat(
+                          event.target.value as "A4" | "A5" | "Letter" | "Legal" | "Custom",
+                        )
+                      }
+                    >
+                      <option value="A4">A4</option>
+                      <option value="A5">A5</option>
+                      <option value="Letter">Letter</option>
+                      <option value="Legal">Legal</option>
+                      <option value="Custom">Custom</option>
+                    </select>
+                    {format === "Custom" && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-xs text-muted-foreground" htmlFor="print-width">
+                            W (mm)
+                          </label>
+                          <input
+                            id="print-width"
+                            type="number"
+                            min={80}
+                            max={400}
+                            step={1}
+                            className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                            value={customWidthMm}
+                            onChange={(event) => {
+                              const next = Number(event.target.value);
+                              if (Number.isFinite(next)) setCustomWidthMm(next);
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-muted-foreground" htmlFor="print-height">
+                            H (mm)
+                          </label>
+                          <input
+                            id="print-height"
+                            type="number"
+                            min={80}
+                            max={600}
+                            step={1}
+                            className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                            value={customHeightMm}
+                            onChange={(event) => {
+                              const next = Number(event.target.value);
+                              if (Number.isFinite(next)) setCustomHeightMm(next);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <label className="text-xs text-muted-foreground" htmlFor="print-layout">
+                      Layout
+                    </label>
+                    <select
+                      id="print-layout"
+                      className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                      value={layout}
+                      onChange={(event) => setLayout(event.target.value as "portrait" | "landscape")}
+                    >
+                      <option value="portrait">Portrait</option>
+                      <option value="landscape">Landscape</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold uppercase text-muted-foreground">Margins</div>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-top">
+                        Top (mm)
+                      </label>
+                      <input
+                        id="print-margin-top"
+                        type="number"
+                        min={0}
+                        max={40}
+                        step={1}
+                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        value={marginTopMm}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          if (Number.isFinite(next)) setMarginTopMm(next);
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-right">
+                        Right (mm)
+                      </label>
+                      <input
+                        id="print-margin-right"
+                        type="number"
+                        min={0}
+                        max={40}
+                        step={1}
+                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        value={marginRightMm}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          if (Number.isFinite(next)) setMarginRightMm(next);
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-bottom">
+                        Bottom (mm)
+                      </label>
+                      <input
+                        id="print-margin-bottom"
+                        type="number"
+                        min={0}
+                        max={40}
+                        step={1}
+                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        value={marginBottomMm}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          if (Number.isFinite(next)) setMarginBottomMm(next);
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-left">
+                        Left (mm)
+                      </label>
+                      <input
+                        id="print-margin-left"
+                        type="number"
+                        min={0}
+                        max={40}
+                        step={1}
+                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                        value={marginLeftMm}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          if (Number.isFinite(next)) setMarginLeftMm(next);
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div ref={scrollRef} className="hide-scrollbar flex-1 min-h-0 overflow-auto bg-slate-100 p-3">
+              {loading ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Loading preview...
+                </div>
+              ) : (
+                <div className="min-h-full w-full">
+                  <iframe
+                    key={`${layout}-${format}-${customWidthMm}-${customHeightMm}-${marginTopMm}-${marginRightMm}-${marginBottomMm}-${marginLeftMm}`}
+                    ref={iframeRef}
+                    title="Print preview"
+                    className={`print-preview-frame block h-full w-full bg-white shadow-md ${pageMaxWidthClass} ${pageAspectClass}`}
+                    srcDoc={html}
+                    onLoad={handleIframeLoad}
+                  />
+                </div>
+              )}
+            </div>
           </div>
-        </DialogHeader>
-        <div ref={previewRef} className="flex-1 min-h-0 rounded-lg border bg-muted/20 p-4">
-          {loading ? (
-            <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-              Loading preview...
-            </div>
-          ) : (
-            <div className="h-full w-full overflow-hidden rounded-md bg-white shadow-sm">
-              <iframe
-                ref={iframeRef}
-                title="Print preview"
-                className="print-preview-frame h-full w-full"
-                srcDoc={html}
-                onLoad={handleIframeLoad}
-              />
-            </div>
-          )}
         </div>
       </DialogContent>
     </Dialog>

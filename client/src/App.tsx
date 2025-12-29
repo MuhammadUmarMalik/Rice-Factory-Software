@@ -27,6 +27,7 @@ import SalesReport from "@/pages/reports/sales";
 import Ledger from "@/pages/reports/ledger";
 import TrialBalance from "@/pages/reports/trial-balance";
 import ProfitLoss from "@/pages/reports/profit-loss";
+import PrintPreviewPage from "@/pages/print-preview";
 import PeriodPurchases from "@/pages/reports/period-purchases";
 import PeriodSales from "@/pages/reports/period-sales";
 import GrossProfit from "@/pages/reports/gross-profit";
@@ -94,6 +95,7 @@ function Router() {
       <Route path="/reports/ledger-bank" component={Ledger} />
       <Route path="/reports/trial-balance" component={TrialBalance} />
       <Route path="/reports/profit-loss" component={ProfitLoss} />
+      <Route path="/print-preview" component={PrintPreviewPage} />
       <Route component={NotFound} />
     </Switch>
   );

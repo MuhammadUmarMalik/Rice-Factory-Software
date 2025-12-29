@@ -1,7 +1,7 @@
 import { format } from "date-fns";
 import type { PrintableDocumentPayload, PrintableTableColumn } from "@shared/print";
 import type { PrintFormat, PrintOrientation } from "../../services/print/types";
-import { dayBookStyles } from "./styles";
+import { printStyles } from "./styles";
 
 function escapeHtml(value: unknown) {
   const text = String(value ?? "");
@@ -17,6 +17,44 @@ function alignClass(col: PrintableTableColumn) {
   if (col.align === "right") return "align-right";
   if (col.align === "center") return "align-center";
   return "";
+}
+
+function isPartyLabel(label: string) {
+  const normalized = label.trim().toLowerCase();
+  return ["party", "customer", "supplier", "account"].includes(normalized);
+}
+
+function renderMeta(payload: PrintableDocumentPayload) {
+  const meta = payload.meta;
+  if (!meta) return "";
+  const chips: Array<{ text: string; className?: string }> = [];
+  if (meta.dateFrom || meta.dateTo) {
+    chips.push({
+      text: `Period: ${escapeHtml(meta.dateFrom || "-")} - ${escapeHtml(meta.dateTo || "-")}`,
+    });
+  }
+  if (meta.createdBy) chips.push({ text: `Prepared By: ${escapeHtml(meta.createdBy)}` });
+  if (meta.createdAt) chips.push({ text: `Prepared At: ${escapeHtml(meta.createdAt)}` });
+  if (meta.filters) {
+    for (const [key, val] of Object.entries(meta.filters)) {
+      const isParty = isPartyLabel(key);
+      chips.push({
+        text: `${escapeHtml(key)}: ${escapeHtml(val)}`,
+        className: isParty ? "party-chip" : undefined,
+      });
+    }
+  }
+  if (chips.length === 0) return "";
+  return `
+    <div class="meta">
+      ${chips
+        .map(
+          (chip) =>
+            `<div class="meta-chip${chip.className ? ` ${chip.className}` : ""}">${chip.text}</div>`,
+        )
+        .join("")}
+    </div>
+  `;
 }
 
 function formatPrintedDate(value?: string) {
@@ -59,14 +97,6 @@ export function renderDayBookHtml(payload: PrintableDocumentPayload, options: Pr
   const dateFrom = meta?.dateFrom || "";
   const dateTo = meta?.dateTo || "";
   const rangeLabel = dateFrom && dateTo && dateFrom !== dateTo ? `${dateFrom} - ${dateTo}` : dateFrom || dateTo;
-
-  const companyLine = [
-    payload.company.name,
-    payload.company.address,
-  ]
-    .filter(Boolean)
-    .join(", ");
-  const phoneSuffix = payload.company.phone ? ` (Mob: ${payload.company.phone})` : "";
 
   const table = payload.table;
   const header = table
@@ -112,6 +142,9 @@ export function renderDayBookHtml(payload: PrintableDocumentPayload, options: Pr
       `
       : "";
   const pageSize = resolvePageSize(options);
+  const watermark = payload.settings?.showWatermark
+    ? `<div class="watermark">${escapeHtml(payload.settings?.watermarkText || payload.company.name)}</div>`
+    : "";
 
   return `
 <!DOCTYPE html>
@@ -121,6 +154,7 @@ export function renderDayBookHtml(payload: PrintableDocumentPayload, options: Pr
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>${escapeHtml(payload.title)}</title>
     <style>
+      ${printStyles}
       :root {
         --page-width: ${pageSize.widthMm};
         --page-height: ${pageSize.heightMm};
@@ -129,16 +163,36 @@ export function renderDayBookHtml(payload: PrintableDocumentPayload, options: Pr
         --page-margin-bottom: ${options.marginBottomMm}mm;
         --page-margin-left: ${options.marginLeftMm}mm;
       }
-      ${dayBookStyles}
     </style>
   </head>
   <body>
+    ${watermark}
     <div class="page">
       <div class="doc">
-        <div class="company-line">${escapeHtml(companyLine)}${escapeHtml(phoneSuffix)}</div>
-        <div class="title-bar">DAY BOOK${rangeLabel ? ` (${escapeHtml(rangeLabel)})` : ""}</div>
-        <div class="print-line">Printing Date: ${escapeHtml(formatPrintedDate(meta?.createdAt))}</div>
+        <div class="header">
+          <div class="brand">
+            ${payload.company.logoUrl ? `<img class="brand-logo" src="${escapeHtml(payload.company.logoUrl)}" alt="logo" />` : ""}
+            <div>
+              <div class="brand-title">${escapeHtml(payload.company.name)}</div>
+              <div class="brand-meta">
+                ${payload.company.address ? `${escapeHtml(payload.company.address)}<br/>` : ""}
+                ${payload.company.phone ? `Phone: ${escapeHtml(payload.company.phone)}` : ""}
+                ${payload.company.ntn ? ` | NTN: ${escapeHtml(payload.company.ntn)}` : ""}
+                ${payload.company.strn ? ` | STRN: ${escapeHtml(payload.company.strn)}` : ""}
+              </div>
+            </div>
+          </div>
+          <div class="doc-title">
+            <h1>DAY BOOK${rangeLabel ? ` (${escapeHtml(rangeLabel)})` : ""}</h1>
+            <div class="doc-no">Printing Date: ${escapeHtml(formatPrintedDate(meta?.createdAt))}</div>
+          </div>
+        </div>
+        ${renderMeta(payload)}
         ${table ? `<table>${header}<tbody>${rows}${totalsRow}</tbody></table>` : ""}
+      </div>
+      <div class="footer">
+        <div>Generated by Rice Mill ERP</div>
+        <div>Page <span class="pageNumber"></span></div>
       </div>
     </div>
   </body>
