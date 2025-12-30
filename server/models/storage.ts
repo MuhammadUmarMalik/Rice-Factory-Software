@@ -113,15 +113,20 @@ export interface IStorage {
   // Expense entries
   getExpenses(): Promise<ExpenseEntry[]>;
   createExpense(expense: InsertExpenseEntry, performedBy?: { userId?: number; role?: string }): Promise<ExpenseEntry>;
+  getExpense(id: number): Promise<ExpenseEntry | undefined>;
+  updateExpense(id: number, expense: Partial<InsertExpenseEntry>, performedBy?: { userId?: number; role?: string }): Promise<ExpenseEntry | undefined>;
+  deleteExpense(id: number): Promise<boolean>;
 
   // Accounts
-  getAccounts(type?: string): Promise<Account[]>;
+  getAccounts(type?: string, active?: boolean): Promise<Account[]>;
   getAccount(id: number): Promise<Account | undefined>;
   createAccount(account: InsertAccount): Promise<Account>;
   updateAccount(id: number, account: Partial<InsertAccount>): Promise<Account | undefined>;
+  deleteAccount(id: number): Promise<boolean>;
 
   // Products
   getProducts(): Promise<Product[]>;
+  getActiveProducts(): Promise<Product[]>;
   getProduct(id: number): Promise<Product | undefined>;
   createProduct(product: InsertProduct): Promise<Product>;
   updateProduct(id: number, product: Partial<InsertProduct>): Promise<Product | undefined>;
@@ -878,6 +883,11 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(expenseEntries).orderBy(desc(expenseEntries.expenseDate)).all();
   }
 
+  async getExpense(id: number): Promise<ExpenseEntry | undefined> {
+    const [expense] = db.select().from(expenseEntries).where(eq(expenseEntries.id, id)).all();
+    return expense;
+  }
+
   private nextExpenseNumber(client: DbClient): string {
     const year = new Date().getFullYear();
     const [last] = client.select().from(expenseEntries).orderBy(desc(expenseEntries.id)).limit(1).all();
@@ -930,6 +940,97 @@ export class DatabaseStorage implements IStorage {
       });
 
       return created as any;
+    });
+  }
+
+  async updateExpense(id: number, expense: Partial<InsertExpenseEntry>, performedBy?: { userId?: number; role?: string }): Promise<ExpenseEntry | undefined> {
+    const existing = await this.getExpense(id);
+    if (!existing) return undefined;
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const postingDate = expense.expenseDate
+        ? new Date(expense.expenseDate as any)
+        : existing.expenseDate
+          ? new Date(existing.expenseDate as any)
+          : new Date();
+      this.assertPostingAllowed(client, postingDate, "expense");
+
+      const expenseAccountId = expense.expenseAccountId ?? existing.expenseAccountId;
+      const payFromAccountId = expense.payFromAccountId ?? existing.payFromAccountId;
+
+      const [expAcc] = client.select().from(accounts).where(eq(accounts.id, expenseAccountId)).all();
+      if (!expAcc || String(expAcc.type).toLowerCase() !== "expense") throw new Error("Expense account must be of type expense");
+      const [payAcc] = client.select().from(accounts).where(eq(accounts.id, payFromAccountId)).all();
+      if (!payAcc) throw new Error("Pay-from account not found");
+
+      const amount = parseAmount(expense.amount ?? existing.amount ?? "0");
+      if (amount <= 0) throw new Error("Amount must be greater than zero");
+
+      const priorEntries = tx
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .all();
+      const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .run();
+      this.recomputeAccountBalances(client, affectedAccountIds);
+
+      const updated = tx.update(expenseEntries).set({
+        ...expense,
+        expenseAccountId,
+        payFromAccountId,
+        amount: amount.toString(),
+        expenseDate: postingDate,
+        createdBy: existing.createdBy ?? performedBy?.userId,
+      }).where(eq(expenseEntries.id, id)).returning().get();
+
+      this.postLedgerEntry(client, {
+        accountId: expenseAccountId,
+        transactionType: "debit",
+        amount: amount.toString(),
+        description: `Expense ${existing.voucherNo}`,
+        referenceType: "expense",
+        referenceId: id,
+        entryDate: postingDate,
+      });
+      this.postLedgerEntry(client, {
+        accountId: payFromAccountId,
+        transactionType: "credit",
+        amount: amount.toString(),
+        description: `Expense ${existing.voucherNo}`,
+        referenceType: "expense",
+        referenceId: id,
+        entryDate: postingDate,
+      });
+
+      return updated as any;
+    });
+  }
+
+  async deleteExpense(id: number): Promise<boolean> {
+    const existing = await this.getExpense(id);
+    if (!existing) return false;
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const postingDate = existing.expenseDate ? new Date(existing.expenseDate as any) : new Date();
+      this.assertPostingAllowed(client, postingDate, "expense");
+
+      const priorEntries = tx
+        .select()
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .all();
+      const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(ledgerEntries)
+        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .run();
+      this.recomputeAccountBalances(client, affectedAccountIds);
+      tx.delete(expenseEntries).where(eq(expenseEntries.id, id)).run();
+      return true;
     });
   }
 
@@ -1339,10 +1440,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Accounts
-  async getAccounts(type?: string): Promise<Account[]> {
-    if (type) {
+  async getAccounts(type?: string, active?: boolean): Promise<Account[]> {
+    const filters: any[] = [];
+    if (type) filters.push(eq(accounts.type, type as any));
+    if (active !== undefined) filters.push(eq(accounts.isActive, active as any));
+
+    if (filters.length > 0) {
       return db.select().from(accounts)
-        .where(eq(accounts.type, type as any))
+        .where(and(...filters as any))
         .orderBy(accounts.name)
         .all();
     }
@@ -1363,8 +1468,40 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateAccount(id: number, account: Partial<InsertAccount>): Promise<Account | undefined> {
+    const [existing] = db.select().from(accounts).where(eq(accounts.id, id)).all();
+    if (!existing) return undefined;
+
+    const openingBalanceChanged =
+      account.openingBalance !== undefined && account.openingBalance !== existing.openingBalance;
+    const typeChanged = account.type !== undefined && account.type !== existing.type;
+
     const [updated] = await db.update(accounts).set(account).where(eq(accounts.id, id)).returning();
+    if (!updated) return updated;
+
+    if (openingBalanceChanged || typeChanged) {
+      this.recomputeAccountBalances(db, [id]);
+      const [refreshed] = db.select().from(accounts).where(eq(accounts.id, id)).all();
+      return refreshed ?? updated;
+    }
+
     return updated;
+  }
+
+  async deleteAccount(id: number): Promise<boolean> {
+    const [existing] = db.select().from(accounts).where(eq(accounts.id, id)).all();
+    if (!existing) return false;
+    if (existing.isSystemAccount) {
+      throw new Error("System accounts cannot be deleted");
+    }
+    try {
+      const result = await db.delete(accounts).where(eq(accounts.id, id)).run();
+      return result.changes > 0;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "SQLITE_CONSTRAINT_FOREIGNKEY") throw error;
+      await db.update(accounts).set({ isActive: false as any }).where(eq(accounts.id, id)).run();
+      return true;
+    }
   }
 
   async updateAccountBalance(id: number, amount: string, type: 'add' | 'subtract'): Promise<void> {
@@ -1635,6 +1772,15 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(products).orderBy(products.name).all();
   }
 
+  async getActiveProducts(): Promise<Product[]> {
+    return db
+      .select()
+      .from(products)
+      .where(eq(products.isActive, true as any))
+      .orderBy(products.name)
+      .all();
+  }
+
   async getProduct(id: number): Promise<Product | undefined> {
     const [product] = db.select().from(products).where(eq(products.id, id)).all();
     return product;
@@ -1651,8 +1797,23 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteProduct(id: number): Promise<boolean> {
-    const result = await db.delete(products).where(eq(products.id, id)).run();
-    return result.changes > 0;
+    try {
+      const result = await db.delete(products).where(eq(products.id, id)).run();
+      return result.changes > 0;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "SQLITE_CONSTRAINT_FOREIGNKEY") throw error;
+
+      const [existing] = db
+        .select({ id: products.id })
+        .from(products)
+        .where(eq(products.id, id))
+        .all();
+      if (!existing) return false;
+
+      await db.update(products).set({ isActive: false as any }).where(eq(products.id, id)).run();
+      return true;
+    }
   }
 
   async updateProductStock(id: number, quantity: string, type: 'add' | 'subtract'): Promise<void> {

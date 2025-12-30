@@ -9,3 +9,5 @@ export const expenseEntrySchema = insertExpenseEntrySchema.extend({
   payFromAccountId: z.number().int().positive(),
   description: z.string().optional(),
 });
+
+export const expenseEntryUpdateSchema = expenseEntrySchema.partial();
