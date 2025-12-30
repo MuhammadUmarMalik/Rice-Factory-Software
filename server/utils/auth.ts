@@ -2,7 +2,9 @@ import type { Request, RequestHandler } from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { storage } from "../models/storage";
+import { ensureDesktopSecret } from "./desktop-secret";
 
+ensureDesktopSecret();
 const isProduction = process.env.NODE_ENV === "production";
 const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET || (isProduction ? "" : "dev-secret");
 if (isProduction && !JWT_SECRET) {
