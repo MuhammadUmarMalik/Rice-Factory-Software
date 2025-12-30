@@ -1,10 +1,13 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Calendar as CalendarIcon, ChevronDown } from "lucide-react";
+import { format } from "date-fns";
+import type { DateRange } from "react-day-picker";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import type { DateRangePreset, DateRangeValue } from "@/utils/dateRanges";
-import { formatDateInput, getPresetRange, parseDateInput } from "@/utils/dateRanges";
+import { formatDateInput, getPresetRange } from "@/utils/dateRanges";
 
 type DateRangeFilterProps = {
   value: DateRangeValue;
@@ -27,18 +30,32 @@ export function DateRangeFilter({
   value,
   onChange,
   className,
-  debounceMs = 300,
 }: DateRangeFilterProps) {
-  const id = useId();
-  const [fromInput, setFromInput] = useState(() => formatDateInput(value.from));
-  const [toInput, setToInput] = useState(() => formatDateInput(value.to));
+  const [open, setOpen] = useState(false);
+  const initialPresetRef = useRef(value.preset);
+  const initialRangeRef = useRef<DateRange | undefined>({
+    from: value.from ?? undefined,
+    to: value.to ?? undefined,
+  });
+  const [draftRange, setDraftRange] = useState<DateRange | undefined>(() => ({
+    from: value.from ?? undefined,
+    to: value.to ?? undefined,
+  }));
   const currentFrom = useMemo(() => formatDateInput(value.from), [value.from]);
   const currentTo = useMemo(() => formatDateInput(value.to), [value.to]);
+  const displayLabel = useMemo(() => {
+    if (value.from && value.to) {
+      return `${format(value.from, "dd MMM yy")} - ${format(value.to, "dd MMM yy")}`;
+    }
+    if (value.from) {
+      return format(value.from, "dd MMM yy");
+    }
+    return "Select range";
+  }, [value.from, value.to]);
 
   useEffect(() => {
-    setFromInput(currentFrom);
-    setToInput(currentTo);
-  }, [currentFrom, currentTo]);
+    setDraftRange({ from: value.from ?? undefined, to: value.to ?? undefined });
+  }, [value.from, value.to]);
 
   const handlePresetSelect = (preset: DateRangePreset) => {
     if (preset === value.preset) return;
@@ -47,58 +64,96 @@ export function DateRangeFilter({
       return;
     }
     const next = getPresetRange(preset);
+    setDraftRange({ from: next.from, to: next.to });
     onChange({ preset, from: next.from, to: next.to });
   };
 
-  useEffect(() => {
-    if (value.preset !== "custom") return;
-    const nextFrom = parseDateInput(fromInput);
-    const nextTo = parseDateInput(toInput);
-    if (formatDateInput(nextFrom) === currentFrom && formatDateInput(nextTo) === currentTo) return;
-    const handle = window.setTimeout(() => {
-      onChange({ preset: "custom", from: nextFrom, to: nextTo });
-    }, debounceMs);
-    return () => window.clearTimeout(handle);
-  }, [fromInput, toInput, value.preset, currentFrom, currentTo, onChange, debounceMs]);
+  const handleCalendarSelect = (range?: DateRange) => {
+    setDraftRange(range);
+    if (!range?.from || !range?.to) return;
+    const nextFrom = formatDateInput(range.from);
+    const nextTo = formatDateInput(range.to);
+    if (nextFrom === currentFrom && nextTo === currentTo) return;
+    onChange({ preset: "custom", from: range.from, to: range.to });
+  };
+
+  const handleReset = () => {
+    const preset = initialPresetRef.current;
+    if (preset === "custom") {
+      const initialRange = initialRangeRef.current;
+      setDraftRange(initialRange);
+      onChange({
+        preset: "custom",
+        from: initialRange?.from ?? null,
+        to: initialRange?.to ?? null,
+      });
+      return;
+    }
+    const next = getPresetRange(preset);
+    setDraftRange({ from: next.from, to: next.to });
+    onChange({ preset, from: next.from, to: next.to });
+  };
 
   return (
-    <div className={cn("space-y-3", className)}>
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Date range presets">
-        {presets.map((preset) => (
+    <div className={cn("w-full", className)}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
           <Button
-            key={preset.key}
             type="button"
-            size="sm"
-            variant={value.preset === preset.key ? "default" : "outline"}
-            aria-pressed={value.preset === preset.key}
-            onClick={() => handlePresetSelect(preset.key)}
+            variant="outline"
+            className="w-full justify-between font-normal"
+            aria-label="Choose date range"
           >
-            {preset.label}
+            <span className="flex items-center gap-2 truncate">
+              <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+              <span className="truncate">{displayLabel}</span>
+            </span>
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
           </Button>
-        ))}
-      </div>
-      {value.preset === "custom" && (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div>
-            <Label htmlFor={`${id}-from`}>From</Label>
-            <Input
-              id={`${id}-from`}
-              type="date"
-              value={fromInput}
-              onChange={(event) => setFromInput(event.target.value)}
-            />
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <div className="flex max-w-[420px] overflow-hidden rounded-md bg-popover">
+            <div className="flex w-36 flex-col gap-1 border-r border-border px-3 py-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Presets
+              </div>
+              {presets.map((preset) => (
+                <Button
+                  key={preset.key}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "justify-start px-2 text-xs",
+                    value.preset === preset.key && "bg-muted text-foreground"
+                  )}
+                  aria-pressed={value.preset === preset.key}
+                  onClick={() => handlePresetSelect(preset.key)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="mt-2 justify-start px-2 text-xs text-muted-foreground"
+                onClick={handleReset}
+              >
+                Reset
+              </Button>
+            </div>
+            <div className="p-3">
+              <Calendar
+                mode="range"
+                selected={draftRange}
+                defaultMonth={draftRange?.from ?? draftRange?.to ?? new Date()}
+                onSelect={handleCalendarSelect}
+              />
+            </div>
           </div>
-          <div>
-            <Label htmlFor={`${id}-to`}>To</Label>
-            <Input
-              id={`${id}-to`}
-              type="date"
-              value={toInput}
-              onChange={(event) => setToInput(event.target.value)}
-            />
-          </div>
-        </div>
-      )}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
