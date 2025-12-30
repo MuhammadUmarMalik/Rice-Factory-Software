@@ -20,6 +20,8 @@ import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
 import { SkeletonBox } from "@/components/ui/skeletons";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 type LedgerReportRow = {
   id: number;
@@ -46,8 +48,7 @@ export default function LedgerPage() {
   const { t, isRTL } = useLanguage();
   const [location] = useLocation();
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
   const [voucherType, setVoucherType] = useState<string>("all");
   const [narrationSearch, setNarrationSearch] = useState<string>("");
 
@@ -111,14 +112,14 @@ export default function LedgerPage() {
   });
 
   const { data: ledgerReport, isLoading } = useQuery<LedgerReport>({
-    queryKey: ["/api/ledger", selectedAccountId, scope, dateFrom, dateTo, voucherType, narrationSearch],
+    queryKey: ["/api/ledger", selectedAccountId, scope, fromDate, toDate, voucherType, narrationSearch],
     enabled: !!selectedAccountId,
     queryFn: async () => {
       const params = new URLSearchParams();
       if (selectedAccountId) params.set("accountId", selectedAccountId);
       if (scope) params.set("scope", scope);
-      if (dateFrom) params.set("startDate", dateFrom);
-      if (dateTo) params.set("endDate", dateTo);
+      if (fromDate) params.set("startDate", fromDate);
+      if (toDate) params.set("endDate", toDate);
       if (voucherType && voucherType !== "all") params.set("voucherType", voucherType);
       if (narrationSearch) params.set("narration", narrationSearch);
       const res = await fetchWithAuth(`/api/ledger?${params.toString()}`);
@@ -209,8 +210,8 @@ export default function LedgerPage() {
           params={{
             accountId: selectedAccountId || undefined,
             scope: scope || undefined,
-            startDate: dateFrom || undefined,
-            endDate: dateTo || undefined,
+            startDate: fromDate || undefined,
+            endDate: toDate || undefined,
             voucherType: voucherType !== "all" ? voucherType : undefined,
             narration: narrationSearch || undefined,
             language: isRTL ? "ur" : "en",
@@ -237,6 +238,10 @@ export default function LedgerPage() {
         <CardContent className="pt-6">
           <div className="grid gap-4 md:grid-cols-6">
             <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
+            </div>
+            <div className="md:col-span-2">
               <Label>Select Account</Label>
               <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
                 <SelectTrigger>
@@ -250,14 +255,6 @@ export default function LedgerPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div>
-              <Label>From Date</Label>
-              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            </div>
-            <div>
-              <Label>To Date</Label>
-              <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
             </div>
             <div>
               <Label>Voucher Type</Label>
@@ -296,9 +293,9 @@ export default function LedgerPage() {
             <p className="text-sm text-muted-foreground">
               Opening balance: {balanceLabel(openingBalance)}
             </p>
-            {(dateFrom || dateTo) && (
+            {(fromDate || toDate) && (
               <p className="text-xs text-muted-foreground">
-                {dateFrom ? format(new Date(dateFrom), "dd MMM yyyy") : "Start"} - {dateTo ? format(new Date(dateTo), "dd MMM yyyy") : "Today"}
+                {fromDate ? format(new Date(fromDate), "dd MMM yyyy") : "Start"} - {toDate ? format(new Date(toDate), "dd MMM yyyy") : "Today"}
               </p>
             )}
             {validation && (!validation.closingMatchesLastRow || !validation.closingMatchesTotals) && (

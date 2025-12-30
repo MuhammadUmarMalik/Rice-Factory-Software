@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy } from "react";
 import { Download, Users, Wallet, ArrowUpRight, ArrowDownRight, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,8 +10,9 @@ import type { Account } from "@shared/schema";
 import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 const ReportDetailDialog = lazy(() =>
   import("@/components/report-detail-dialog").then((mod) => ({
@@ -34,7 +35,8 @@ type TrialBalanceResponse = {
 export default function TrialBalancePage() {
   const { t, isRTL, language } = useLanguage();
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
-  const [asOfDate, setAsOfDate] = useState("");
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const asOfDate = toDate || fromDate;
 
   const { data, isLoading } = useQuery<TrialBalanceResponse>({
     queryKey: ["/api/reports/trial-balance", asOfDate],
@@ -169,11 +171,11 @@ export default function TrialBalancePage() {
       <Card>
         <CardContent className="pt-6">
           <div className={`grid gap-4 md:grid-cols-4 ${isRTL ? "direction-rtl" : ""}`}>
-            <div>
+            <div className="md:col-span-2">
               <Label>As of Date</Label>
-              <Input type="date" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
-            <div className="md:col-span-3 flex items-end justify-end">
+            <div className="md:col-span-2 flex items-end justify-end">
               <div className={`text-sm ${balanced ? "text-emerald-700" : "text-destructive"} flex items-center gap-2`}>
                 {balanced ? "Balanced" : `Mismatch: Rs. ${Number(difference).toLocaleString()}`}
                 {!balanced && <AlertTriangle className="h-4 w-4" />}

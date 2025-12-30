@@ -1,13 +1,14 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/data-table";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
-import { Input } from "@/components/ui/input";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
 import { format } from "date-fns";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 type DayBookRow = {
   srNo: number;
@@ -41,15 +42,15 @@ type DayBookDisplayRow = {
 };
 
 export default function DayBookPage() {
-  const today = new Date().toISOString().slice(0, 10);
-  const [selectedDate, setSelectedDate] = useState(today);
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const selectedDate = toDate || fromDate;
 
   const { data, isLoading } = useQuery<DayBookReport>({
     queryKey: ["/api/reports/day-book", selectedDate],
     enabled: !!selectedDate,
     queryFn: async () => {
       const params = new URLSearchParams();
-      params.set("date", selectedDate);
+      if (selectedDate) params.set("date", selectedDate);
       const res = await fetchWithAuth(`/api/reports/day-book?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load day book");
       return res.json();
@@ -163,9 +164,9 @@ export default function DayBookPage() {
       <Card>
         <CardContent className="pt-6">
           <div className="grid gap-4 md:grid-cols-4">
-            <div>
-              <Label>Date</Label>
-              <Input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+            <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
           </div>
         </CardContent>
