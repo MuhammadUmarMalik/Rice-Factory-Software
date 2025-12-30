@@ -1,7 +1,6 @@
 import { Suspense, lazy, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/data-table";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -17,6 +16,8 @@ import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 const ReportDetailDialog = lazy(() =>
   import("@/components/report-detail-dialog").then((mod) => ({
@@ -55,8 +56,8 @@ type OutstandingCustomersReport = {
 };
 
 export default function OutstandingCustomersPage() {
-  const today = new Date().toISOString().slice(0, 10);
-  const [asOfDate, setAsOfDate] = useState(today);
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const asOfDate = toDate || fromDate;
   const [customerId, setCustomerId] = useState<string>("all");
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
@@ -123,11 +124,11 @@ export default function OutstandingCustomersPage() {
       <Card>
         <CardContent className="pt-6">
           <div className="grid gap-4 md:grid-cols-4">
-            <div>
+            <div className="md:col-span-2">
               <Label>As of Date</Label>
-              <Input type="date" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
-            <div className="md:col-span-3">
+            <div className="md:col-span-2">
               <Label>Customer</Label>
               <Select value={customerId} onValueChange={setCustomerId}>
                 <SelectTrigger>

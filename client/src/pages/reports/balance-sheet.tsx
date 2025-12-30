@@ -1,7 +1,5 @@
-import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useQuery } from "@tanstack/react-query";
@@ -9,6 +7,8 @@ import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
 import { SkeletonBox, SkeletonTableRow } from "@/components/ui/skeletons";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 type BalanceSheet = {
   asOfDate: string | number | Date;
@@ -23,8 +23,8 @@ type BalanceSheetRow =
   | { type: "line" | "total" | "grand"; label: string; debit?: string; credit?: string };
 
 export default function BalanceSheetPage() {
-  const today = new Date().toISOString().slice(0, 10);
-  const [asOfDate, setAsOfDate] = useState(today);
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const asOfDate = toDate || fromDate;
 
   const { data, isLoading, error } = useQuery<BalanceSheet>({
     queryKey: ["/api/financial/balance-sheet", asOfDate],
@@ -107,10 +107,10 @@ export default function BalanceSheetPage() {
               </p>
             </div>
             <div className="grid gap-4 md:grid-cols-2 md:items-end">
-              <div>
-                <Label>As of Date</Label>
-                <Input type="date" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
-              </div>
+            <div>
+              <Label>As of Date</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
+            </div>
               <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-2">
                 <p className="text-xs text-muted-foreground">Status</p>
                 <div className="flex items-center justify-between gap-2">

@@ -3,12 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useState } from "react";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 type ProfitLossResponse = {
   period: { fromDate: string | number | Date; toDate: string | number | Date };
@@ -21,15 +21,14 @@ type ProfitLossResponse = {
 
 export default function ProfitLossPage() {
   const { t, isRTL, language } = useLanguage();
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
 
   const { data: profitLoss } = useQuery<ProfitLossResponse>({
-    queryKey: ["/api/reports/profit-loss", dateFrom, dateTo],
+    queryKey: ["/api/reports/profit-loss", fromDate, toDate],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (dateFrom) params.set("startDate", dateFrom);
-      if (dateTo) params.set("endDate", dateTo);
+      if (fromDate) params.set("startDate", fromDate);
+      if (toDate) params.set("endDate", toDate);
       const res = await fetchWithAuth(`/api/reports/profit-loss?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch profit/loss");
       return res.json();
@@ -58,23 +57,19 @@ export default function ProfitLossPage() {
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
           <PrintActions
             docKey={docKeys.profitLoss}
-            params={{ startDate: dateFrom || undefined, endDate: dateTo || undefined }}
+            params={{ startDate: fromDate || undefined, endDate: toDate || undefined }}
             title="Profit & Loss"
-            disabled={!dateFrom || !dateTo}
+            disabled={!isReady}
           />
         </div>
       </div>
 
       <Card>
         <CardContent className="pt-6">
-          <div className={`grid gap-4 md:grid-cols-4 ${isRTL ? "direction-rtl" : ""}`}>
-            <div>
-              <Label className={isRTL ? "font-urdu" : ""}>From Date</Label>
-              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            </div>
-            <div>
-              <Label className={isRTL ? "font-urdu" : ""}>To Date</Label>
-              <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <div className={`grid gap-4 md:grid-cols-2 ${isRTL ? "direction-rtl" : ""}`}>
+            <div className="md:col-span-2">
+              <Label className={isRTL ? "font-urdu" : ""}>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
           </div>
         </CardContent>
