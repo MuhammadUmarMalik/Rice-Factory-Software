@@ -1,22 +1,60 @@
-import { useState, type FormEvent } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { useEffect, useState, type FormEvent, type SVGProps } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthStore } from "@/stores/auth.store";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/apiRequest";
 import { useLocation } from "wouter";
+
+const EyeIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const EyeOffIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M9.88 9.88a3 3 0 0 0 4.24 4.24" />
+    <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c5.53 0 10 5 10 7a10.29 10.29 0 0 1-1.67 3.33" />
+    <path d="M6.61 6.61A10.3 10.3 0 0 0 2 12c0 2 4.47 7 10 7a10.32 10.32 0 0 0 5.39-1.61" />
+    <path d="m2 2 20 20" />
+  </svg>
+);
 
 export default function LoginPage() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const setSession = useAuthStore((state) => state.setSession);
+  const user = useAuthStore((state) => state.user);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (user) setLocation("/");
+  }, [user, setLocation]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -35,7 +73,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/30 px-4">
-      <Card className="w-full max-w-md min-h-[420px] shadow-sm">
+      <Card className="w-full max-w-md min-h-[330px] shadow-sm">
         <CardHeader className="min-h-[84px]">
           <CardTitle className="text-2xl leading-tight">Sign in</CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -72,7 +110,7 @@ export default function LoginPage() {
                   className="absolute inset-y-0 right-2 inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
                   aria-label={showPassword ? "Hide password" : "Show password"}
                 >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  {showPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
                 </button>
               </div>
             </div>

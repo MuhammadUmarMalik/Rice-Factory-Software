@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/auth.store";
+import { SkeletonBox } from "@/components/ui/skeletons";
 
 const employeeSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -535,7 +536,11 @@ export default function EmployeesPage() {
               </CardHeader>
               <CardContent>
                 {isSalaryLoading ? (
-                  <div className="text-sm text-muted-foreground">{t("loading")}</div>
+                  <div className="space-y-2">
+                    {Array.from({ length: 3 }).map((_, index) => (
+                      <SkeletonBox key={index} className="h-14 w-full" />
+                    ))}
+                  </div>
                 ) : salaryStructures.length === 0 ? (
                   <div className="text-sm text-muted-foreground">{t("noRecords")}</div>
                 ) : (

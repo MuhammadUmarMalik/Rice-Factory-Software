@@ -1,23 +1,21 @@
-import { Suspense, lazy, useCallback, useMemo, useState } from "react";
-import {
-  ShoppingCart,
-  TrendingUp,
-  Package,
-  DollarSign,
-  Factory,
-  AlertTriangle,
-  Banknote,
-  Landmark,
-  Users,
-  UserMinus,
-} from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ShoppingCart from "lucide-react/dist/esm/icons/shopping-cart";
+import TrendingUp from "lucide-react/dist/esm/icons/trending-up";
+import Package from "lucide-react/dist/esm/icons/package";
+import DollarSign from "lucide-react/dist/esm/icons/dollar-sign";
+import Factory from "lucide-react/dist/esm/icons/factory";
+import AlertTriangle from "lucide-react/dist/esm/icons/alert-triangle";
+import Banknote from "lucide-react/dist/esm/icons/banknote";
+import Landmark from "lucide-react/dist/esm/icons/landmark";
+import Users from "lucide-react/dist/esm/icons/users";
+import UserMinus from "lucide-react/dist/esm/icons/user-minus";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/contexts/language-context";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Skeleton } from "@/components/ui/skeleton";
+import { SkeletonBox } from "@/components/ui/skeletons";
 import { format } from "date-fns";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,16 +28,39 @@ import {
 } from "@/components/ui/select";
 import { useReportDetail } from "@/components/report-detail-hook";
 
-const DashboardCharts = lazy(() => import("@/components/dashboard/DashboardCharts").then((mod) => ({
-  default: mod.DashboardCharts,
-})));
+const DashboardChartsSection = lazy(() =>
+  import("@/components/dashboard/DashboardChartsSection").then((mod) => ({
+    default: mod.DashboardChartsSection,
+  })),
+);
+const DashboardActivitySection = lazy(() =>
+  import("@/components/dashboard/DashboardActivitySection").then((mod) => ({
+    default: mod.DashboardActivitySection,
+  })),
+);
+const DashboardInsightsSection = lazy(() =>
+  import("@/components/dashboard/DashboardInsightsSection").then((mod) => ({
+    default: mod.DashboardInsightsSection,
+  })),
+);
 const ReportDetailDialog = lazy(() =>
   import("@/components/report-detail-dialog").then((mod) => ({
     default: mod.ReportDetailDialog,
   })),
 );
 
-type DashboardSummary = {
+type DayBookRow = {
+  id: string;
+  type: string;
+  partyName: string;
+  mode: string;
+  receipt: string;
+  payment: string;
+  referenceType?: string | null;
+  referenceId?: number | null;
+};
+
+type DashboardSummaryCore = {
   filters: { fromDate: string; toDate: string; fiscalYearId?: number | null };
   fiscalYears: Array<{ id: number; name: string; startDate: string | number | Date; endDate: string | number | Date }>;
   kpis: {
@@ -53,6 +74,9 @@ type DashboardSummary = {
     outstandingSuppliers: number;
   };
   trialBalance: { debitTotal: number; creditTotal: number; difference: number; balanced: boolean };
+};
+
+type DashboardSummaryDetails = {
   charges: {
     freight: number;
     loading: number;
@@ -73,22 +97,41 @@ type DashboardSummary = {
   };
   dayBook: {
     date: string;
-    rows: Array<{
-      id: string;
-      type: string;
-      partyName: string;
-      mode: string;
-      receipt: string;
-      payment: string;
-      referenceType?: string | null;
-      referenceId?: number | null;
-    }>;
+    rows: DayBookRow[];
   };
 };
 
 type DashboardAlerts = {
   alerts: Array<{ key: string; severity: "info" | "warning" | "critical"; message: string }>;
 };
+
+function useLazySection<T extends HTMLElement>(rootMargin = "200px") {
+  const ref = useRef<T | null>(null);
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    if (active) return;
+    const node = ref.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setActive(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setActive(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [active, rootMargin]);
+
+  return { ref, active };
+}
 
 export default function Dashboard() {
   const { t, isRTL, language } = useLanguage();
@@ -101,10 +144,14 @@ export default function Dashboard() {
   const [fiscalYearId, setFiscalYearId] = useState<string>("all");
   const [godown, setGodown] = useState<string>("all");
 
-  const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummary>({
-    queryKey: ["/api/dashboard/summary", fromDate, toDate, fiscalYearId, godown],
+  const chartsSection = useLazySection<HTMLDivElement>("300px");
+  const detailsSection = useLazySection<HTMLDivElement>("300px");
+
+  const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummaryCore>({
+    queryKey: ["/api/dashboard/summary", "core", fromDate, toDate, fiscalYearId, godown],
     queryFn: async () => {
       const params = new URLSearchParams();
+      params.set("scope", "core");
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
       if (fiscalYearId !== "all") params.set("fiscalYearId", fiscalYearId);
@@ -117,7 +164,25 @@ export default function Dashboard() {
     refetchOnWindowFocus: true,
   });
 
-  const { data: alertsData } = useQuery<DashboardAlerts>({
+  const { data: details, isLoading: detailsLoading } = useQuery<DashboardSummaryDetails>({
+    queryKey: ["/api/dashboard/summary", "details", fromDate, toDate, fiscalYearId, godown],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("scope", "details");
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
+      if (fiscalYearId !== "all") params.set("fiscalYearId", fiscalYearId);
+      const res = await fetch(`/api/dashboard/summary?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to fetch dashboard details");
+      return res.json();
+    },
+    enabled: detailsSection.active,
+    staleTime: 0,
+    refetchInterval: 30000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: alertsData, isLoading: alertsLoading } = useQuery<DashboardAlerts>({
     queryKey: ["/api/dashboard/alerts", fromDate, toDate, fiscalYearId, godown],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -128,32 +193,6 @@ export default function Dashboard() {
       if (!res.ok) throw new Error("Failed to fetch dashboard alerts");
       return res.json();
     },
-    staleTime: 0,
-    refetchInterval: 30000,
-    refetchOnWindowFocus: true,
-  });
-
-  const { data: chartData, isLoading: chartLoading } = useQuery<{
-    monthlyTotals: { name: string; purchases: number; sales: number }[];
-    productStock: { name: string; stock: number; unit: string }[];
-  }>({
-    queryKey: ["/api/dashboard/charts", fromDate, toDate, fiscalYearId, godown],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (fromDate) params.set("fromDate", fromDate);
-      if (toDate) params.set("toDate", toDate);
-      if (fiscalYearId !== "all") params.set("fiscalYearId", fiscalYearId);
-      const res = await fetch(`/api/dashboard/charts?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch chart data");
-      return res.json();
-    },
-    staleTime: 0,
-    refetchInterval: 30000,
-    refetchOnWindowFocus: true,
-  });
-
-  const { data: processingBatches = [], isLoading: processingLoading } = useQuery<any[]>({
-    queryKey: ["/api/processing"],
     staleTime: 0,
     refetchInterval: 30000,
     refetchOnWindowFocus: true,
@@ -250,11 +289,7 @@ export default function Dashboard() {
     [t],
   );
 
-  const dayBookRows = useMemo(() => summary?.dayBook.rows || [], [summary?.dayBook.rows]);
-  const pendingBatches = useMemo(
-    () => processingBatches.filter((p: any) => p.status !== "completed"),
-    [processingBatches],
-  );
+  const dayBookRows = useMemo(() => details?.dayBook.rows || [], [details?.dayBook.rows]);
   const handleFiscalYearChange = useCallback(
     (val: string) => {
       setFiscalYearId(val);
@@ -265,6 +300,73 @@ export default function Dashboard() {
       }
     },
     [summary?.fiscalYears],
+  );
+
+  const chartsFallback = (
+    <div className="grid gap-6">
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-48" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-[420px] w-full" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-32" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-96 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  const activityFallback = (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-40" />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <SkeletonBox key={i} className="h-14 w-full" />
+          ))}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-32" />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <SkeletonBox key={i} className="h-16 w-full" />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  const insightsFallback = (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-36" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-24 w-full" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-44" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-48 w-full" />
+        </CardContent>
+      </Card>
+    </div>
   );
 
   return (
@@ -344,7 +446,7 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 {summaryLoading ? (
-                  <Skeleton className="h-8 w-32" />
+                  <SkeletonBox className="h-8 w-32" />
                 ) : (
                   <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
                     {stat.value}
@@ -370,7 +472,7 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 {summaryLoading ? (
-                  <Skeleton className="h-8 w-32" />
+                  <SkeletonBox className="h-8 w-32" />
                 ) : (
                   <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
                     {stat.value}
@@ -386,31 +488,48 @@ export default function Dashboard() {
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-base font-semibold">Trial Balance Health</CardTitle>
-            <Badge variant={summary?.trialBalance.balanced ? "default" : "destructive"}>
-              {summary?.trialBalance.balanced ? "Balanced" : "Mismatch"}
-            </Badge>
+            {summaryLoading ? (
+              <SkeletonBox className="h-6 w-20" />
+            ) : (
+              <Badge variant={summary?.trialBalance.balanced ? "default" : "destructive"}>
+                {summary?.trialBalance.balanced ? "Balanced" : "Mismatch"}
+              </Badge>
+            )}
           </CardHeader>
           <CardContent className="space-y-2">
-            <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-              <span className="text-muted-foreground">Total Debit</span>
-              <span className="font-mono">{money(summary?.trialBalance.debitTotal)}</span>
-            </div>
-            <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-              <span className="text-muted-foreground">Total Credit</span>
-              <span className="font-mono">{money(summary?.trialBalance.creditTotal)}</span>
-            </div>
-            <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-              <span className="text-muted-foreground">Difference</span>
-              <span className={`font-mono ${summary?.trialBalance.balanced ? "text-emerald-600" : "text-destructive"}`}>
-                {money(summary?.trialBalance.difference)}
-              </span>
-            </div>
-            <div className={`flex items-center justify-between pt-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-              <span className="text-sm text-muted-foreground">Profit is final</span>
-              <Badge variant={summary?.trialBalance.balanced ? "default" : "secondary"}>
-                {summary?.trialBalance.balanced ? "Enabled" : "Disabled"}
-              </Badge>
-            </div>
+            {summaryLoading ? (
+              <div className="space-y-2">
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-2/3" />
+              </div>
+            ) : (
+              <>
+                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-muted-foreground">Total Debit</span>
+                  <span className="font-mono">{money(summary?.trialBalance.debitTotal)}</span>
+                </div>
+                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-muted-foreground">Total Credit</span>
+                  <span className="font-mono">{money(summary?.trialBalance.creditTotal)}</span>
+                </div>
+                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-muted-foreground">Difference</span>
+                  <span
+                    className={`font-mono ${summary?.trialBalance.balanced ? "text-emerald-600" : "text-destructive"}`}
+                  >
+                    {money(summary?.trialBalance.difference)}
+                  </span>
+                </div>
+                <div className={`flex items-center justify-between pt-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-sm text-muted-foreground">Profit is final</span>
+                  <Badge variant={summary?.trialBalance.balanced ? "default" : "secondary"}>
+                    {summary?.trialBalance.balanced ? "Enabled" : "Disabled"}
+                  </Badge>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -420,7 +539,13 @@ export default function Dashboard() {
             <AlertTriangle className="h-4 w-4 text-destructive" />
           </CardHeader>
           <CardContent className="space-y-3">
-            {(alertsData?.alerts || []).length === 0 ? (
+            {alertsLoading ? (
+              <div className="space-y-2">
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-5/6" />
+                <SkeletonBox className="h-4 w-2/3" />
+              </div>
+            ) : (alertsData?.alerts || []).length === 0 ? (
               <p className="text-sm text-muted-foreground">No alerts.</p>
             ) : (
               (alertsData?.alerts || []).map((alert) => (
@@ -436,224 +561,58 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <Suspense
-        fallback={
-          <div className="grid gap-6">
-            <Card>
-              <CardHeader>
-                <Skeleton className="h-5 w-48" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-[420px] w-full" />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <Skeleton className="h-5 w-32" />
-              </CardHeader>
-              <CardContent>
-                <Skeleton className="h-96 w-full" />
-              </CardContent>
-            </Card>
-          </div>
-        }
-      >
-        <DashboardCharts
-          chartLoading={chartLoading}
-          chartData={chartData}
-          isRTL={isRTL}
-          purchasesLabel={t("purchases")}
-          salesLabel={t("sales")}
-        />
-      </Suspense>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-base font-semibold">Today's Day Book</CardTitle>
-            <Link href="/reports/day-book">
-              <Button variant="ghost" size="sm">View full</Button>
-            </Link>
-          </CardHeader>
-          <CardContent>
-            {dayBookRows.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">No vouchers posted.</p>
-            ) : (
-              <div className="space-y-3">
-                {dayBookRows.map((row, index) => (
-                  <button
-                    key={`${row.id}-${index}`}
-                    type="button"
-                    onClick={() => {
-                      if (row.referenceType && row.referenceId) {
-                        openDetail({ type: row.referenceType, id: Number(row.referenceId) });
-                      }
-                    }}
-                    className={`w-full rounded-lg border p-3 text-left hover:bg-muted/30 ${isRTL ? "text-right" : ""}`}
-                  >
-                    <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                      <div>
-                        <p className="text-sm font-medium">{row.id}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {row.type} • {row.partyName || "-"}
-                        </p>
-                      </div>
-                      <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                        <p className="text-xs text-muted-foreground">Debit</p>
-                        <p className="font-mono text-sm">{money(parseFloat(row.receipt || "0"))}</p>
-                      </div>
-                      <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                        <p className="text-xs text-muted-foreground">Credit</p>
-                        <p className="font-mono text-sm">{money(parseFloat(row.payment || "0"))}</p>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-base font-semibold">Pending Items</CardTitle>
-            <Link href="/processing">
-              <Button variant="ghost" size="sm">View all</Button>
-            </Link>
-          </CardHeader>
-          <CardContent>
-            {processingLoading ? (
-              <div className="space-y-3">
-                {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full" />)}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {pendingBatches.slice(0, 3).map((item: any, index: number) => (
-                  <div
-                    key={index}
-                    className={`flex items-center gap-3 p-3 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}
-                    data-testid={`pending-item-${index}`}
-                  >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-3/10">
-                      <Factory className="h-4 w-4 text-chart-3" />
-                    </div>
-                    <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
-                      <p className="text-sm font-medium">{item.sourceProduct?.name || "-"}</p>
-                      <p className="text-xs text-muted-foreground font-mono">{item.batchNumber}</p>
-                    </div>
-                    <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                      <p className="text-sm font-mono">
-                        {parseFloat(item.sourceQuantity || "0").toLocaleString()} kg
-                      </p>
-                      <Badge
-                        variant={item.status === "in_progress" ? "default" : "secondary"}
-                        className="text-xs"
-                      >
-                        {item.status === "in_progress" ? t("inProgress") : t("pending")}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
-                {pendingBatches.length === 0 && (
-                  <p className="text-sm text-muted-foreground text-center py-4">
-                    No pending processing.
-                  </p>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <div ref={chartsSection.ref}>
+        {/* Lazy-load chart code + data only when the charts are near the viewport. */}
+        {chartsSection.active ? (
+          <Suspense fallback={chartsFallback}>
+            <DashboardChartsSection
+              fromDate={fromDate}
+              toDate={toDate}
+              fiscalYearId={fiscalYearId}
+              godown={godown}
+              isRTL={isRTL}
+              purchasesLabel={t("purchases")}
+              salesLabel={t("sales")}
+            />
+          </Suspense>
+        ) : (
+          chartsFallback
+        )}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader className={isRTL ? "text-right" : ""}>
-            <CardTitle className="text-base font-semibold">Charges Impact</CardTitle>
-            <p className="text-sm text-muted-foreground">Ledger-based totals</p>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {summaryLoading ? (
-              <Skeleton className="h-24 w-full" />
-            ) : (
-              <>
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span>Freight</span>
-                  <span className="font-mono">{money(summary?.charges.freight)}</span>
-                </div>
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span>Loading/Unloading</span>
-                  <span className="font-mono">{money(summary?.charges.loading)}</span>
-                </div>
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span>Market Fee</span>
-                  <span className="font-mono">{money(summary?.charges.marketFee)}</span>
-                </div>
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span>Brokerage / Commission</span>
-                  <span className="font-mono">{money(summary?.charges.brokerage)}</span>
-                </div>
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span>Bardana</span>
-                  <span className="font-mono">{money(summary?.charges.bardana)}</span>
-                </div>
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span>Processing Cost</span>
-                  <span className="font-mono">{money(summary?.charges.processing)}</span>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
+      <div ref={detailsSection.ref}>
+        {/* Defer lower dashboard panels to keep the initial bundle/data light. */}
+        {detailsSection.active ? (
+          <Suspense fallback={activityFallback}>
+            <DashboardActivitySection
+              dayBookRows={dayBookRows}
+              dayBookLoading={detailsLoading}
+              isRTL={isRTL}
+              money={money}
+              pendingLabel={t("pending")}
+              inProgressLabel={t("inProgress")}
+              onOpenDetail={openDetail}
+            />
+          </Suspense>
+        ) : (
+          activityFallback
+        )}
+      </div>
 
-        <Card>
-          <CardHeader className={isRTL ? "text-right" : ""}>
-            <CardTitle className="text-base font-semibold">Stock Intelligence</CardTitle>
-            <p className="text-sm text-muted-foreground">Closing balances and valuation</p>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Paddy Stock</p>
-                <p className="font-mono font-semibold">{(summary?.stock.paddyQty || 0).toLocaleString()}</p>
-              </div>
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Rice Stock</p>
-                <p className="font-mono font-semibold">{(summary?.stock.riceQty || 0).toLocaleString()}</p>
-              </div>
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Broken Stock</p>
-                <p className="font-mono font-semibold">{(summary?.stock.brokenQty || 0).toLocaleString()}</p>
-              </div>
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Bardana Balance</p>
-                <p className="font-mono font-semibold">{(summary?.stock.bardanaBalance || 0).toLocaleString()}</p>
-              </div>
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="text-xs text-muted-foreground">Bardana In / Out</p>
-              <p className="font-mono">{(summary?.stock.bardanaIn || 0).toLocaleString()} / {(summary?.stock.bardanaOut || 0).toLocaleString()}</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="text-xs text-muted-foreground">Stock Valuation</p>
-              <p className="font-mono font-semibold">{money(summary?.stock.valuation)}</p>
-            </div>
-            <div className="rounded-lg border p-3">
-              <p className="text-xs text-muted-foreground">Low Stock Warnings</p>
-              {summary?.stock.lowStock?.length ? (
-                <div className="mt-2 space-y-1 text-sm">
-                  {summary.stock.lowStock.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between">
-                      <span>{item.name}</span>
-                      <span className="font-mono">{item.stock} {item.unit}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No low stock items.</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+      <div>
+        {detailsSection.active ? (
+          <Suspense fallback={insightsFallback}>
+            <DashboardInsightsSection
+              charges={details?.charges}
+              stock={details?.stock}
+              isRTL={isRTL}
+              money={money}
+              loading={detailsLoading}
+            />
+          </Suspense>
+        ) : (
+          insightsFallback
+        )}
       </div>
 
       {reference ? (

@@ -86,12 +86,13 @@ export function ShortcutManager() {
   const user = useAuthStore((state) => state.user);
 
   useQuery<SettingsPayload>({
-    queryKey: ["/api/settings"],
+    queryKey: ["/api/settings/shortcuts"],
     enabled: !!user,
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/settings");
+      const res = await apiRequest("GET", "/api/settings/shortcuts");
       return res.json();
     },
+    staleTime: 60 * 60 * 1000,
     onSuccess: (data) => {
       const merged = mergeShortcutConfig(data.shortcuts);
       setShortcutConfig(merged);

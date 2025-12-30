@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { SkeletonTableRow } from "@/components/ui/skeletons";
 import { Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { useLanguage } from "@/contexts/language-context";
 
@@ -132,14 +132,8 @@ export function DataTable<T extends Record<string, any>>({
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              Array.from({ length: 5 }).map((_, index) => (
-                <TableRow key={index}>
-                  {columns.map((_, colIndex) => (
-                    <TableCell key={colIndex}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  ))}
-                </TableRow>
+              Array.from({ length: 6 }).map((_, index) => (
+                <SkeletonTableRow key={index} columns={columns.length} />
               ))
             ) : paginatedData.length === 0 ? (
               <TableRow>

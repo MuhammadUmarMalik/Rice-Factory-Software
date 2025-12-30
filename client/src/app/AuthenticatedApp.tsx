@@ -197,7 +197,7 @@ export default function AuthenticatedApp() {
                     {authChecked ? (
                       <Router />
                     ) : (
-                      <div className="p-6 text-sm text-muted-foreground">Loading...</div>
+                      <RouteSkeleton />
                     )}
                   </main>
                 </div>

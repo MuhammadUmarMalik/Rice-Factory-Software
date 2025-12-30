@@ -12,6 +12,31 @@ export async function getSettings(_req: Request, res: Response) {
   }
 }
 
+export async function getSettingsSummary(_req: Request, res: Response) {
+  try {
+    const settings = await readSettings();
+    res.json({
+      businessName: settings.businessName,
+      businessNameUrdu: settings.businessNameUrdu,
+      language: settings.language,
+      theme: settings.theme,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to load settings summary" });
+  }
+}
+
+export async function getSettingsShortcuts(_req: Request, res: Response) {
+  try {
+    const settings = await readSettings();
+    res.json({ shortcuts: settings.shortcuts });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to load shortcut settings" });
+  }
+}
+
 export async function saveSettings(req: Request, res: Response) {
   try {
     const saved = await writeSettings(req.body);

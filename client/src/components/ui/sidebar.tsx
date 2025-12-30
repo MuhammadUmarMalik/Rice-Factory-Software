@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, VariantProps } from "class-variance-authority"
-import { PanelLeftIcon } from "lucide-react"
+import PanelLeftIcon from "lucide-react/dist/esm/icons/panel-left"
 import { getShortcutConfig, matchesShortcut } from "@/lib/shortcuts"
 
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -162,6 +162,18 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const sidebarRef = React.useRef<HTMLDivElement | null>(null)
+  const isOffcanvasHidden = !isMobile && collapsible === "offcanvas" && state === "collapsed"
+
+  React.useEffect(() => {
+    const node = sidebarRef.current
+    if (!node) return
+    if (isOffcanvasHidden) {
+      node.setAttribute("inert", "")
+      return
+    }
+    node.removeAttribute("inert")
+  }, [isOffcanvasHidden])
 
   if (collapsible === "none") {
     return (
@@ -237,7 +249,9 @@ function Sidebar({
             : "group-data-[collapsible=icon]:w-[var(--sidebar-width-icon)] group-data-[side=left]:border-r group-data-[side=right]:border-l",
           className
         )}
+        ref={sidebarRef}
         {...props}
+        aria-hidden={isOffcanvasHidden ? true : undefined}
       >
         <div
           data-sidebar="sidebar"

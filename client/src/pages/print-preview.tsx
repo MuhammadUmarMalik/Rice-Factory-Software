@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { fetchPrintPreview } from "@/services/printApi";
+import { SkeletonBox, SkeletonText } from "@/components/ui/skeletons";
 
 type PreviewPayload = {
   docKey: string;
@@ -141,7 +142,10 @@ export default function PrintPreviewPage() {
 
   return (
     <div className="flex h-screen flex-col">
-      <div className="flex flex-wrap items-center gap-3 border-b bg-background px-4 py-3">
+      <header
+        className="flex flex-wrap items-center gap-3 border-b bg-background px-4 py-3"
+        aria-label="Print preview controls"
+      >
         <div className="text-sm font-semibold">{payload.title || "Print Preview"}</div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <label className="text-xs text-muted-foreground" htmlFor="pp-size">
@@ -267,11 +271,13 @@ export default function PrintPreviewPage() {
             Print
           </Button>
         </div>
-      </div>
-      <div className="flex-1 bg-muted/20 p-4">
+      </header>
+      <main className="flex-1 bg-muted/20 p-4" aria-label="Print preview">
         {loading ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Generating preview...
+          <div className="h-full w-full rounded-md bg-white p-6 shadow-sm">
+            <SkeletonBox className="h-6 w-48" />
+            <SkeletonText className="mt-4" lines={3} />
+            <SkeletonBox className="mt-6 h-[420px] w-full" />
           </div>
         ) : (
           <div className="h-full w-full overflow-auto rounded-md bg-white shadow-sm">
@@ -292,7 +298,7 @@ export default function PrintPreviewPage() {
             )}
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }

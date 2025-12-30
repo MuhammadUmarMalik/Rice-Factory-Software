@@ -2,6 +2,59 @@ import { format } from "date-fns";
 import { storage } from "../models/storage";
 
 type DashboardRange = { fromDate: Date; toDate: Date; fiscalYearId?: number };
+type DashboardSummaryScope = "core" | "details" | "full";
+
+type DashboardSummaryCore = {
+  filters: { fromDate: string; toDate: string; fiscalYearId: number | null };
+  fiscalYears: any[];
+  kpis: {
+    totalPurchases: number;
+    totalSales: number;
+    stockValue: number;
+    netProfit: number;
+    cashBalance: number;
+    bankBalance: number;
+    outstandingCustomers: number;
+    outstandingSuppliers: number;
+  };
+  trialBalance: { debitTotal: number; creditTotal: number; difference: number; balanced: boolean };
+};
+
+type DashboardSummaryDetails = {
+  charges: {
+    freight: number;
+    loading: number;
+    marketFee: number;
+    brokerage: number;
+    bardana: number;
+    processing: number;
+  };
+  stock: {
+    paddyQty: number;
+    riceQty: number;
+    brokenQty: number;
+    bardanaIn: number;
+    bardanaOut: number;
+    bardanaBalance: number;
+    lowStock: Array<{ id: number; name: string; stock: number; unit: string }>;
+    valuation: number;
+  };
+  dayBook: {
+    date: string;
+    rows: Array<{
+      id: string;
+      type: string;
+      partyName: string;
+      mode: string;
+      receipt: string;
+      payment: string;
+      referenceType?: string | null;
+      referenceId?: number | null;
+    }>;
+  };
+};
+
+type DashboardSummaryFull = DashboardSummaryCore & DashboardSummaryDetails;
 
 function parseAmount(value: string | number | null | undefined) {
   const num = typeof value === "number" ? value : parseFloat(value || "0");
@@ -54,141 +107,184 @@ function chargeBucket(name: string) {
   return null;
 }
 
-export async function getDashboardSummary(params: Partial<DashboardRange>) {
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope: "core",
+): Promise<DashboardSummaryCore>;
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope: "details",
+): Promise<DashboardSummaryDetails>;
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope?: "full",
+): Promise<DashboardSummaryFull>;
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope: DashboardSummaryScope = "full",
+): Promise<DashboardSummaryCore | DashboardSummaryDetails | DashboardSummaryFull> {
   const { fromDate, toDate, fiscalYears } = await resolveRange(params);
 
-  const [profitLoss, trialBalance, purchasesReport, salesReport] = await Promise.all([
-    storage.getProfitLoss(fromDate, toDate),
-    storage.getTrialBalance(toDate),
-    storage.getPurchaseReport({ fromDate, toDate }),
-    storage.getSalesReport({ fromDate, toDate }),
-  ]);
+  const includeCore = scope === "full" || scope === "core";
+  const includeDetails = scope === "full" || scope === "details";
 
-  const stockReport = await storage.getStockReport({ fromDate, toDate });
-  const products = await storage.getProducts();
-  const accounts = await storage.getAccounts();
+  const stockReport = includeCore || includeDetails ? await storage.getStockReport({ fromDate, toDate }) : null;
 
-  const cashBankAccounts = accounts.filter((a) => {
-    const name = (a.name || "").toLowerCase();
-    const isCash = name.includes("cash");
-    const isBank = name.includes("bank") || a.type === "bank";
-    const isSystemCash = a.isSystemAccount && a.type === "asset";
-    return isCash || isBank || isSystemCash;
-  });
+  let coreData: DashboardSummaryCore | null = null;
 
-  const cashAccountIds = new Set(
-    cashBankAccounts.filter((a) => (a.name || "").toLowerCase().includes("cash") || (a.isSystemAccount && a.type === "asset")).map((a) => a.id),
-  );
-  const bankAccountIds = new Set(
-    cashBankAccounts.filter((a) => (a.name || "").toLowerCase().includes("bank") || a.type === "bank").map((a) => a.id),
-  );
+  if (includeCore) {
+    const [profitLoss, trialBalance, purchasesReport, salesReport, accounts, outstandingCustomers, outstandingSuppliers] =
+      await Promise.all([
+        storage.getProfitLoss(fromDate, toDate),
+        storage.getTrialBalance(toDate),
+        storage.getPurchaseReport({ fromDate, toDate }),
+        storage.getSalesReport({ fromDate, toDate }),
+        storage.getAccounts(),
+        storage.getOutstandingCustomers(toDate),
+        storage.getOutstandingSuppliers(toDate),
+      ]);
 
-  const ledgerToDate = await storage.getLedgerEntries(undefined, undefined, undefined, toDate);
-  let cashBalance = 0;
-  let bankBalance = 0;
-  for (const entry of ledgerToDate) {
-    const amount = parseAmount(entry.amount);
-    if (cashAccountIds.has(entry.accountId)) {
-      cashBalance += entry.transactionType === "debit" ? amount : -amount;
+    const cashBankAccounts = accounts.filter((a) => {
+      const name = (a.name || "").toLowerCase();
+      const isCash = name.includes("cash");
+      const isBank = name.includes("bank") || a.type === "bank";
+      const isSystemCash = a.isSystemAccount && a.type === "asset";
+      return isCash || isBank || isSystemCash;
+    });
+
+    const cashAccountIds = new Set(
+      cashBankAccounts
+        .filter((a) => (a.name || "").toLowerCase().includes("cash") || (a.isSystemAccount && a.type === "asset"))
+        .map((a) => a.id),
+    );
+    const bankAccountIds = new Set(
+      cashBankAccounts
+        .filter((a) => (a.name || "").toLowerCase().includes("bank") || a.type === "bank")
+        .map((a) => a.id),
+    );
+
+    const ledgerToDate = await storage.getLedgerEntries(undefined, undefined, undefined, toDate);
+    let cashBalance = 0;
+    let bankBalance = 0;
+    for (const entry of ledgerToDate) {
+      const amount = parseAmount(entry.amount);
+      if (cashAccountIds.has(entry.accountId)) {
+        cashBalance += entry.transactionType === "debit" ? amount : -amount;
+      }
+      if (bankAccountIds.has(entry.accountId)) {
+        bankBalance += entry.transactionType === "debit" ? amount : -amount;
+      }
     }
-    if (bankAccountIds.has(entry.accountId)) {
-      bankBalance += entry.transactionType === "debit" ? amount : -amount;
+
+    coreData = {
+      filters: {
+        fromDate: fromDate.toISOString(),
+        toDate: toDate.toISOString(),
+        fiscalYearId: params.fiscalYearId ?? null,
+      },
+      fiscalYears,
+      kpis: {
+        totalPurchases: parseAmount(purchasesReport.totals.total),
+        totalSales: parseAmount(salesReport.totals.total),
+        stockValue: parseAmount(stockReport?.totals.closingValue),
+        netProfit: parseAmount(profitLoss.netProfit),
+        cashBalance,
+        bankBalance,
+        outstandingCustomers: parseAmount(outstandingCustomers.totals.outstandingAmount),
+        outstandingSuppliers: parseAmount(outstandingSuppliers.totals.outstandingAmount),
+      },
+      trialBalance: {
+        debitTotal: parseAmount(trialBalance.totals.debit),
+        creditTotal: parseAmount(trialBalance.totals.credit),
+        difference: parseAmount(trialBalance.validation.difference),
+        balanced: trialBalance.validation.balanced,
+      },
+    };
+  }
+
+  let detailsData: DashboardSummaryDetails | null = null;
+
+  if (includeDetails) {
+    const [products, accounts, ledgerInRange, dayBook] = await Promise.all([
+      storage.getProducts(),
+      storage.getAccounts(),
+      storage.getLedgerEntries(undefined, undefined, fromDate, toDate),
+      storage.getDayBook(toDate),
+    ]);
+
+    const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
+    const charges = {
+      freight: 0,
+      loading: 0,
+      marketFee: 0,
+      brokerage: 0,
+      bardana: 0,
+      processing: 0,
+    };
+    for (const entry of ledgerInRange) {
+      if (entry.transactionType !== "debit") continue;
+      const name = accountNameById.get(entry.accountId) || "";
+      const bucket = chargeBucket(name);
+      if (!bucket) continue;
+      charges[bucket] += parseAmount(entry.amount);
     }
+
+    const stockTotals = {
+      paddy: 0,
+      rice: 0,
+      broken: 0,
+      bardana: 0,
+    };
+    for (const product of products) {
+      const qty = parseAmount(product.currentStock || "0");
+      const category = classifyProduct(product.name || "");
+      if (category === "paddy") stockTotals.paddy += qty;
+      else if (category === "broken") stockTotals.broken += qty;
+      else if (category === "bardana") stockTotals.bardana += qty;
+      else stockTotals.rice += qty;
+    }
+
+    const bardanaRows = (stockReport?.rows || []).filter(
+      (row) => classifyProduct(row.itemName || row.itemName) === "bardana",
+    );
+    const bardanaIn = bardanaRows.reduce((sum, r) => sum + parseAmount(r.inQty), 0);
+    const bardanaOut = bardanaRows.reduce((sum, r) => sum + parseAmount(r.outQty), 0);
+    const bardanaBalance = bardanaRows.reduce((sum, r) => sum + parseAmount(r.closingQty), 0);
+
+    const lowStock = products
+      .filter((p) => parseAmount(p.currentStock || "0") <= 10)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        stock: parseAmount(p.currentStock || "0"),
+        unit: p.unit,
+      }))
+      .sort((a, b) => a.stock - b.stock)
+      .slice(0, 8);
+
+    detailsData = {
+      charges,
+      stock: {
+        paddyQty: stockTotals.paddy,
+        riceQty: stockTotals.rice,
+        brokenQty: stockTotals.broken,
+        bardanaIn,
+        bardanaOut,
+        bardanaBalance,
+        lowStock,
+        valuation: parseAmount(stockReport?.totals.closingValue),
+      },
+      dayBook: {
+        date: toDate.toISOString(),
+        rows: dayBook.rows.slice(0, 10),
+      },
+    };
   }
 
-  const ledgerInRange = await storage.getLedgerEntries(undefined, undefined, fromDate, toDate);
-  const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
-  const charges = {
-    freight: 0,
-    loading: 0,
-    marketFee: 0,
-    brokerage: 0,
-    bardana: 0,
-    processing: 0,
-  };
-  for (const entry of ledgerInRange) {
-    if (entry.transactionType !== "debit") continue;
-    const name = accountNameById.get(entry.accountId) || "";
-    const bucket = chargeBucket(name);
-    if (!bucket) continue;
-    charges[bucket] += parseAmount(entry.amount);
-  }
+  if (scope === "core") return coreData ?? ({} as DashboardSummaryCore);
+  if (scope === "details") return detailsData ?? ({} as DashboardSummaryDetails);
 
-  const stockTotals = {
-    paddy: 0,
-    rice: 0,
-    broken: 0,
-    bardana: 0,
-  };
-  for (const product of products) {
-    const qty = parseAmount(product.currentStock || "0");
-    const category = classifyProduct(product.name || "");
-    if (category === "paddy") stockTotals.paddy += qty;
-    else if (category === "broken") stockTotals.broken += qty;
-    else if (category === "bardana") stockTotals.bardana += qty;
-    else stockTotals.rice += qty;
-  }
-
-  const bardanaRows = stockReport.rows.filter((row) => classifyProduct(row.itemName || row.itemName) === "bardana");
-  const bardanaIn = bardanaRows.reduce((sum, r) => sum + parseAmount(r.inQty), 0);
-  const bardanaOut = bardanaRows.reduce((sum, r) => sum + parseAmount(r.outQty), 0);
-  const bardanaBalance = bardanaRows.reduce((sum, r) => sum + parseAmount(r.closingQty), 0);
-
-  const lowStock = products
-    .filter((p) => parseAmount(p.currentStock || "0") <= 10)
-    .map((p) => ({
-      id: p.id,
-      name: p.name,
-      stock: parseAmount(p.currentStock || "0"),
-      unit: p.unit,
-    }))
-    .sort((a, b) => a.stock - b.stock)
-    .slice(0, 8);
-
-  const outstandingCustomers = await storage.getOutstandingCustomers(toDate);
-  const outstandingSuppliers = await storage.getOutstandingSuppliers(toDate);
-
-  const dayBook = await storage.getDayBook(toDate);
-
-  return {
-    filters: {
-      fromDate: fromDate.toISOString(),
-      toDate: toDate.toISOString(),
-      fiscalYearId: params.fiscalYearId ?? null,
-    },
-    fiscalYears,
-    kpis: {
-      totalPurchases: parseAmount(purchasesReport.totals.total),
-      totalSales: parseAmount(salesReport.totals.total),
-      stockValue: parseAmount(stockReport.totals.closingValue),
-      netProfit: parseAmount(profitLoss.netProfit),
-      cashBalance,
-      bankBalance,
-      outstandingCustomers: parseAmount(outstandingCustomers.totals.outstandingAmount),
-      outstandingSuppliers: parseAmount(outstandingSuppliers.totals.outstandingAmount),
-    },
-    trialBalance: {
-      debitTotal: parseAmount(trialBalance.totals.debit),
-      creditTotal: parseAmount(trialBalance.totals.credit),
-      difference: parseAmount(trialBalance.validation.difference),
-      balanced: trialBalance.validation.balanced,
-    },
-    charges,
-    stock: {
-      paddyQty: stockTotals.paddy,
-      riceQty: stockTotals.rice,
-      brokenQty: stockTotals.broken,
-      bardanaIn,
-      bardanaOut,
-      bardanaBalance,
-      lowStock,
-      valuation: parseAmount(stockReport.totals.closingValue),
-    },
-    dayBook: {
-      date: toDate.toISOString(),
-      rows: dayBook.rows.slice(0, 10),
-    },
-  };
+  return { ...(coreData ?? {}), ...(detailsData ?? {}) } as DashboardSummaryFull;
 }
 
 export async function getDashboardCharts(params: Partial<DashboardRange>) {
@@ -301,7 +397,7 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
 }
 
 export async function getDashboardStats() {
-  const summary = await getDashboardSummary({});
+  const summary = await getDashboardSummary({}, "core");
   return {
     totalPurchases: summary.kpis.totalPurchases,
     totalSales: summary.kpis.totalSales,

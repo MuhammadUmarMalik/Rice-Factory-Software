@@ -22,6 +22,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuthStore } from "@/stores/auth.store";
 import { useLocation } from "wouter";
 import { defaultShortcutConfig, type ShortcutConfig } from "@/lib/shortcuts";
+import { FormPageSkeleton } from "@/components/loading/page-skeletons";
 
 type SettingsPayload = {
   businessName: string;
@@ -111,6 +112,7 @@ export default function SettingsPage() {
 
   const { data: settingsData, isLoading } = useQuery<SettingsPayload>({
     queryKey: ["/api/settings"],
+    staleTime: 60 * 60 * 1000,
   });
 
   useEffect(() => {
@@ -143,6 +145,8 @@ export default function SettingsPage() {
       };
       await apiRequest("POST", "/api/settings", payload);
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/shortcuts"] });
       return payload;
     },
     onSuccess: () => {
@@ -176,6 +180,10 @@ export default function SettingsPage() {
   const updateShortcut = (key: keyof ShortcutConfig, value: string) => {
     setShortcuts((prev) => ({ ...prev, [key]: value }));
   };
+
+  if (isLoading && !settingsData) {
+    return <FormPageSkeleton />;
+  }
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>

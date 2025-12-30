@@ -10,8 +10,9 @@ import type { Product } from "@shared/schema";
 import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 import {
   Select,
   SelectContent,
@@ -53,8 +54,7 @@ type StockReport = {
 export default function StockReportPage() {
   const { t, isRTL, language } = useLanguage();
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "thisMonth" });
   const [productId, setProductId] = useState<string>("all");
   const [category, setCategory] = useState<string>("all");
   const [unit, setUnit] = useState<string>("all");
@@ -231,6 +231,7 @@ export default function StockReportPage() {
               unit: unit !== "all" ? unit : undefined,
             }}
             title="Stock Report"
+            orientation="landscape"
           />
         </div>
       </div>
@@ -281,13 +282,9 @@ export default function StockReportPage() {
       <Card>
         <CardContent className="pt-6">
           <div className={`grid gap-4 md:grid-cols-5 ${isRTL ? "direction-rtl" : ""}`}>
-            <div>
-              <Label>From Date</Label>
-              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            </div>
-            <div>
-              <Label>To Date</Label>
-              <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div>
               <Label>Item</Label>
