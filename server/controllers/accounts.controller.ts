@@ -7,7 +7,11 @@ import { parseRequiredInt } from "../utils/parse";
 export async function listAccounts(req: Request, res: Response) {
   try {
     const type = req.query.type as string | undefined;
-    const accounts = await accountsService.listAccounts(type);
+    const activeParam = req.query.active as string | undefined;
+    const active = activeParam === undefined
+      ? undefined
+      : !(activeParam === "false" || activeParam === "0");
+    const accounts = await accountsService.listAccounts(type, active);
     res.json(accounts);
   } catch (error) {
     console.error(error);
@@ -64,5 +68,25 @@ export async function updateAccount(req: Request, res: Response) {
     }
     console.error(error);
     res.status(500).json({ error: "Failed to update account" });
+  }
+}
+
+export async function deleteAccount(req: Request, res: Response) {
+  try {
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) {
+      return res.status(400).json({ error: "Invalid account id" });
+    }
+    const ok = await accountsService.deleteAccount(id);
+    if (!ok) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+    res.status(204).send();
+  } catch (error) {
+    if (error instanceof Error) {
+      return res.status(400).json({ error: error.message });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to delete account" });
   }
 }

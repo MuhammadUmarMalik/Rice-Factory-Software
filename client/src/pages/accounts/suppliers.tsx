@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Edit, Phone, MapPin, Wallet } from "lucide-react";
+import { Plus, Edit, Eye, Phone, MapPin, Wallet, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
   Form,
   FormControl,
@@ -45,6 +46,7 @@ export default function SuppliersPage() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Account | null>(null);
+  const [viewingSupplier, setViewingSupplier] = useState<Account | null>(null);
 
   const form = useForm<SupplierFormData>({
     resolver: zodResolver(supplierFormSchema),
@@ -59,7 +61,7 @@ export default function SuppliersPage() {
   });
 
   const { data: suppliers = [], isLoading } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=supplier"],
+    queryKey: ["/api/accounts?type=supplier&active=true"],
   });
 
   const createMutation = useMutation({
@@ -67,7 +69,7 @@ export default function SuppliersPage() {
       apiRequest("POST", "/api/accounts", { ...data, type: "supplier" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier&active=true"] });
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -79,11 +81,26 @@ export default function SuppliersPage() {
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier&active=true"] });
       setIsDialogOpen(false);
       setEditingSupplier(null);
       form.reset();
       toast({ title: t("savedSuccessfully") });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/accounts/${id}`),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier&active=true"] });
+      if (viewingSupplier?.id === id) {
+        setViewingSupplier(null);
+      }
+      toast({ title: t("deletedSuccessfully") });
+    },
+    onError: (error: Error) => {
+      toast({ variant: "destructive", title: "Delete failed", description: error.message });
     },
   });
 
@@ -185,20 +202,67 @@ export default function SuppliersPage() {
     {
       key: "actions",
       title: "Actions",
-      titleUrdu: "ایکشنز",
+      titleUrdu: "",
       align: "center",
       render: (item) => (
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleEdit(item);
-          }}
-          data-testid={`button-edit-${item.id}`}
-        >
-          <Edit className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center justify-center gap-2">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              setViewingSupplier(item);
+            }}
+            data-testid={`button-view-${item.id}`}
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleEdit(item);
+            }}
+            data-testid={`button-edit-${item.id}`}
+          >
+            <Edit className="h-4 w-4" />
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`button-delete-${item.id}`}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader className={isRTL ? "text-right" : ""}>
+                <AlertDialogTitle>
+                  {t("delete")} {item.name}
+                </AlertDialogTitle>
+                <AlertDialogDescription className={isRTL ? "font-urdu text-right" : ""}>
+                  {t("confirmDelete")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className={isRTL ? "flex-row-reverse" : ""}>
+                <AlertDialogCancel disabled={deleteMutation.isPending}>
+                  {t("cancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteMutation.mutate(item.id)}
+                  disabled={deleteMutation.isPending}
+                  data-testid={`confirm-delete-${item.id}`}
+                >
+                  {t("delete")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       ),
     },
   ];
@@ -335,6 +399,51 @@ export default function SuppliersPage() {
               </div>
             </form>
           </Form>
+        </DialogContent>
+      </Dialog>
+
+
+      <Dialog open={!!viewingSupplier} onOpenChange={(open) => !open && setViewingSupplier(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
+              Supplier Details
+            </DialogTitle>
+          </DialogHeader>
+          {viewingSupplier && (
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Name</span>
+                <span className="text-right">{viewingSupplier.name}</span>
+              </div>
+              {viewingSupplier.nameUrdu && (
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Name (Urdu)</span>
+                  <span className="text-right font-urdu">{viewingSupplier.nameUrdu}</span>
+                </div>
+              )}
+              {viewingSupplier.phone && (
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Phone</span>
+                  <span className="font-mono">{viewingSupplier.phone}</span>
+                </div>
+              )}
+              {(viewingSupplier.address || viewingSupplier.addressUrdu) && (
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Address</span>
+                  <p>{viewingSupplier.address || viewingSupplier.addressUrdu}</p>
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Opening Balance</span>
+                <span className="font-mono">Rs. {Number(viewingSupplier.openingBalance || 0).toLocaleString()}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Current Balance</span>
+                <span className="font-mono">Rs. {Number(viewingSupplier.currentBalance || 0).toLocaleString()}</span>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

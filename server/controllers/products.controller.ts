@@ -84,6 +84,15 @@ export async function deleteProduct(req: Request, res: Response) {
     }
     res.status(204).send();
   } catch (error) {
+    if (error instanceof Error) {
+      const code = (error as { code?: string }).code;
+      if (code === "SQLITE_CONSTRAINT_FOREIGNKEY") {
+        return res.status(409).json({
+          error: "Cannot delete product because it is referenced by purchases, sales, or processing batches",
+        });
+      }
+      return res.status(400).json({ error: error.message });
+    }
     console.error(error);
     res.status(500).json({ error: "Failed to delete product" });
   }

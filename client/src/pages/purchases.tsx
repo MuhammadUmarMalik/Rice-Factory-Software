@@ -12,6 +12,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -659,19 +660,40 @@ export default function PurchasesPage() {
           >
             <Edit className="h-4 w-4" />
           </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => {
-              const ok = confirm("Delete this purchase?");
-              if (ok) {
-                deleteMutation.mutate(item.id);
-              }
-            }}
-            data-testid={`button-delete-${item.id}`}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`button-delete-${item.id}`}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader className={isRTL ? "text-right" : ""}>
+                <AlertDialogTitle>
+                  {t("delete")} {item.invoiceNumber}
+                </AlertDialogTitle>
+                <AlertDialogDescription className={isRTL ? "font-urdu text-right" : ""}>
+                  {t("confirmDelete")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className={isRTL ? "flex-row-reverse" : ""}>
+                <AlertDialogCancel disabled={deleteMutation.isPending}>
+                  {t("cancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteMutation.mutate(item.id)}
+                  disabled={deleteMutation.isPending}
+                  data-testid={`confirm-delete-${item.id}`}
+                >
+                  {t("delete")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       ),
     },

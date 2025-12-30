@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Plus, Wallet, ReceiptText } from "lucide-react";
+import { Plus, Eye, Edit, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,6 +13,7 @@ import { DataTable, type Column } from "@/components/data-table";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -24,6 +25,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -36,7 +38,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { Account, ExpenseEntry } from "@shared/schema";
 
 const expenseFormSchema = z.object({
-  expenseAccountId: z.string().min(1, "Select an expense category"),
+  expenseName: z.string().trim().min(1, "Expense name is required"),
   payFromAccountId: z.string().min(1, "Select paying account"),
   amount: z.string().min(1, "Amount is required"),
   expenseDate: z.string().optional(),
@@ -49,14 +51,17 @@ export default function ExpensesPage() {
   const { t, language, isRTL } = useLanguage();
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<ExpenseEntry | null>(null);
+  const [viewingExpense, setViewingExpense] = useState<ExpenseEntry | null>(null);
+  const getTodayInput = () => new Date().toISOString().slice(0, 10);
 
   const form = useForm<ExpenseFormData>({
     resolver: zodResolver(expenseFormSchema),
     defaultValues: {
-      expenseAccountId: "",
+      expenseName: "",
       payFromAccountId: "",
       amount: "",
-      expenseDate: new Date().toISOString().slice(0, 10),
+      expenseDate: getTodayInput(),
       description: "",
     },
   });
@@ -78,31 +83,104 @@ export default function ExpensesPage() {
     [payAccounts],
   );
 
+  const getExpenseAccountName = (id?: number | null) =>
+    expenseAccounts.find((a) => a.id === id)?.name || (id ? `#${id}` : "-");
+  const getPayAccountName = (id?: number | null) =>
+    payAccounts.find((a) => a.id === id)?.name || (id ? `#${id}` : "-");
+  const formatDate = (value: unknown) => {
+    const date = value ? new Date(value as any) : null;
+    return date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : "-";
+  };
+  const toDateInputValue = (value: unknown) => {
+    const date = value ? new Date(value as any) : null;
+    return date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : getTodayInput();
+  };
+
+  const resolveExpenseAccountId = async (name: string) => {
+    const normalized = name.trim();
+    const existing = expenseAccounts.find((acc) => acc.name.trim().toLowerCase() === normalized.toLowerCase());
+    if (existing) return existing.id;
+    const accountRes = await apiRequest("POST", "/api/accounts", { name: normalized, type: "expense" });
+    const account = await accountRes.json();
+    return account.id as number;
+  };
+
+  const resetForm = () => {
+    form.reset({
+      expenseName: "",
+      payFromAccountId: "",
+      amount: "",
+      expenseDate: getTodayInput(),
+      description: "",
+    });
+  };
+
   const createMutation = useMutation({
-    mutationFn: (data: ExpenseFormData) =>
-      apiRequest("POST", "/api/expenses", {
-        ...data,
-        expenseAccountId: parseInt(data.expenseAccountId, 10),
+    mutationFn: async (data: ExpenseFormData) => {
+      const expenseAccountId = await resolveExpenseAccountId(data.expenseName);
+
+      return apiRequest("POST", "/api/expenses", {
+        expenseAccountId,
         payFromAccountId: parseInt(data.payFromAccountId, 10),
         amount: data.amount,
         expenseDate: data.expenseDate,
-      }),
+        description: data.description,
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
       setIsDialogOpen(false);
-      form.reset({
-        expenseAccountId: "",
-        payFromAccountId: "",
-        amount: "",
-        expenseDate: new Date().toISOString().slice(0, 10),
-        description: "",
-      });
+      setEditingExpense(null);
+      resetForm();
       toast({ title: t("savedSuccessfully") });
     },
     onError: async (err: any) => {
       const msg = await err?.json?.()?.error || err?.message || "Failed to save expense";
       toast({ title: "Save failed", description: String(msg), variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async (data: ExpenseFormData & { id: number }) => {
+      const expenseAccountId = await resolveExpenseAccountId(data.expenseName);
+      return apiRequest("PATCH", `/api/expenses/${data.id}`, {
+        expenseAccountId,
+        payFromAccountId: parseInt(data.payFromAccountId, 10),
+        amount: data.amount,
+        expenseDate: data.expenseDate,
+        description: data.description,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      setIsDialogOpen(false);
+      setEditingExpense(null);
+      resetForm();
+      toast({ title: t("savedSuccessfully") });
+    },
+    onError: async (err: any) => {
+      const msg = await err?.json?.()?.error || err?.message || "Failed to update expense";
+      toast({ title: "Update failed", description: String(msg), variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/expenses/${id}`),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      if (viewingExpense?.id === id) {
+        setViewingExpense(null);
+      }
+      toast({ title: t("deletedSuccessfully") });
+    },
+    onError: async (err: any) => {
+      const msg = await err?.json?.()?.error || err?.message || "Failed to delete expense";
+      toast({ title: "Delete failed", description: String(msg), variant: "destructive" });
     },
   });
 
@@ -115,17 +193,17 @@ export default function ExpensesPage() {
     {
       key: "expenseDate",
       title: "Date",
-      render: (row) => new Date(row.expenseDate as any).toLocaleDateString(),
+      render: (row) => formatDate(row.expenseDate),
     },
     {
       key: "expenseAccountId",
-      title: "Category",
-      render: (row) => expenseAccounts.find((a) => a.id === row.expenseAccountId)?.name || row.expenseAccountId,
+      title: "Expense",
+      render: (row) => getExpenseAccountName(row.expenseAccountId),
     },
     {
       key: "payFromAccountId",
       title: "Paid From",
-      render: (row) => payAccounts.find((a) => a.id === row.payFromAccountId)?.name || row.payFromAccountId,
+      render: (row) => getPayAccountName(row.payFromAccountId),
     },
     {
       key: "amount",
@@ -138,11 +216,101 @@ export default function ExpensesPage() {
       title: "Description",
       render: (row) => row.description || "-",
     },
+    {
+      key: "actions",
+      title: "Actions",
+      align: "center",
+      render: (row) => (
+        <div className="flex items-center justify-center gap-2">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              setViewingExpense(row);
+            }}
+            data-testid={`button-view-${row.id}`}
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleEdit(row);
+            }}
+            data-testid={`button-edit-${row.id}`}
+          >
+            <Edit className="h-4 w-4" />
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`button-delete-${row.id}`}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader className={isRTL ? "text-right" : ""}>
+                <AlertDialogTitle>
+                  {t("delete")} {getExpenseAccountName(row.expenseAccountId)}
+                </AlertDialogTitle>
+                <AlertDialogDescription className={isRTL ? "font-urdu text-right" : ""}>
+                  {t("confirmDelete")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className={isRTL ? "flex-row-reverse" : ""}>
+                <AlertDialogCancel disabled={deleteMutation.isPending}>
+                  {t("cancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteMutation.mutate(row.id)}
+                  disabled={deleteMutation.isPending}
+                  data-testid={`confirm-delete-${row.id}`}
+                >
+                  {t("delete")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      ),
+    },
   ];
 
+  const handleAddNew = () => {
+    setEditingExpense(null);
+    resetForm();
+    setIsDialogOpen(true);
+  };
+
+  const handleEdit = (expense: ExpenseEntry) => {
+    setEditingExpense(expense);
+    const expenseName = expenseAccounts.find((acc) => acc.id === expense.expenseAccountId)?.name || "";
+    form.reset({
+      expenseName,
+      payFromAccountId: expense.payFromAccountId ? String(expense.payFromAccountId) : "",
+      amount: expense.amount || "",
+      expenseDate: toDateInputValue(expense.expenseDate),
+      description: expense.description || "",
+    });
+    setIsDialogOpen(true);
+  };
+
   const handleSubmit = (data: ExpenseFormData) => {
+    if (editingExpense) {
+      updateMutation.mutate({ ...data, id: editingExpense.id });
+      return;
+    }
     createMutation.mutate(data);
   };
+
+  const isSaving = createMutation.isPending || updateMutation.isPending;
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
@@ -153,7 +321,7 @@ export default function ExpensesPage() {
             {language === "ur" ? "اخراجات کو ریکارڈ اور ٹریک کریں" : "Record and track expense payments"}
           </p>
         </div>
-        <Button onClick={() => setIsDialogOpen(true)}>
+        <Button onClick={handleAddNew}>
           <Plus className="h-4 w-4" />
           {language === "ur" ? "نیا خرچ" : "Add Expense"}
         </Button>
@@ -165,11 +333,25 @@ export default function ExpensesPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+      <Dialog
+        open={isDialogOpen}
+        onOpenChange={(open) => {
+          setIsDialogOpen(open);
+          if (!open) {
+            setEditingExpense(null);
+            resetForm();
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
+            <DialogDescription className="sr-only">
+              Add or edit an expense by providing the name, payment account, and amount.
+            </DialogDescription>
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-              {language === "ur" ? "نیا خرچ" : "New Expense"}
+              {editingExpense
+                ? "Edit Expense"
+                : (language === "ur" ? "U+UOO OrOñU+" : "New Expense")}
             </DialogTitle>
           </DialogHeader>
           <Form {...form}>
@@ -190,24 +372,13 @@ export default function ExpensesPage() {
 
               <FormField
                 control={form.control}
-                name="expenseAccountId"
+                name="expenseName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{language === "ur" ? "خرچ کی کیٹیگری" : "Expense Category"}</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select category"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {expenseAccounts.map((acc) => (
-                          <SelectItem key={acc.id} value={String(acc.id)}>
-                            {acc.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormLabel>Expense</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -270,15 +441,54 @@ export default function ExpensesPage() {
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   {t("cancel")}
                 </Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? t("loading") : t("save")}
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? t("loading") : t("save")}
                 </Button>
               </div>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!viewingExpense} onOpenChange={(open) => !open && setViewingExpense(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
+              Expense Details
+            </DialogTitle>
+          </DialogHeader>
+          {viewingExpense && (
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Voucher</span>
+                <span className="font-mono">{viewingExpense.voucherNo}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Date</span>
+                <span>{formatDate(viewingExpense.expenseDate)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Expense</span>
+                <span className="text-right">{getExpenseAccountName(viewingExpense.expenseAccountId)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Paid From</span>
+                <span className="text-right">{getPayAccountName(viewingExpense.payFromAccountId)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Amount</span>
+                <span className="font-mono font-semibold">
+                  Rs. {Number(viewingExpense.amount || 0).toLocaleString()}
+                </span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-muted-foreground">Description</span>
+                <p>{viewingExpense.description || "-"}</p>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
-

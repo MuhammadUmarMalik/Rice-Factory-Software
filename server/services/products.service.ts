@@ -1,7 +1,7 @@
 import { storage } from "../models/storage";
 
 export async function listProducts() {
-  return storage.getProducts();
+  return storage.getActiveProducts();
 }
 
 export async function getProduct(id: number) {

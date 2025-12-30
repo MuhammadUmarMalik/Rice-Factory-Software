@@ -40,7 +40,8 @@ type ParsedShortcut = {
   alt: boolean;
 };
 
-function normalizeKey(value: string): string {
+function normalizeKey(value?: string | null): string {
+  if (!value) return "";
   const key = value.toLowerCase();
   if (key === "escape" || key === "esc") return "escape";
   if (key === "enter" || key === "return") return "enter";
@@ -95,6 +96,7 @@ export function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean
   const parsed = parseShortcut(shortcut);
   if (!parsed) return false;
   const key = normalizeKey(event.key);
+  if (!key) return false;
   if (key !== parsed.key) return false;
 
   const ctrlMatch = parsed.ctrl ? event.ctrlKey || event.metaKey : !event.ctrlKey;
