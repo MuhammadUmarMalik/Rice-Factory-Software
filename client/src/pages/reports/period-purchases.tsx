@@ -3,7 +3,6 @@ import { Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -18,6 +17,8 @@ import { downloadCsv } from "@/lib/export";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 type PeriodPurchaseRow = {
   period: string;
@@ -35,8 +36,7 @@ type PeriodPurchaseReport = {
 };
 
 export default function PeriodPurchasesPage() {
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
   const [supplierId, setSupplierId] = useState<string>("all");
   const [groupBy, setGroupBy] = useState<string>("month");
 
@@ -46,11 +46,11 @@ export default function PeriodPurchasesPage() {
 
   const { data, isLoading } = useQuery<PeriodPurchaseReport>({
     queryKey: ["/api/reports/period-purchases", fromDate, toDate, supplierId, groupBy],
-    enabled: !!fromDate && !!toDate,
+    enabled: isReady,
     queryFn: async () => {
       const params = new URLSearchParams();
-      params.set("fromDate", fromDate);
-      params.set("toDate", toDate);
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
       params.set("groupBy", groupBy);
       if (supplierId !== "all") params.set("supplierId", supplierId);
       const res = await fetchWithAuth(`/api/reports/period-purchases?${params.toString()}`);
@@ -105,7 +105,7 @@ export default function PeriodPurchasesPage() {
               groupBy,
             }}
             title="Period-wise Purchases"
-            disabled={!fromDate || !toDate}
+            disabled={!isReady}
           />
           <Button
             variant="outline"
@@ -133,13 +133,9 @@ export default function PeriodPurchasesPage() {
       <Card>
         <CardContent className="pt-6">
           <div className="grid gap-4 md:grid-cols-5">
-            <div>
-              <Label>From Date</Label>
-              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            </div>
-            <div>
-              <Label>To Date</Label>
-              <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div>
               <Label>Group By</Label>

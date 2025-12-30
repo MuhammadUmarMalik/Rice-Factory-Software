@@ -140,6 +140,25 @@ export const printStyles = `
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .doc-key-report-stock table {
+    table-layout: fixed;
+  }
+
+  .doc-key-report-stock thead th,
+  .doc-key-report-stock tbody td {
+    font-size: 10px;
+    padding: 5px 4px;
+    line-height: 1.3;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-word;
+  }
+
+  .doc-key-report-stock tbody td.align-right {
+    white-space: nowrap;
+  }
+
   .section-card {
     border: 1px solid var(--border);
     background: var(--soft);

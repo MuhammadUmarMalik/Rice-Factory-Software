@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { SkeletonBox } from "@/components/ui/skeletons";
 import {
   LineChart,
   Line,
@@ -54,9 +54,7 @@ function DashboardChartsComponent({
         <CardContent>
           <div className="h-[420px]">
             {chartLoading ? (
-              <div className="flex items-center justify-center h-full">
-                <Skeleton className="h-16 w-1/2" />
-              </div>
+              <SkeletonBox className="h-full w-full" />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData?.monthlyTotals || []}>
@@ -88,9 +86,7 @@ function DashboardChartsComponent({
         <CardContent>
           <div className="h-96">
             {chartLoading ? (
-              <div className="flex items-center justify-center h-full">
-                <Skeleton className="h-36 w-1/2" />
-              </div>
+              <SkeletonBox className="h-full w-full" />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData?.productStock || []} barCategoryGap={16}>

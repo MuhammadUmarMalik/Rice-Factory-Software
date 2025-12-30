@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { SkeletonBox, SkeletonText } from "@/components/ui/skeletons";
 import { fetchPrintPreview, fetchPrintPdf } from "@/services/printApi";
 import type { DocKey } from "@/print/docRegistry";
 
@@ -229,13 +230,16 @@ function PrintPreviewModalComponent({
         <div className="flex min-h-[480px] w-full flex-col overflow-hidden rounded-xl bg-white shadow-xl">
           <DialogHeader className="flex-row items-center justify-between space-y-0 border-b px-4 py-3 pr-4 text-left">
             <DialogTitle className="text-left">{title || "Print Preview"}</DialogTitle>
+            <DialogDescription className="sr-only">
+              Review the document preview and adjust print settings before printing.
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
             <div className="w-full shrink-0 border-r bg-slate-50 p-4 lg:w-80 min-h-0 overflow-y-auto">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-lg font-semibold">Print</div>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={handlePrint}>
+                  <Button size="sm" onClick={handlePrint} data-autofocus>
                     Print
                   </Button>
                   <Button variant="secondary" size="sm" onClick={handleDownload}>
@@ -420,8 +424,20 @@ function PrintPreviewModalComponent({
             </div>
             <div ref={scrollRef} className="hide-scrollbar flex-1 min-h-0 overflow-auto bg-slate-100 p-3">
               {loading ? (
-                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                  Loading preview...
+                <div className="flex min-h-full items-center justify-center">
+                  <div
+                    className={`print-preview-frame w-full bg-white shadow-md ${pageMaxWidthClass} ${pageAspectClass}`}
+                  >
+                    <div className="p-6 space-y-4">
+                      <SkeletonBox className="h-5 w-40" />
+                      <SkeletonText lines={3} />
+                      <div className="space-y-2">
+                        {Array.from({ length: 6 }).map((_, index) => (
+                          <SkeletonBox key={index} className="h-4 w-full" />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="min-h-full w-full">

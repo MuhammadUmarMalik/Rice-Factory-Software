@@ -1,5 +1,4 @@
-/* Urdu-friendly fonts */
-@import url("https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;600&family=Noto+Sans+Arabic:wght@400;600&display=swap");
+/* Urdu/Arabic fonts are loaded on-demand in the authenticated shell to keep /login light. */
 @import "./print/print.css";
 
 @tailwind base;
@@ -26,6 +25,15 @@
 .hide-scrollbar::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 [data-arrow-highlight="true"] {

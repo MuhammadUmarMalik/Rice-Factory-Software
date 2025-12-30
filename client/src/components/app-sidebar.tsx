@@ -1,22 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
-import {
-  LayoutDashboard,
-  Users,
-  Package,
-  ShoppingCart,
-  Cog,
-  FileText,
-  Factory,
-  TrendingUp,
-  ChevronDown,
-  LogOut,
-  Wheat,
-  Receipt,
-  Wallet,
-  UserRound,
-  ReceiptText,
-} from "lucide-react";
+import LayoutDashboard from "lucide-react/dist/esm/icons/layout-dashboard";
+import Users from "lucide-react/dist/esm/icons/users";
+import Package from "lucide-react/dist/esm/icons/package";
+import ShoppingCart from "lucide-react/dist/esm/icons/shopping-cart";
+import Cog from "lucide-react/dist/esm/icons/cog";
+import FileText from "lucide-react/dist/esm/icons/file-text";
+import Factory from "lucide-react/dist/esm/icons/factory";
+import TrendingUp from "lucide-react/dist/esm/icons/trending-up";
+import ChevronDown from "lucide-react/dist/esm/icons/chevron-down";
+import LogOut from "lucide-react/dist/esm/icons/log-out";
+import Wheat from "lucide-react/dist/esm/icons/wheat";
+import Receipt from "lucide-react/dist/esm/icons/receipt";
+import Wallet from "lucide-react/dist/esm/icons/wallet";
+import UserRound from "lucide-react/dist/esm/icons/user-round";
+import ReceiptText from "lucide-react/dist/esm/icons/receipt-text";
 import {
   Sidebar,
   SidebarContent,
@@ -335,7 +333,10 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="p-4 border-t border-sidebar-border">
-        <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
+        <footer
+          aria-label="Sidebar account"
+          className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}
+        >
           <Avatar className="h-9 w-9">
             <AvatarFallback className="bg-primary/10 text-primary text-sm">{initials}</AvatarFallback>
           </Avatar>
@@ -352,7 +353,7 @@ export function AppSidebar() {
           >
             <LogOut className="h-4 w-4" />
           </SidebarMenuButton>
-        </div>
+        </footer>
       </SidebarFooter>
       </Sidebar>
     </nav>

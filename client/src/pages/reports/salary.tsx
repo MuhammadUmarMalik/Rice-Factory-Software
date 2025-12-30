@@ -1,13 +1,14 @@
 import { Suspense, lazy, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTable, type Column } from "@/components/data-table";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 const ReportDetailDialog = lazy(() =>
   import("@/components/report-detail-dialog").then((mod) => ({
@@ -33,17 +34,16 @@ type SalaryReport = {
 };
 
 export default function SalaryAccountPage() {
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data, isLoading } = useQuery<SalaryReport>({
     queryKey: ["/api/financial/salary", fromDate, toDate],
-    enabled: !!fromDate && !!toDate,
+    enabled: isReady,
     queryFn: async () => {
       const params = new URLSearchParams();
-      params.set("fromDate", fromDate);
-      params.set("toDate", toDate);
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
       const res = await fetchWithAuth(`/api/financial/salary?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load salary account");
       return res.json();
@@ -85,20 +85,16 @@ export default function SalaryAccountPage() {
           docKey={docKeys.salary}
           params={{ fromDate: fromDate || undefined, toDate: toDate || undefined }}
           title="Salary Account"
-          disabled={!fromDate || !toDate}
+          disabled={!isReady}
         />
       </div>
 
       <Card>
         <CardContent className="pt-6">
           <div className="grid gap-4 md:grid-cols-4">
-            <div>
-              <Label>From Date</Label>
-              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            </div>
-            <div>
-              <Label>To Date</Label>
-              <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div className="md:col-span-2 flex items-end justify-end gap-6 text-sm text-muted-foreground">
               <div>

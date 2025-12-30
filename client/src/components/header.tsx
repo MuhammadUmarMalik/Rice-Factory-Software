@@ -1,4 +1,9 @@
-import { Sun, Moon, Globe, Search, Bell, Check } from "lucide-react";
+import Sun from "lucide-react/dist/esm/icons/sun";
+import Moon from "lucide-react/dist/esm/icons/moon";
+import Globe from "lucide-react/dist/esm/icons/globe";
+import Search from "lucide-react/dist/esm/icons/search";
+import Bell from "lucide-react/dist/esm/icons/bell";
+import Check from "lucide-react/dist/esm/icons/check";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -52,7 +57,10 @@ export function Header({ title }: HeaderProps) {
   });
 
   return (
-    <header className="flex h-14 items-center justify-between gap-4 border-b border-border bg-background px-4">
+    <header
+      className="flex h-14 items-center justify-between gap-4 border-b border-border bg-background px-4"
+      aria-label="App header"
+    >
       <div className={`flex items-center gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
         <SidebarTrigger data-testid="button-sidebar-toggle" />
         {title && (

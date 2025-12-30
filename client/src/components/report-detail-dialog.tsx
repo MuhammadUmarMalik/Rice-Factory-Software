@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
+import { SkeletonBox, SkeletonText } from "@/components/ui/skeletons";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -513,9 +513,8 @@ export function ReportDetailDialog({
         </DialogHeader>
         {isLoading ? (
           <div className="space-y-3 py-4">
-            <Skeleton className="h-5 w-32" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-3/4" />
+            <SkeletonBox className="h-5 w-32" />
+            <SkeletonText lines={3} />
           </div>
         ) : (
           <ScrollArea className="max-h-[70vh] pr-2">

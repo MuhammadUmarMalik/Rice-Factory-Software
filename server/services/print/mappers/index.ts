@@ -589,18 +589,18 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
   });
 
   const columns = buildColumns([
-    { key: "itemCode", label: "Item Code" },
-    { key: "itemName", label: "Item Name" },
-    { key: "category", label: "Category" },
-    { key: "unit", label: "Unit", align: "center" },
-    { key: "openingQty", label: "Opening Qty", align: "right" },
-    { key: "openingValue", label: "Opening Value", align: "right" },
-    { key: "inQty", label: "In Qty", align: "right" },
-    { key: "inValue", label: "In Value", align: "right" },
-    { key: "outQty", label: "Out Qty", align: "right" },
-    { key: "outValue", label: "Out Value", align: "right" },
-    { key: "closingQty", label: "Closing Qty", align: "right" },
-    { key: "closingValue", label: "Closing Value", align: "right" },
+    { key: "itemCode", label: "Item Code", width: "6%" },
+    { key: "itemName", label: "Item Name", width: "20%" },
+    { key: "category", label: "Category", width: "9%" },
+    { key: "unit", label: "Unit", align: "center", width: "5%" },
+    { key: "openingQty", label: "Opening Qty", align: "right", width: "6%" },
+    { key: "openingValue", label: "Opening Value", align: "right", width: "9%" },
+    { key: "inQty", label: "In Qty", align: "right", width: "6%" },
+    { key: "inValue", label: "In Value", align: "right", width: "9%" },
+    { key: "outQty", label: "Out Qty", align: "right", width: "6%" },
+    { key: "outValue", label: "Out Value", align: "right", width: "9%" },
+    { key: "closingQty", label: "Closing Qty", align: "right", width: "6%" },
+    { key: "closingValue", label: "Closing Value", align: "right", width: "9%" },
   ]);
 
   const rows = report.rows.map((r) => ({

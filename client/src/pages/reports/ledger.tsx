@@ -19,6 +19,7 @@ import { Link, useLocation } from "wouter";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { SkeletonBox } from "@/components/ui/skeletons";
 
 type LedgerReportRow = {
   id: number;
@@ -317,7 +318,30 @@ export default function LedgerPage() {
               </div>
 
               {isLoading ? (
-                <div className="p-6 text-center text-muted-foreground text-sm">Loading entries...</div>
+                <div className="space-y-2 p-4">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="grid grid-cols-[90px,1fr,120px,120px,120px] text-sm border-b last:border-b-0"
+                    >
+                      <div className="px-3 py-2 border-r">
+                        <SkeletonBox className="h-3 w-12" />
+                      </div>
+                      <div className="px-3 py-2 border-r">
+                        <SkeletonBox className="h-4 w-5/6" />
+                      </div>
+                      <div className="px-3 py-2 border-r">
+                        <SkeletonBox className="h-4 w-16 ml-auto" />
+                      </div>
+                      <div className="px-3 py-2 border-r">
+                        <SkeletonBox className="h-4 w-16 ml-auto" />
+                      </div>
+                      <div className="px-3 py-2">
+                        <SkeletonBox className="h-4 w-20 ml-auto" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <>
                   {ledgerRows.length === 0 ? (

@@ -172,12 +172,12 @@ export default function PurchasesPage() {
   });
 
   const { data: settings } = useRQQuery<{ businessName?: string; businessNameUrdu?: string }>({
-    queryKey: ["/api/settings"],
+    queryKey: ["/api/settings/summary"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/settings");
+      const res = await apiRequest("GET", "/api/settings/summary");
       return res.json();
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60 * 60 * 1000,
   });
 
   const { data: nextBill, refetch: refetchBillNo } = useQuery<{ billNo: string }>({

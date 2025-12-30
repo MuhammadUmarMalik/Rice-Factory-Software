@@ -6,13 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { Account, Product } from "@shared/schema";
 import { format } from "date-fns";
 import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 import {
   Select,
   SelectContent,
@@ -57,8 +58,7 @@ type PurchaseReport = {
 
 export default function PurchaseReportPage() {
   const { t, isRTL, language } = useLanguage();
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "thisMonth" });
   const [supplierId, setSupplierId] = useState<string>("all");
   const [productId, setProductId] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");
@@ -73,11 +73,11 @@ export default function PurchaseReportPage() {
   });
 
   const { data, isLoading } = useQuery<PurchaseReport>({
-    queryKey: ["/api/reports/purchases", dateFrom, dateTo, supplierId, productId, status],
+    queryKey: ["/api/reports/purchases", fromDate, toDate, supplierId, productId, status],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (dateFrom) params.set("fromDate", dateFrom);
-      if (dateTo) params.set("toDate", dateTo);
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
       if (supplierId !== "all") params.set("supplierId", supplierId);
       if (productId !== "all") params.set("productId", productId);
       if (status !== "all") params.set("paymentStatus", status);
@@ -223,8 +223,8 @@ export default function PurchaseReportPage() {
           <PrintActions
             docKey={docKeys.purchaseReport}
             params={{
-              fromDate: dateFrom || undefined,
-              toDate: dateTo || undefined,
+              fromDate: fromDate || undefined,
+              toDate: toDate || undefined,
               supplierId: supplierId !== "all" ? supplierId : undefined,
               productId: productId !== "all" ? productId : undefined,
               paymentStatus: status !== "all" ? status : undefined,
@@ -237,13 +237,9 @@ export default function PurchaseReportPage() {
       <Card>
         <CardContent className="pt-6">
           <div className={`grid gap-4 md:grid-cols-6 ${isRTL ? "direction-rtl" : ""}`}>
-            <div>
-              <Label>From Date</Label>
-              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-            </div>
-            <div>
-              <Label>To Date</Label>
-              <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div>
               <Label>Supplier</Label>

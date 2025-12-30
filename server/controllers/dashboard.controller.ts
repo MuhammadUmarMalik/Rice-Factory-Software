@@ -40,7 +40,9 @@ export async function getSummary(req: Request, res: Response) {
     const fromDate = parseOptionalDate(req.query.fromDate);
     const toDate = parseOptionalDate(req.query.toDate);
     const fiscalYearId = parseOptionalInt(req.query.fiscalYearId);
-    const summary = await getDashboardSummary({ fromDate, toDate, fiscalYearId });
+    const scopeParam = typeof req.query.scope === "string" ? req.query.scope : "full";
+    const scope = scopeParam === "core" || scopeParam === "details" ? scopeParam : "full";
+    const summary = await getDashboardSummary({ fromDate, toDate, fiscalYearId }, scope);
     res.json(summary);
   } catch (error) {
     console.error(error);

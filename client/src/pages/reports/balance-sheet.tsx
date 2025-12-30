@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { SkeletonBox, SkeletonTableRow } from "@/components/ui/skeletons";
 
 type BalanceSheet = {
   asOfDate: string | number | Date;
@@ -113,21 +114,30 @@ export default function BalanceSheetPage() {
               <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-2">
                 <p className="text-xs text-muted-foreground">Status</p>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium">
-                    {balanced ? "Balanced" : "Needs Review"}
-                  </span>
-                  <Badge
-                    variant={balanced ? "default" : "destructive"}
-                    className={balanced ? "bg-emerald-500/15 text-emerald-700" : ""}
-                  >
-                    {balanced ? "OK" : "Mismatch"}
-                  </Badge>
+                  {isLoading ? (
+                    <>
+                      <SkeletonBox className="h-4 w-24" />
+                      <SkeletonBox className="h-6 w-16" />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-sm font-medium">
+                        {balanced ? "Balanced" : "Needs Review"}
+                      </span>
+                      <Badge
+                        variant={balanced ? "default" : "destructive"}
+                        className={balanced ? "bg-emerald-500/15 text-emerald-700" : ""}
+                      >
+                        {balanced ? "OK" : "Mismatch"}
+                      </Badge>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="md:col-span-2 flex items-center justify-between text-xs text-muted-foreground">
                 <span>Currency: PKR</span>
                 <div className="flex items-center gap-3">
-                  {isLoading && <span>Loading...</span>}
+                  {isLoading && <SkeletonBox className="h-3 w-16" />}
                   {error && <span className="text-destructive">{(error as Error).message}</span>}
                 </div>
               </div>
@@ -158,88 +168,104 @@ export default function BalanceSheetPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(() => {
-                let srNo = 0;
-                return rows.map((row, index) => {
-                  const rowNo = row.type === "line" ? (srNo += 1) : "";
+              {isLoading ? (
+                Array.from({ length: 10 }).map((_, index) => (
+                  <SkeletonTableRow key={index} columns={4} />
+                ))
+              ) : (
+                <>
+                  {(() => {
+                    let srNo = 0;
+                    return rows.map((row, index) => {
+                      const rowNo = row.type === "line" ? (srNo += 1) : "";
 
-                  if (row.type === "section") {
-                    return (
-                      <TableRow key={`${row.label}-${index}`} className="bg-muted/30">
-                        <TableCell />
-                        <TableCell
-                          colSpan={3}
-                          className="font-semibold uppercase tracking-wide text-xs text-muted-foreground"
+                      if (row.type === "section") {
+                        return (
+                          <TableRow key={`${row.label}-${index}`} className="bg-muted/30">
+                            <TableCell />
+                            <TableCell
+                              colSpan={3}
+                              className="font-semibold uppercase tracking-wide text-xs text-muted-foreground"
+                            >
+                              {row.label}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      }
+
+                      const isTotal = row.type === "total" || row.type === "grand";
+                      return (
+                        <TableRow
+                          key={`${row.label}-${index}`}
+                          className={row.type === "grand" ? (balanced ? "bg-emerald-500/10" : "bg-destructive/10") : ""}
                         >
-                          {row.label}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  }
-
-                  const isTotal = row.type === "total" || row.type === "grand";
-                  return (
-                    <TableRow
-                      key={`${row.label}-${index}`}
-                      className={row.type === "grand" ? (balanced ? "bg-emerald-500/10" : "bg-destructive/10") : ""}
-                    >
-                      <TableCell>{rowNo}</TableCell>
-                      <TableCell className={isTotal ? "font-semibold" : ""}>{row.label}</TableCell>
-                      <TableCell className={`text-right font-mono ${isTotal ? "font-semibold" : ""}`}>
-                        {row.debit ? `Rs. ${formatAmount(row.debit)}` : ""}
-                      </TableCell>
-                      <TableCell className={`text-right font-mono ${isTotal ? "font-semibold" : ""}`}>
-                        {row.credit ? `Rs. ${formatAmount(row.credit)}` : ""}
-                      </TableCell>
-                    </TableRow>
-                  );
-                });
-              })()}
-              <TableRow className="bg-muted/20">
-                <TableCell />
-                <TableCell className="font-semibold">Total Debit / Credit</TableCell>
-                <TableCell className="text-right font-mono font-semibold">
-                  Rs. {formatAmount(fromCents(totalDebitCents))}
-                </TableCell>
-                <TableCell className="text-right font-mono font-semibold">
-                  Rs. {formatAmount(fromCents(totalCreditCents))}
-                </TableCell>
-              </TableRow>
+                          <TableCell>{rowNo}</TableCell>
+                          <TableCell className={isTotal ? "font-semibold" : ""}>{row.label}</TableCell>
+                          <TableCell className={`text-right font-mono ${isTotal ? "font-semibold" : ""}`}>
+                            {row.debit ? `Rs. ${formatAmount(row.debit)}` : ""}
+                          </TableCell>
+                          <TableCell className={`text-right font-mono ${isTotal ? "font-semibold" : ""}`}>
+                            {row.credit ? `Rs. ${formatAmount(row.credit)}` : ""}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    });
+                  })()}
+                  <TableRow className="bg-muted/20">
+                    <TableCell />
+                    <TableCell className="font-semibold">Total Debit / Credit</TableCell>
+                    <TableCell className="text-right font-mono font-semibold">
+                      Rs. {formatAmount(fromCents(totalDebitCents))}
+                    </TableCell>
+                    <TableCell className="text-right font-mono font-semibold">
+                      Rs. {formatAmount(fromCents(totalCreditCents))}
+                    </TableCell>
+                  </TableRow>
+                </>
+              )}
             </TableBody>
           </Table>
 
-          <div className={`mt-3 text-sm font-medium ${balanced ? "text-emerald-700" : "text-destructive"}`}>
-            {balanced
-              ? "Total Debit equals Total Credit."
-              : `Totals do not match. Difference: Rs. ${formatAmount(fromCents(differenceCents))}`}
-          </div>
-
-          {!balanced && (
-            <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-              {assetsComponentCents !== assetsTotalCents && (
-                <div>
-                  Assets components mismatch by Rs. {formatAmount(fromCents(Math.abs(assetsComponentCents - assetsTotalCents)))}.
-                </div>
-              )}
-              {liabilitiesComponentCents !== liabilitiesTotalCents && (
-                <div>
-                  Liabilities components mismatch by Rs. {formatAmount(fromCents(Math.abs(liabilitiesComponentCents - liabilitiesTotalCents)))}.
-                </div>
-              )}
-              {equityComponentCents !== equityTotalCents && (
-                <div>
-                  Equity components mismatch by Rs. {formatAmount(fromCents(Math.abs(equityComponentCents - equityTotalCents)))}.
-                </div>
-              )}
-              {lineCreditCents !== liabilitiesAndEquityTotalCents && (
-                <div>
-                  Liabilities + Equity total mismatch by Rs. {formatAmount(fromCents(Math.abs(lineCreditCents - liabilitiesAndEquityTotalCents)))}.
-                </div>
-              )}
-              <div>
-                Check ledger postings, account mappings, and inventory valuation if the mismatch persists.
-              </div>
+          {isLoading ? (
+            <div className="mt-3">
+              <SkeletonBox className="h-4 w-64" />
             </div>
+          ) : (
+            <>
+              <div className={`mt-3 text-sm font-medium ${balanced ? "text-emerald-700" : "text-destructive"}`}>
+                {balanced
+                  ? "Total Debit equals Total Credit."
+                  : `Totals do not match. Difference: Rs. ${formatAmount(fromCents(differenceCents))}`}
+              </div>
+
+              {!balanced && (
+                <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                  {assetsComponentCents !== assetsTotalCents && (
+                    <div>
+                      Assets components mismatch by Rs. {formatAmount(fromCents(Math.abs(assetsComponentCents - assetsTotalCents)))}.
+                    </div>
+                  )}
+                  {liabilitiesComponentCents !== liabilitiesTotalCents && (
+                    <div>
+                      Liabilities components mismatch by Rs. {formatAmount(fromCents(Math.abs(liabilitiesComponentCents - liabilitiesTotalCents)))}.
+                    </div>
+                  )}
+                  {equityComponentCents !== equityTotalCents && (
+                    <div>
+                      Equity components mismatch by Rs. {formatAmount(fromCents(Math.abs(equityComponentCents - equityTotalCents)))}.
+                    </div>
+                  )}
+                  {lineCreditCents !== liabilitiesAndEquityTotalCents && (
+                    <div>
+                      Liabilities + Equity total mismatch by Rs. {formatAmount(fromCents(Math.abs(lineCreditCents - liabilitiesAndEquityTotalCents)))}.
+                    </div>
+                  )}
+                  <div>
+                    Check ledger postings, account mappings, and inventory valuation if the mismatch persists.
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

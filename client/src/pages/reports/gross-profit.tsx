@@ -1,6 +1,5 @@
 import { Suspense, lazy, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQuery } from "@tanstack/react-query";
 import { DataTable, type Column } from "@/components/data-table";
@@ -9,6 +8,9 @@ import { format } from "date-fns";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { SkeletonBox } from "@/components/ui/skeletons";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 
 const ReportDetailDialog = lazy(() =>
   import("@/components/report-detail-dialog").then((mod) => ({
@@ -26,17 +28,16 @@ type GrossProfitReport = {
 type GrossProfitRow = NonNullable<GrossProfitReport["rows"]>[number];
 
 export default function GrossProfitPage() {
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data, isLoading, error } = useQuery<GrossProfitReport>({
     queryKey: ["/api/reports/gross-profit", fromDate, toDate],
-    enabled: !!fromDate && !!toDate,
+    enabled: isReady,
     queryFn: async () => {
       const params = new URLSearchParams();
-      params.set("fromDate", fromDate);
-      params.set("toDate", toDate);
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
       const res = await fetchWithAuth(`/api/reports/gross-profit?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load gross profit");
       return res.json();
@@ -96,23 +97,19 @@ export default function GrossProfitPage() {
           docKey={docKeys.grossProfit}
           params={{ fromDate: fromDate || undefined, toDate: toDate || undefined }}
           title="Gross Profit"
-          disabled={!fromDate || !toDate}
+          disabled={!isReady}
         />
       </div>
 
       <Card>
         <CardContent className="pt-6">
           <div className="grid gap-4 md:grid-cols-4">
-            <div>
-              <Label>From Date</Label>
-              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            </div>
-            <div>
-              <Label>To Date</Label>
-              <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div className="md:col-span-2 flex items-end">
-              {isLoading && <p className="text-sm text-muted-foreground">Calculating...</p>}
+              {isLoading && <SkeletonBox className="h-4 w-28" />}
               {error && <p className="text-sm text-destructive">{(error as Error).message}</p>}
             </div>
           </div>
@@ -120,10 +117,10 @@ export default function GrossProfitPage() {
       </Card>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <MetricCard title="Net Sales" value={netSales} />
-        <MetricCard title="Cost of Goods Sold" value={cogs} />
-        <MetricCard title="Gross Profit" value={grossProfit} highlight={grossProfit >= 0} />
-        <MetricCard title="Margin %" value={margin} suffix="%" highlight={margin >= 0} />
+        <MetricCard title="Net Sales" value={netSales} loading={isLoading} />
+        <MetricCard title="Cost of Goods Sold" value={cogs} loading={isLoading} />
+        <MetricCard title="Gross Profit" value={grossProfit} loading={isLoading} highlight={grossProfit >= 0} />
+        <MetricCard title="Margin %" value={margin} loading={isLoading} suffix="%" highlight={margin >= 0} />
       </div>
 
       {rows.length > 0 && (
@@ -159,16 +156,33 @@ export default function GrossProfitPage() {
   );
 }
 
-function MetricCard({ title, value, suffix, highlight }: { title: string; value: number; suffix?: string; highlight?: boolean }) {
+function MetricCard({
+  title,
+  value,
+  suffix,
+  highlight,
+  loading,
+}: {
+  title: string;
+  value: number;
+  suffix?: string;
+  highlight?: boolean;
+  loading?: boolean;
+}) {
   return (
-    <Card className={highlight ? "border-primary/30 shadow-sm" : ""}>
+    <Card className={highlight && !loading ? "border-primary/30 shadow-sm" : ""}>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className={`text-2xl font-bold font-mono ${highlight ? "text-primary" : ""}`}>
-          {Number.isFinite(value) ? value.toLocaleString() : "0"}{suffix ? ` ${suffix}` : ""}
-        </div>
+        {loading ? (
+          <SkeletonBox className="h-6 w-24" />
+        ) : (
+          <div className={`text-2xl font-bold font-mono ${highlight ? "text-primary" : ""}`}>
+            {Number.isFinite(value) ? value.toLocaleString() : "0"}
+            {suffix ? ` ${suffix}` : ""}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

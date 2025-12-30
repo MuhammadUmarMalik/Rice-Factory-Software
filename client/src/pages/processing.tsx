@@ -7,7 +7,7 @@ import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Skeleton } from "@/components/ui/skeleton";
+import { SkeletonBox } from "@/components/ui/skeletons";
 import { DataTable, type Column } from "@/components/data-table";
 import {
   Dialog,
@@ -449,7 +449,7 @@ export default function ProcessingPage() {
             <CardContent className="space-y-3">
               {isLoading ? (
                 Array.from({ length: 2 }).map((_, i) => (
-                  <Skeleton key={i} className="h-32 w-full" />
+                  <SkeletonBox key={i} className="h-32 w-full" />
                 ))
               ) : pendingItems.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">
@@ -474,7 +474,7 @@ export default function ProcessingPage() {
             <CardContent className="space-y-3">
               {isLoading ? (
                 Array.from({ length: 2 }).map((_, i) => (
-                  <Skeleton key={i} className="h-32 w-full" />
+                  <SkeletonBox key={i} className="h-32 w-full" />
                 ))
               ) : inProgressItems.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">
@@ -499,7 +499,7 @@ export default function ProcessingPage() {
             <CardContent className="space-y-3">
               {isLoading ? (
                 Array.from({ length: 2 }).map((_, i) => (
-                  <Skeleton key={i} className="h-32 w-full" />
+                  <SkeletonBox key={i} className="h-32 w-full" />
                 ))
               ) : completedItems.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">

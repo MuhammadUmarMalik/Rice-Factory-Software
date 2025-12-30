@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
 import { type Language, type TranslationKey, translations } from "@/lib/i18n";
+import { ensureUrduFonts } from "@/lib/fonts";
 
 interface LanguageContextType {
   language: Language;
@@ -30,6 +31,9 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("language", language);
     } catch (err) {
       console.warn("Language storage write failed", err);
+    }
+    if (isRTL) {
+      ensureUrduFonts();
     }
     document.documentElement.dir = isRTL ? "rtl" : "ltr";
     document.documentElement.lang = language;
