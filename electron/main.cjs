@@ -3,6 +3,7 @@ const path = require("path");
 const http = require("http");
 const net = require("net");
 const fs = require("fs");
+const crypto = require("crypto");
 
 const isDev = !app.isPackaged;
 if (!isDev) {
@@ -17,6 +18,36 @@ const serverWaitTimeoutMs = parseInt(process.env.SERVER_WAIT_TIMEOUT_MS || "9000
 let splashWindow = null;
 let quitTimer = null;
 let appUrl = null;
+
+function ensureDesktopSecrets() {
+  if (isDev) return;
+  if (process.env.SESSION_SECRET || process.env.JWT_SECRET) return;
+
+  const secretsPath = path.join(app.getPath("userData"), "secrets.json");
+  let secret = "";
+
+  try {
+    if (fs.existsSync(secretsPath)) {
+      const raw = fs.readFileSync(secretsPath, "utf8");
+      const parsed = JSON.parse(raw);
+      secret = parsed.sessionSecret || parsed.jwtSecret || "";
+    }
+  } catch {
+    // Ignore unreadable secrets; we'll generate a new one.
+  }
+
+  if (!secret) {
+    secret = crypto.randomBytes(48).toString("hex");
+    try {
+      fs.mkdirSync(path.dirname(secretsPath), { recursive: true });
+      fs.writeFileSync(secretsPath, JSON.stringify({ sessionSecret: secret }, null, 2));
+    } catch {
+      // If we cannot persist, still use the generated secret for this run.
+    }
+  }
+
+  process.env.SESSION_SECRET = secret;
+}
 
 if (!isDev || process.env.DISABLE_GPU === "true") {
   app.disableHardwareAcceleration();
@@ -259,6 +290,7 @@ function createWindow() {
 
 async function startApp() {
   try {
+    ensureDesktopSecrets();
     await createSplashWindow();
     await ensureServerReady();
 
