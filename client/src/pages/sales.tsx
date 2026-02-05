@@ -38,6 +38,47 @@ import { z } from "zod";
 import type { Sale, Account, Product } from "@shared/schema";
 import { format } from "date-fns";
 
+const formatDateInput = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const parseLocalDate = (value: string) => {
+  const [y, m, d] = value.split("-").map((v) => Number(v));
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
+const isFutureDateString = (value: string) => {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const selected = parseLocalDate(value);
+  return selected.getTime() > todayStart.getTime();
+};
+
+const parseApiErrorMessage = (error: unknown) => {
+  if (!(error instanceof Error)) return "Unknown error";
+  const message = error.message || "Unknown error";
+  const colonIndex = message.indexOf(":");
+  if (colonIndex === -1) return message;
+  const raw = message.slice(colonIndex + 1).trim();
+  if (!raw) return message;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "string") return parsed;
+    if (parsed?.error) {
+      if (Array.isArray(parsed.error)) {
+        return parsed.error.map((e: any) => e?.message).filter(Boolean).join(", ") || message;
+      }
+      if (typeof parsed.error === "string") return parsed.error;
+    }
+  } catch {
+    return raw;
+  }
+  return message;
+};
+
 const ReportDetailDialog = lazy(() =>
   import("@/components/report-detail-dialog").then((mod) => ({
     default: mod.ReportDetailDialog,
@@ -45,6 +86,9 @@ const ReportDetailDialog = lazy(() =>
 );
 
 const saleFormSchema = z.object({
+  saleDate: z.string().optional().refine((val) => !val || !isFutureDateString(val), {
+    message: "Date cannot be in the future",
+  }),
   customerId: z.string().min(1, "Customer is required"),
   vehicleNumber: z.string().optional(),
   loadingCharges: z.string().default("0"),
@@ -67,6 +111,7 @@ export default function SalesPage() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const todayString = formatDateInput(new Date());
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
   const unitOptions = [
     { value: "kg", label: "Kilogram (kg)" },
@@ -79,6 +124,7 @@ export default function SalesPage() {
   const form = useForm<SaleFormData>({
     resolver: zodResolver(saleFormSchema),
     defaultValues: {
+      saleDate: formatDateInput(new Date()),
       customerId: "",
       vehicleNumber: "",
       loadingCharges: "0",
@@ -122,6 +168,7 @@ export default function SalesPage() {
     mutationFn: (data: SaleFormData) =>
       apiRequest("POST", "/api/sales", {
         ...data,
+        saleDate: data.saleDate ? new Date(data.saleDate) : undefined,
         customerId: parseInt(data.customerId),
         items: data.items.map(item => ({
           productId: parseInt(item.productId),
@@ -131,10 +178,11 @@ export default function SalesPage() {
         })),
       }),
     onError: (error: Error) => {
+      const message = parseApiErrorMessage(error);
       toast({
         variant: "destructive",
-        title: language === "ur" ? "Stock error" : "Stock error",
-        description: error.message,
+        title: language === "ur" ? "Sale error" : "Sale error",
+        description: message,
       });
     },
     onSuccess: () => {
@@ -152,6 +200,7 @@ export default function SalesPage() {
     mutationFn: ({ id, data }: { id: number; data: SaleFormData }) =>
       apiRequest("PATCH", `/api/sales/${id}`, {
         ...data,
+        saleDate: data.saleDate ? new Date(data.saleDate) : undefined,
         customerId: parseInt(data.customerId),
         items: data.items.map(item => ({
           productId: parseInt(item.productId),
@@ -161,10 +210,11 @@ export default function SalesPage() {
         })),
       }),
     onError: (error: Error) => {
+      const message = parseApiErrorMessage(error);
       toast({
         variant: "destructive",
-        title: language === "ur" ? "Stock error" : "Stock error",
-        description: error.message,
+        title: language === "ur" ? "Sale error" : "Sale error",
+        description: message,
       });
     },
     onSuccess: () => {
@@ -220,6 +270,7 @@ export default function SalesPage() {
 
   const handleAddNew = () => {
     form.reset({
+      saleDate: formatDateInput(new Date()),
       customerId: "",
       vehicleNumber: "",
       loadingCharges: "0",
@@ -238,6 +289,7 @@ export default function SalesPage() {
       const res = await apiRequest("GET", `/api/sales/${id}`);
       const sale = await res.json();
       form.reset({
+        saleDate: sale.saleDate ? format(new Date(sale.saleDate), "yyyy-MM-dd") : formatDateInput(new Date()),
         customerId: sale.customerId?.toString() || "",
         vehicleNumber: sale.vehicleNumber || "",
         loadingCharges: sale.loadingCharges || "0",
@@ -440,7 +492,7 @@ export default function SalesPage() {
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <FormField
                   control={form.control}
                   name="customerId"
@@ -461,6 +513,19 @@ export default function SalesPage() {
                           ))}
                         </SelectContent>
                       </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="saleDate"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("saleDate")}</FormLabel>
+                      <FormControl>
+                        <Input {...field} type="date" max={todayString} />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}

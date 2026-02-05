@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { fetchPrintPreview } from "@/services/printApi";
 import { SkeletonBox, SkeletonText } from "@/components/ui/skeletons";
+import { downloadBlob } from "@/lib/export";
 
 type PreviewPayload = {
   docKey: string;
@@ -19,9 +20,13 @@ const decodePayload = (value: string): PreviewPayload | null => {
   }
 };
 
-const toPdfBlobUrl = (base64: string): string => {
+const toPdfBlob = (base64: string): Blob => {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  const blob = new Blob([bytes], { type: "application/pdf" });
+  return new Blob([bytes], { type: "application/pdf" });
+};
+
+const toPdfBlobUrl = (base64: string): string => {
+  const blob = toPdfBlob(base64);
   return URL.createObjectURL(blob);
 };
 
@@ -116,12 +121,8 @@ export default function PrintPreviewPage() {
 
   const handleDownload = () => {
     if (!pdfBase64) return;
-    const url = toPdfBlobUrl(pdfBase64);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${payload?.docKey || "print"}.pdf`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const blob = toPdfBlob(pdfBase64);
+    downloadBlob(`${payload?.docKey || "print"}.pdf`, blob);
   };
 
   if (!isElectron) {

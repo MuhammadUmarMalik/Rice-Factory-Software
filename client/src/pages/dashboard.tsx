@@ -61,8 +61,7 @@ type DayBookRow = {
 };
 
 type DashboardSummaryCore = {
-  filters: { fromDate: string; toDate: string; fiscalYearId?: number | null };
-  fiscalYears: Array<{ id: number; name: string; startDate: string | number | Date; endDate: string | number | Date }>;
+  filters: { fromDate: string; toDate: string };
   kpis: {
     totalPurchases: number;
     totalSales: number;
@@ -141,20 +140,18 @@ export default function Dashboard() {
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
   const [fromDate, setFromDate] = useState(format(monthStart, "yyyy-MM-dd"));
   const [toDate, setToDate] = useState(format(today, "yyyy-MM-dd"));
-  const [fiscalYearId, setFiscalYearId] = useState<string>("all");
   const [godown, setGodown] = useState<string>("all");
 
   const chartsSection = useLazySection<HTMLDivElement>("300px");
   const detailsSection = useLazySection<HTMLDivElement>("300px");
 
   const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummaryCore>({
-    queryKey: ["/api/dashboard/summary", "core", fromDate, toDate, fiscalYearId, godown],
+    queryKey: ["/api/dashboard/summary", "core", fromDate, toDate, godown],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("scope", "core");
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
-      if (fiscalYearId !== "all") params.set("fiscalYearId", fiscalYearId);
       const res = await fetch(`/api/dashboard/summary?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch dashboard summary");
       return res.json();
@@ -165,13 +162,12 @@ export default function Dashboard() {
   });
 
   const { data: details, isLoading: detailsLoading } = useQuery<DashboardSummaryDetails>({
-    queryKey: ["/api/dashboard/summary", "details", fromDate, toDate, fiscalYearId, godown],
+    queryKey: ["/api/dashboard/summary", "details", fromDate, toDate, godown],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("scope", "details");
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
-      if (fiscalYearId !== "all") params.set("fiscalYearId", fiscalYearId);
       const res = await fetch(`/api/dashboard/summary?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch dashboard details");
       return res.json();
@@ -183,12 +179,11 @@ export default function Dashboard() {
   });
 
   const { data: alertsData, isLoading: alertsLoading } = useQuery<DashboardAlerts>({
-    queryKey: ["/api/dashboard/alerts", fromDate, toDate, fiscalYearId, godown],
+    queryKey: ["/api/dashboard/alerts", fromDate, toDate, godown],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
-      if (fiscalYearId !== "all") params.set("fiscalYearId", fiscalYearId);
       const res = await fetch(`/api/dashboard/alerts?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch dashboard alerts");
       return res.json();
@@ -290,17 +285,6 @@ export default function Dashboard() {
   );
 
   const dayBookRows = useMemo(() => details?.dayBook.rows || [], [details?.dayBook.rows]);
-  const handleFiscalYearChange = useCallback(
-    (val: string) => {
-      setFiscalYearId(val);
-      const fy = summary?.fiscalYears.find((f) => String(f.id) === val);
-      if (fy) {
-        setFromDate(format(new Date(fy.startDate), "yyyy-MM-dd"));
-        setToDate(format(new Date(fy.endDate), "yyyy-MM-dd"));
-      }
-    },
-    [summary?.fiscalYears],
-  );
 
   const chartsFallback = (
     <div className="grid gap-6">
@@ -392,7 +376,7 @@ export default function Dashboard() {
 
       <Card>
         <CardContent className="pt-6">
-          <div className={`grid gap-4 md:grid-cols-4 ${isRTL ? "direction-rtl" : ""}`}>
+          <div className={`grid gap-4 md:grid-cols-3 ${isRTL ? "direction-rtl" : ""}`}>
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>From Date</Label>
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
@@ -400,22 +384,6 @@ export default function Dashboard() {
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>To Date</Label>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-            </div>
-            <div>
-              <Label className={isRTL ? "font-urdu" : ""}>Financial Year</Label>
-              <Select value={fiscalYearId} onValueChange={handleFiscalYearChange}>
-                <SelectTrigger>
-                  <SelectValue placeholder="All years" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  {(summary?.fiscalYears || []).map((fy) => (
-                    <SelectItem key={fy.id} value={String(fy.id)}>
-                      {fy.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>Godown</Label>
@@ -568,7 +536,6 @@ export default function Dashboard() {
             <DashboardChartsSection
               fromDate={fromDate}
               toDate={toDate}
-              fiscalYearId={fiscalYearId}
               godown={godown}
               isRTL={isRTL}
               purchasesLabel={t("purchases")}

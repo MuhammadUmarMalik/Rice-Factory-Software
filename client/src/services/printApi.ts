@@ -16,6 +16,25 @@ export type PrintRequest = {
   marginLeftMm?: number;
 };
 
+const isElectron =
+  typeof navigator !== "undefined" &&
+  navigator.userAgent.toLowerCase().includes("electron");
+
+const normalizeMargins = (request: PrintRequest) => {
+  const uniform = request.marginMm ?? 10;
+  return {
+    marginTopMm: request.marginTopMm ?? uniform,
+    marginRightMm: request.marginRightMm ?? uniform,
+    marginBottomMm: request.marginBottomMm ?? uniform,
+    marginLeftMm: request.marginLeftMm ?? uniform,
+  };
+};
+
+const base64ToPdfBlob = (base64: string) => {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return new Blob([bytes], { type: "application/pdf" });
+};
+
 export async function fetchPrintPreview(request: PrintRequest): Promise<string> {
   const res = await apiRequest("POST", "/api/print/preview", request);
   const json = await res.json();
@@ -31,6 +50,33 @@ export async function fetchPrintPayload(
 }
 
 export async function fetchPrintPdf(request: PrintRequest): Promise<Blob> {
+  if (isElectron && window.electronPrintPreview?.renderPdf) {
+    try {
+      const res = await apiRequest("POST", "/api/print/preview", request);
+      const json = await res.json();
+      const html = json.html as string | undefined;
+      if (html) {
+        const format = request.format ?? "A4";
+        const orientation = request.orientation ?? "portrait";
+        const margins = normalizeMargins(request);
+        const base64 = await window.electronPrintPreview.renderPdf({
+          html,
+          options: {
+            format,
+            orientation,
+            widthMm: request.widthMm,
+            heightMm: request.heightMm,
+            ...margins,
+          },
+        });
+        if (base64) {
+          return base64ToPdfBlob(base64);
+        }
+      }
+    } catch {
+      // Fall back to server-side PDF generation below.
+    }
+  }
   const res = await apiRequest("POST", "/api/print/pdf", request);
   const buf = await res.arrayBuffer();
   return new Blob([buf], { type: "application/pdf" });

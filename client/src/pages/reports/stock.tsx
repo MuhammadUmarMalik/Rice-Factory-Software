@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Package, Scale, TrendingUp, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { docKeys } from "@/print/docRegistry";
 import { Label } from "@/components/ui/label";
 import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
 import { useReportDateRange } from "@/hooks/useReportDateRange";
+import { apiRequest } from "@/lib/queryClient";
 import {
   Select,
   SelectContent,
@@ -63,7 +64,7 @@ export default function StockReportPage() {
     queryKey: ["/api/products"],
   });
 
-  const { data, isLoading } = useQuery<StockReport>({
+  const { data, isLoading, error } = useQuery<StockReport>({
     queryKey: ["/api/reports/stock", fromDate, toDate, productId, category, unit],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -72,11 +73,16 @@ export default function StockReportPage() {
       if (productId !== "all") params.set("productId", productId);
       if (category !== "all") params.set("category", category);
       if (unit !== "all") params.set("unit", unit);
-      const res = await fetch(`/api/reports/stock?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch stock report");
+      const res = await apiRequest("GET", `/api/reports/stock?${params.toString()}`);
       return res.json();
     },
   });
+
+  useEffect(() => {
+    if (!error) return;
+    const message = error instanceof Error ? error.message : String(error);
+    window.electronLog?.write(`stock report error: ${message}`);
+  }, [error]);
 
   const rows = data?.rows || [];
   const totalStockValue = parseFloat(data?.totals.closingValue || "0");
@@ -340,6 +346,11 @@ export default function StockReportPage() {
 
       <Card>
         <CardContent className="pt-6">
+          {error ? (
+            <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error instanceof Error ? error.message : "Failed to load stock report"}
+            </div>
+          ) : null}
           <DataTable
             columns={columns}
             data={rows}

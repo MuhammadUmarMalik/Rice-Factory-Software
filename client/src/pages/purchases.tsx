@@ -47,8 +47,51 @@ import { useUIStore } from "@/stores/ui.store";
 import { usePurchaseStore } from "@/stores/purchase/store";
 import type { PurchaseMode } from "@/stores/purchase/types";
 
+const formatDateInput = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const parseLocalDate = (value: string) => {
+  const [y, m, d] = value.split("-").map((v) => Number(v));
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
+const isFutureDateString = (value: string) => {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const selected = parseLocalDate(value);
+  return selected.getTime() > todayStart.getTime();
+};
+
+const parseApiErrorMessage = (error: unknown) => {
+  if (!(error instanceof Error)) return "Unknown error";
+  const message = error.message || "Unknown error";
+  const colonIndex = message.indexOf(":");
+  if (colonIndex === -1) return message;
+  const raw = message.slice(colonIndex + 1).trim();
+  if (!raw) return message;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "string") return parsed;
+    if (parsed?.error) {
+      if (Array.isArray(parsed.error)) {
+        return parsed.error.map((e: any) => e?.message).filter(Boolean).join(", ") || message;
+      }
+      if (typeof parsed.error === "string") return parsed.error;
+    }
+  } catch {
+    return raw;
+  }
+  return message;
+};
+
 const purchaseFormSchema = z.object({
-  purchaseDate: z.string().optional(),
+  purchaseDate: z.string().optional().refine((val) => !val || !isFutureDateString(val), {
+    message: "Date cannot be in the future",
+  }),
   moundBaseKg: z.enum(["40", "60"]).default("40"),
   billNo: z.string().optional(),
   bookNo: z.string().optional(),
@@ -94,6 +137,7 @@ export default function PurchasesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
   const [location] = useLocation();
+  const todayString = formatDateInput(new Date());
   const purchaseMode = useUIStore((state) => state.viewModes.purchase ?? null);
   const setViewMode = useUIStore((state) => state.setViewMode);
   const isDialogOpen = useUIStore((state) => state.modals.purchaseForm?.open ?? false);
@@ -131,7 +175,7 @@ export default function PurchasesPage() {
   const form = useForm<PurchaseFormData>({
     resolver: zodResolver(purchaseFormSchema),
     defaultValues: {
-      purchaseDate: new Date().toISOString().slice(0, 10),
+      purchaseDate: formatDateInput(new Date()),
       moundBaseKg: "40",
       billNo: "",
       bookNo: "",
@@ -278,6 +322,13 @@ export default function PurchasesPage() {
           accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
         })),
       }),
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to save purchase",
+        description: parseApiErrorMessage(error),
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
@@ -318,6 +369,13 @@ export default function PurchasesPage() {
           accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
         })),
       }),
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to update purchase",
+        description: parseApiErrorMessage(error),
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
@@ -368,7 +426,7 @@ export default function PurchasesPage() {
     resetPurchaseState();
     setMode("create");
     form.reset({
-      purchaseDate: new Date().toISOString().slice(0, 10),
+      purchaseDate: formatDateInput(new Date()),
       moundBaseKg: "40",
       billNo: nextBill?.billNo || "",
       bookNo: "",
@@ -414,7 +472,7 @@ export default function PurchasesPage() {
         : defaultCharges;
 
     form.reset({
-      purchaseDate: purchase.purchaseDate ? format(new Date(purchase.purchaseDate), "yyyy-MM-dd") : new Date().toISOString().slice(0, 10),
+      purchaseDate: purchase.purchaseDate ? format(new Date(purchase.purchaseDate), "yyyy-MM-dd") : formatDateInput(new Date()),
       moundBaseKg: "40",
       billNo: purchase.billNo || "",
       bookNo: purchase.bookNo || "",
@@ -806,7 +864,7 @@ export default function PurchasesPage() {
                     <FormItem>
                       <FormLabel>{t("purchaseDate")}</FormLabel>
                       <FormControl>
-                        <Input {...field} type="date" />
+                        <Input {...field} type="date" max={todayString} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
