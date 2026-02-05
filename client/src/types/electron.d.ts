@@ -28,5 +28,8 @@ declare global {
       }) => Promise<boolean | undefined>;
       getPrinters: () => Promise<Array<{ name: string; displayName?: string }>>;
     };
+    electronLog?: {
+      write: (message: string) => Promise<boolean | undefined>;
+    };
   }
 }

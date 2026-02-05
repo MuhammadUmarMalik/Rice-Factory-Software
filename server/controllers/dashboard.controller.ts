@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { parseOptionalDate, parseOptionalInt } from "../utils/parse";
+import { parseOptionalDate } from "../utils/parse";
 import { getDashboardAlerts, getDashboardCharts, getDashboardSummary, getDashboardStats, getRecentActivity } from "../services/dashboard.service";
 
 export async function getStats(_req: Request, res: Response) {
@@ -26,8 +26,7 @@ export async function getCharts(req: Request, res: Response) {
   try {
     const fromDate = parseOptionalDate(req.query.fromDate);
     const toDate = parseOptionalDate(req.query.toDate);
-    const fiscalYearId = parseOptionalInt(req.query.fiscalYearId);
-    const charts = await getDashboardCharts({ fromDate, toDate, fiscalYearId });
+    const charts = await getDashboardCharts({ fromDate, toDate });
     res.json(charts);
   } catch (error) {
     console.error(error);
@@ -39,10 +38,9 @@ export async function getSummary(req: Request, res: Response) {
   try {
     const fromDate = parseOptionalDate(req.query.fromDate);
     const toDate = parseOptionalDate(req.query.toDate);
-    const fiscalYearId = parseOptionalInt(req.query.fiscalYearId);
     const scopeParam = typeof req.query.scope === "string" ? req.query.scope : "full";
     const scope = scopeParam === "core" || scopeParam === "details" ? scopeParam : "full";
-    const summary = await getDashboardSummary({ fromDate, toDate, fiscalYearId }, scope);
+    const summary = await getDashboardSummary({ fromDate, toDate }, scope);
     res.json(summary);
   } catch (error) {
     console.error(error);
@@ -54,8 +52,7 @@ export async function getAlerts(req: Request, res: Response) {
   try {
     const fromDate = parseOptionalDate(req.query.fromDate);
     const toDate = parseOptionalDate(req.query.toDate);
-    const fiscalYearId = parseOptionalInt(req.query.fiscalYearId);
-    const alerts = await getDashboardAlerts({ fromDate, toDate, fiscalYearId });
+    const alerts = await getDashboardAlerts({ fromDate, toDate });
     res.json(alerts);
   } catch (error) {
     console.error(error);
