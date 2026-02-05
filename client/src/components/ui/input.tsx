@@ -3,12 +3,16 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { moveFocusByArrowKey } from "@/lib/keyboard-nav"
 
+const MIN_DATE_INPUT = "1980-01-01"
+
 const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
-  ({ className, type, onKeyDown, ...props }, ref) => {
+  ({ className, type, onKeyDown, min, ...props }, ref) => {
+    const resolvedMin = type === "date" && !min ? MIN_DATE_INPUT : min
     // h-9 to match icon buttons and default buttons.
     return (
       <input
         type={type}
+        min={resolvedMin}
         onKeyDown={(event) => {
           onKeyDown?.(event)
           if (event.defaultPrevented) return

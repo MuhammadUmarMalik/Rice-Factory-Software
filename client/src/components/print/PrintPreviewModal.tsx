@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SkeletonBox, SkeletonText } from "@/components/ui/skeletons";
 import { fetchPrintPreview, fetchPrintPdf } from "@/services/printApi";
 import type { DocKey } from "@/print/docRegistry";
+import { downloadBlob } from "@/lib/export";
 
 type PrintPreviewModalProps = {
   open: boolean;
@@ -137,7 +138,8 @@ function PrintPreviewModalComponent({
     if (!firstPage) return;
     const pageWidth = firstPage.offsetWidth || firstPage.getBoundingClientRect().width;
     if (!pageWidth) return;
-    const viewportWidth = Math.max(scroll.clientWidth, 1);
+    const paddingX = 48;
+    const viewportWidth = Math.max(scroll.clientWidth - paddingX, 1);
     const metrics = pages.reduce(
       (acc, page) => {
         const width = page.offsetWidth || page.getBoundingClientRect().width;
@@ -152,7 +154,7 @@ function PrintPreviewModalComponent({
     const contentWidth = metrics.maxWidth;
     const contentHeight = metrics.maxBottom;
     const scaleByWidth = viewportWidth / contentWidth;
-    const scale = layout === "landscape" ? scaleByWidth : Math.min(1, scaleByWidth);
+    const scale = Math.min(1, scaleByWidth);
     doc.documentElement.style.setProperty("--preview-scale", scale.toFixed(3));
 
     const scaledHeight = Math.ceil(contentHeight * scale);
@@ -216,38 +218,43 @@ function PrintPreviewModalComponent({
 
   const handleDownload = useCallback(async () => {
     const blob = await fetchPrintPdf(requestPayload);
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${docKey}.pdf`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(`${docKey}.pdf`, blob);
   }, [docKey, requestPayload]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-full max-w-6xl overflow-auto border-0 bg-transparent p-4 pr-4 shadow-none">
-        <div className="flex min-h-[480px] w-full flex-col overflow-hidden rounded-xl bg-white shadow-xl">
-          <DialogHeader className="flex-row items-center justify-between space-y-0 border-b px-4 py-3 pr-4 text-left">
-            <DialogTitle className="text-left">{title || "Print Preview"}</DialogTitle>
+      <DialogContent className="max-h-[92vh] w-full max-w-6xl overflow-auto border-0 bg-transparent p-4 shadow-none sm:p-6">
+        <div className="flex min-h-[520px] w-full flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-2xl">
+          <DialogHeader className="flex-row items-center justify-between space-y-0 border-b border-slate-200/80 px-4 py-3 text-left sm:px-6">
+            <div>
+              <DialogTitle className="text-left text-lg font-semibold">
+                {title || "Print Preview"}
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground">Review layout and adjust settings.</p>
+            </div>
             <DialogDescription className="sr-only">
               Review the document preview and adjust print settings before printing.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
-            <div className="w-full shrink-0 border-r bg-slate-50 p-4 lg:w-80 min-h-0 overflow-y-auto">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-lg font-semibold">Print</div>
+            <div className="w-full min-h-0 shrink-0 border-b border-slate-200/80 bg-slate-50/90 p-4 lg:w-[320px] lg:border-b-0 lg:border-r">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                    Print
+                  </div>
+                  <div className="text-xs text-muted-foreground">Choose settings for output.</div>
+                </div>
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={handlePrint} data-autofocus>
                     Print
                   </Button>
                   <Button variant="secondary" size="sm" onClick={handleDownload}>
-                    Download PDF
+                    Download
                   </Button>
                 </div>
               </div>
-              <div className="mt-4 space-y-4">
+              <div className="mt-5 space-y-5">
                 {isElectron && printers.length > 0 && (
                   <div>
                     <div className="text-xs font-semibold uppercase text-muted-foreground">
@@ -422,11 +429,14 @@ function PrintPreviewModalComponent({
                 </div>
               </div>
             </div>
-            <div ref={scrollRef} className="hide-scrollbar flex-1 min-h-0 overflow-auto bg-slate-100 p-3">
+            <div
+              ref={scrollRef}
+              className="hide-scrollbar flex-1 min-h-0 overflow-auto bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.35),_rgba(241,245,249,0.6)_45%,_rgba(226,232,240,1))] p-4 sm:p-6"
+            >
               {loading ? (
                 <div className="flex min-h-full items-center justify-center">
                   <div
-                    className={`print-preview-frame w-full bg-white shadow-md ${pageMaxWidthClass} ${pageAspectClass}`}
+                    className={`print-preview-frame w-full rounded-lg bg-white shadow-lg ${pageMaxWidthClass} ${pageAspectClass}`}
                   >
                     <div className="p-6 space-y-4">
                       <SkeletonBox className="h-5 w-40" />
@@ -440,12 +450,12 @@ function PrintPreviewModalComponent({
                   </div>
                 </div>
               ) : (
-                <div className="min-h-full w-full">
+                <div className="flex min-h-full w-full items-start justify-center">
                   <iframe
                     key={`${layout}-${format}-${customWidthMm}-${customHeightMm}-${marginTopMm}-${marginRightMm}-${marginBottomMm}-${marginLeftMm}`}
                     ref={iframeRef}
                     title="Print preview"
-                    className={`print-preview-frame block h-full w-full bg-white shadow-md ${pageMaxWidthClass} ${pageAspectClass}`}
+                    className={`print-preview-frame block rounded-lg bg-white shadow-lg ${pageMaxWidthClass} ${pageAspectClass}`}
                     srcDoc={html}
                     onLoad={handleIframeLoad}
                   />

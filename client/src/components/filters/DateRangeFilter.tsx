@@ -26,6 +26,8 @@ const presets: Array<{ key: DateRangePreset; label: string }> = [
   { key: "custom", label: "Custom" },
 ];
 
+const MIN_DATE = new Date(1980, 0, 1);
+
 export function DateRangeFilter({
   value,
   onChange,
@@ -147,6 +149,7 @@ export function DateRangeFilter({
               <Calendar
                 mode="range"
                 selected={draftRange}
+                fromDate={MIN_DATE}
                 defaultMonth={draftRange?.from ?? draftRange?.to ?? new Date()}
                 onSelect={handleCalendarSelect}
               />

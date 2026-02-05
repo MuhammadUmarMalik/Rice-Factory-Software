@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Download, TrendingUp, Truck, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
 import { useReportDateRange } from "@/hooks/useReportDateRange";
+import { apiRequest } from "@/lib/queryClient";
 import {
   Select,
   SelectContent,
@@ -56,6 +57,12 @@ type SalesReport = {
   };
 };
 
+function formatSafeDate(value: string | number | Date) {
+  const date = new Date(value as any);
+  if (Number.isNaN(date.getTime())) return "-";
+  return format(date, "dd MMM yyyy");
+}
+
 export default function SalesReportPage() {
   const { t, isRTL, language } = useLanguage();
   const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "thisMonth" });
@@ -72,7 +79,7 @@ export default function SalesReportPage() {
     queryKey: ["/api/products"],
   });
 
-  const { data, isLoading } = useQuery<SalesReport>({
+  const { data, isLoading, error } = useQuery<SalesReport>({
     queryKey: ["/api/reports/sales", fromDate, toDate, customerId, productId, status],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -81,11 +88,16 @@ export default function SalesReportPage() {
       if (customerId !== "all") params.set("customerId", customerId);
       if (productId !== "all") params.set("productId", productId);
       if (status !== "all") params.set("paymentStatus", status);
-      const res = await fetch(`/api/reports/sales?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch sales report");
+      const res = await apiRequest("GET", `/api/reports/sales?${params.toString()}`);
       return res.json();
     },
   });
+
+  useEffect(() => {
+    if (!error) return;
+    const message = error instanceof Error ? error.message : String(error);
+    window.electronLog?.write(`sales report error: ${message}`);
+  }, [error]);
 
   const rows = data?.rows || [];
   const totals = data?.totals || {
@@ -113,7 +125,7 @@ export default function SalesReportPage() {
         <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
           <Calendar className="h-3 w-3 text-muted-foreground" />
           <span className="text-sm">
-            {format(new Date(item.saleDate), "dd MMM yyyy")}
+            {formatSafeDate(item.saleDate)}
           </span>
         </div>
       ),
@@ -332,6 +344,11 @@ export default function SalesReportPage() {
 
       <Card>
         <CardContent className="pt-6">
+          {error ? (
+            <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error instanceof Error ? error.message : "Failed to load sales report"}
+            </div>
+          ) : null}
           <DataTable
             columns={columns}
             data={rows}

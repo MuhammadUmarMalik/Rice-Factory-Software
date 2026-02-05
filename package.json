@@ -1,5 +1,6 @@
 {
   "name": "Rice-Mill-Manager",
+  "description": "Desktop and web app for managing rice mill operations.",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
@@ -144,6 +145,11 @@
         "portable"
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "license": "terms-and-conditions.txt"
+    },
     "directories": {
       "output": "dist-desktop"
     },
@@ -153,7 +159,7 @@
       "package.json",
       "node_modules/**",
       "client/public/app_icon.ico",
-      ".local/seed.db"
+      "app-data/data.db"
     ],
     "asar": true,
     "icon": "client/public/app_icon.ico"

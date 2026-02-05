@@ -2,6 +2,7 @@ import { Suspense, lazy, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { DocKey } from "@/print/docRegistry";
 import { fetchPrintPdf } from "@/services/printApi";
+import { downloadBlob } from "@/lib/export";
 
 const PrintPreviewModal = lazy(() =>
   import("./PrintPreviewModal").then((module) => ({ default: module.PrintPreviewModal })),
@@ -38,12 +39,7 @@ export function PrintActions({
   const handleDownload = async () => {
     if (disabled) return;
     const blob = await fetchPrintPdf({ docKey, params: safeParams, orientation, format: "A4" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${docKey}.pdf`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(`${docKey}.pdf`, blob);
   };
 
   return (
