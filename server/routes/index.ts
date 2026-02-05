@@ -12,6 +12,7 @@ import ledgerRoutes from "./ledger.routes";
 import paymentsRoutes from "./payments.routes";
 import payrollRoutes from "./payroll.routes";
 import periodLocksRoutes from "./period-locks.routes";
+import fiscalYearRoutes from "./fiscal-years.routes";
 import processingRoutes from "./processing.routes";
 import productsRoutes from "./products.routes";
 import purchasesRoutes from "./purchases.routes";
@@ -49,6 +50,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use(reportsRoutes);
   app.use(financialRoutes);
   app.use(periodLocksRoutes);
+  app.use(fiscalYearRoutes);
   app.use(printRoutes);
 
   return httpServer;

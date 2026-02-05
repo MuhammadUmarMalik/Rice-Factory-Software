@@ -6,3 +6,7 @@ contextBridge.exposeInMainWorld("electronPrintPreview", {
   printHtml: (payload) => ipcRenderer.invoke("print-preview:print-html", payload),
   getPrinters: () => ipcRenderer.invoke("print-preview:get-printers"),
 });
+
+contextBridge.exposeInMainWorld("electronLog", {
+  write: (message) => ipcRenderer.invoke("app-log:write", { message }),
+});

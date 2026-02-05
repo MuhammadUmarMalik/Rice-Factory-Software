@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu } = require("electron");
 const path = require("path");
 const http = require("http");
 const net = require("net");
@@ -18,6 +18,21 @@ const serverWaitTimeoutMs = parseInt(process.env.SERVER_WAIT_TIMEOUT_MS || "9000
 let splashWindow = null;
 let quitTimer = null;
 let appUrl = null;
+const logPath = path.join(app.getPath("userData"), "app.log");
+
+function appendAppLog(message) {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] ${message}\n`;
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, line, "utf8");
+  } catch {
+    // Ignore logging failures.
+  }
+}
+
+// Remove the default application menu (File/Edit/View/Window)
+Menu.setApplicationMenu(null);
 
 function ensureDesktopSecrets() {
   if (isDev) return;
@@ -149,7 +164,7 @@ function ensureSeedDatabase() {
   }
 
   const candidates = [
-    path.join(app.getAppPath(), ".local", "seed.db"),
+    path.join(app.getAppPath(), "app-data", "data.db"),
     path.join(app.getAppPath(), ".local", "data.db"),
     path.join(app.getAppPath(), "data.db"),
     path.join(process.resourcesPath, "data.db"),
@@ -234,6 +249,7 @@ function closeSplashWindow() {
 
 function showFatalError(error) {
   const message = error instanceof Error ? error.message : String(error);
+  appendAppLog(`FATAL: ${message}`);
   dialog.showErrorBox("Mill Manager failed to start", message);
   const win = new BrowserWindow({
     width: 680,
@@ -263,6 +279,9 @@ function createWindow() {
       preload: path.join(app.getAppPath(), "electron", "preload.cjs"),
     },
   });
+
+  win.setMenu(null);
+  win.setMenuBarVisibility(false);
 
   win.once("ready-to-show", () => win.show());
   setTimeout(() => {
@@ -324,6 +343,8 @@ function createPreviewWindow(url) {
       sandbox: true,
     },
   });
+  win.setMenu(null);
+  win.setMenuBarVisibility(false);
   win.loadURL(url);
   return win;
 }
@@ -339,6 +360,8 @@ async function createHiddenPrintWindow(html) {
       sandbox: true,
     },
   });
+  win.setMenu(null);
+  win.setMenuBarVisibility(false);
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   return win;
 }
@@ -415,6 +438,17 @@ ipcMain.handle("print-preview:get-printers", async () => {
   }
 });
 
+ipcMain.handle("app-log:write", (_event, payload) => {
+  const message =
+    typeof payload === "string"
+      ? payload
+      : payload && typeof payload.message === "string"
+      ? payload.message
+      : JSON.stringify(payload);
+  appendAppLog(message);
+  return true;
+});
+
 app.on("second-instance", () => {
   const win = BrowserWindow.getAllWindows()[0];
   if (!win) {
@@ -429,10 +463,12 @@ app.on("second-instance", () => {
 });
 
 process.on("uncaughtException", (error) => {
+  appendAppLog(`uncaughtException: ${error?.stack || error}`);
   showFatalError(error);
 });
 
 process.on("unhandledRejection", (error) => {
+  appendAppLog(`unhandledRejection: ${error?.stack || error}`);
   showFatalError(error);
 });
 

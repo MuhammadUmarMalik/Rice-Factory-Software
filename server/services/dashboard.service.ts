@@ -1,12 +1,11 @@
 import { format } from "date-fns";
 import { storage } from "../models/storage";
 
-type DashboardRange = { fromDate: Date; toDate: Date; fiscalYearId?: number };
+type DashboardRange = { fromDate: Date; toDate: Date };
 type DashboardSummaryScope = "core" | "details" | "full";
 
 type DashboardSummaryCore = {
-  filters: { fromDate: string; toDate: string; fiscalYearId: number | null };
-  fiscalYears: any[];
+  filters: { fromDate: string; toDate: string };
   kpis: {
     totalPurchases: number;
     totalSales: number;
@@ -75,17 +74,9 @@ function endOfDay(value: Date) {
 
 async function resolveRange(params: Partial<DashboardRange>) {
   const now = new Date();
-  const fiscalYears = await storage.getFiscalYears();
   let fromDate = params.fromDate ? startOfDay(params.fromDate) : startOfDay(now);
   let toDate = params.toDate ? endOfDay(params.toDate) : endOfDay(now);
-  if (params.fiscalYearId && (!params.fromDate || !params.toDate)) {
-    const fy = fiscalYears.find((f: any) => f.id === params.fiscalYearId);
-    if (fy) {
-      fromDate = startOfDay(new Date(fy.startDate));
-      toDate = endOfDay(new Date(fy.endDate));
-    }
-  }
-  return { fromDate, toDate, fiscalYears };
+  return { fromDate, toDate };
 }
 
 function classifyProduct(name: string) {
@@ -123,7 +114,7 @@ export async function getDashboardSummary(
   params: Partial<DashboardRange>,
   scope: DashboardSummaryScope = "full",
 ): Promise<DashboardSummaryCore | DashboardSummaryDetails | DashboardSummaryFull> {
-  const { fromDate, toDate, fiscalYears } = await resolveRange(params);
+  const { fromDate, toDate } = await resolveRange(params);
 
   const includeCore = scope === "full" || scope === "core";
   const includeDetails = scope === "full" || scope === "details";
@@ -180,9 +171,7 @@ export async function getDashboardSummary(
       filters: {
         fromDate: fromDate.toISOString(),
         toDate: toDate.toISOString(),
-        fiscalYearId: params.fiscalYearId ?? null,
       },
-      fiscalYears,
       kpis: {
         totalPurchases: parseAmount(purchasesReport.totals.total),
         totalSales: parseAmount(salesReport.totals.total),

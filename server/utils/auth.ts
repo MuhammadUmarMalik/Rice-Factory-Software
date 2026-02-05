@@ -134,6 +134,9 @@ export function requireRoles(allowed: string[]) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     const role = getUserRole(req);
+    if (role === "admin") {
+      return next();
+    }
     if (!allow.includes(role)) {
       return res.status(403).json({ error: "Forbidden" });
     }

@@ -1679,39 +1679,44 @@ export class DatabaseStorage implements IStorage {
     const existing = client.select().from(fiscalYears).all();
     if (existing.length > 0) return;
 
-    const year = new Date().getFullYear();
-    const start = new Date(year, 0, 1);
-    const end = new Date(year, 11, 31, 23, 59, 59, 999);
-
-    const fy = client.insert(fiscalYears).values({
-      name: `FY-${year}`,
-      startDate: start,
-      endDate: end,
-      status: "open",
-      createdBy: performedBy?.userId,
-      createdAt: new Date(),
-    } as any).returning().get();
-
-    for (let m = 0; m < 12; m++) {
-      const dt = new Date(year, m, 1);
-      client.insert(fiscalPeriods).values({
-        fiscalYearId: fy.id,
-        yearMonth: toYearMonth(dt),
-        periodStart: startOfMonth(dt),
-        periodEnd: endOfMonth(dt),
-        isClosed: false as any,
-      } as any).run();
-    }
-
+    const startYear = 2000;
+    const currentYear = new Date().getFullYear();
     const allAccounts = client.select().from(accounts).all();
-    for (const acc of allAccounts) {
-      client.insert(fiscalOpeningBalances).values({
-        fiscalYearId: fy.id,
-        accountId: acc.id,
-        openingBalance: acc.openingBalance || "0",
+
+    for (let year = startYear; year <= currentYear; year += 1) {
+      const start = new Date(year, 0, 1);
+      const end = new Date(year, 11, 31, 23, 59, 59, 999);
+      const status = year === currentYear ? "open" : "closed";
+
+      const fy = client.insert(fiscalYears).values({
+        name: `FY-${year}`,
+        startDate: start,
+        endDate: end,
+        status,
         createdBy: performedBy?.userId,
         createdAt: new Date(),
-      } as any).run();
+      } as any).returning().get();
+
+      for (let m = 0; m < 12; m++) {
+        const dt = new Date(year, m, 1);
+        client.insert(fiscalPeriods).values({
+          fiscalYearId: fy.id,
+          yearMonth: toYearMonth(dt),
+          periodStart: startOfMonth(dt),
+          periodEnd: endOfMonth(dt),
+          isClosed: status !== "open" ? (true as any) : (false as any),
+        } as any).run();
+      }
+
+      for (const acc of allAccounts) {
+        client.insert(fiscalOpeningBalances).values({
+          fiscalYearId: fy.id,
+          accountId: acc.id,
+          openingBalance: acc.openingBalance || "0",
+          createdBy: performedBy?.userId,
+          createdAt: new Date(),
+        } as any).run();
+      }
     }
   }
 
@@ -1763,8 +1768,14 @@ export class DatabaseStorage implements IStorage {
 
   private assertPostingAllowed(client: DbClient, postingDate: Date, context: string) {
     const safeDate = toValidDate(postingDate);
+    const minAllowed = new Date(1980, 0, 1);
+    minAllowed.setHours(0, 0, 0, 0);
+    if (safeDate < minAllowed) {
+      throw new Error(
+        `Date must be on or after ${minAllowed.toISOString().slice(0, 10)} for ${context}`,
+      );
+    }
     this.assertPeriodNotLocked(client, safeDate, context);
-    this.assertFiscalPeriodOpen(client, safeDate, context);
   }
 
   // Products

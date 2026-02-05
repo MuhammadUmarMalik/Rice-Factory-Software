@@ -6,6 +6,18 @@ import * as salesService from "../services/sales.service";
 import { notifyLowStock, notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
 
+const isFutureDate = (value: Date) => {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const check = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  return check.getTime() > todayStart.getTime();
+};
+
+const normalizeDate = (value: unknown) => {
+  if (value == null || value === "") return undefined;
+  return value instanceof Date ? value : new Date(value as any);
+};
+
 export async function listSales(req: Request, res: Response) {
   try {
     const sales = await salesService.listSales();
@@ -34,7 +46,13 @@ export async function getSale(req: Request, res: Response) {
 export async function createSale(req: Request, res: Response) {
   try {
     const { items, ...saleData } = req.body;
-    const data = insertSaleSchema.parse(saleData);
+    const data = insertSaleSchema.parse({
+      ...saleData,
+      saleDate: normalizeDate((saleData as any).saleDate),
+    });
+    if (data.saleDate && isFutureDate(data.saleDate)) {
+      return res.status(400).json({ error: "Sale date cannot be in the future" });
+    }
     const parsedItems = saleItemsSchema.parse(items || []);
     const sale = await salesService.createSale(data, parsedItems);
     await notifyUsers({
@@ -67,7 +85,13 @@ export async function updateSale(req: Request, res: Response) {
       return res.status(404).json({ error: "Sale not found" });
     }
     const { items, ...saleData } = req.body;
-    const data = insertSaleSchema.partial().parse(saleData);
+    const data = insertSaleSchema.partial().parse({
+      ...saleData,
+      saleDate: normalizeDate((saleData as any).saleDate),
+    });
+    if (data.saleDate && isFutureDate(data.saleDate)) {
+      return res.status(400).json({ error: "Sale date cannot be in the future" });
+    }
     const parsedItems = saleItemsSchema.parse(items || []);
     const sale = await salesService.updateSale(id, data, parsedItems);
     if (!sale) return res.status(404).json({ error: "Sale not found" });

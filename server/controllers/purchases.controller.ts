@@ -10,6 +10,13 @@ import { getUserId } from "../utils/auth";
 import { notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
 
+const isFutureDate = (value: Date) => {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const check = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  return check.getTime() > todayStart.getTime();
+};
+
 export async function getNextBillNumber(_req: Request, res: Response) {
   try {
     const billNo = await purchasesService.getNextBillNumber();
@@ -49,6 +56,9 @@ export async function createPurchase(req: Request, res: Response) {
   try {
     const { items, charges, ...purchaseBody } = req.body;
     const data = purchaseInputSchema.parse(purchaseBody);
+    if (data.purchaseDate && isFutureDate(data.purchaseDate)) {
+      return res.status(400).json({ error: "Purchase date cannot be in the future" });
+    }
     const parsedItems = purchaseItemsSchema.parse(items || []);
     const parsedCharges = purchaseChargesSchema.parse(charges || []);
     const moundBaseKg = (data as any).moundBaseKg == 60 ? 60 : 40;
@@ -82,6 +92,9 @@ export async function updatePurchase(req: Request, res: Response) {
     if (id === undefined) return res.status(400).json({ error: "Invalid purchase id" });
     const { items, charges, ...purchaseBody } = req.body;
     const data = purchaseInputSchema.partial().parse(purchaseBody);
+    if (data.purchaseDate && isFutureDate(data.purchaseDate)) {
+      return res.status(400).json({ error: "Purchase date cannot be in the future" });
+    }
     const parsedItems = items ? purchaseItemsSchema.parse(items) : [];
     const parsedCharges = charges ? purchaseChargesSchema.parse(charges) : [];
     const moundBaseKg = (data as any).moundBaseKg == 60 ? 60 : 40;
