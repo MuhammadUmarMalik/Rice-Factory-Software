@@ -23,6 +23,7 @@ import settingsRoutes from "./settings.routes";
 import printRoutes from "./print.routes";
 import usersRoutes from "./users.routes";
 import notificationsRoutes from "./notifications.routes";
+import dataManagementRoutes from "./data-management.routes";
 import { authenticate, requireAuth } from "../utils/auth";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -31,6 +32,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use("/api", requireAuth);
 
   app.use(settingsRoutes);
+  app.use(dataManagementRoutes);
   app.use(dashboardRoutes);
   app.use(usersRoutes);
   app.use(notificationsRoutes);
