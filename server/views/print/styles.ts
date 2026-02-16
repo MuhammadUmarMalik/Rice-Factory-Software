@@ -1,12 +1,13 @@
 export const printStyles = `
   :root {
-    --ink: #0f172a;
-    --muted: #64748b;
-    --border: #e2e8f0;
-    --accent: #0ea5e9;
+    --ink: #0b0f19;
+    --muted: #1f2937;
+    --border: #374151;
+    --border-strong: #111827;
+    --accent: #111827;
     --bg: #ffffff;
-    --soft: #f8fafc;
-    --soft-strong: #f1f5f9;
+    --soft: #f1f5f9;
+    --soft-strong: #e5e7eb;
     --page-width: 210mm;
     --page-height: 297mm;
     --page-margin-top: 10mm;
@@ -14,7 +15,6 @@ export const printStyles = `
     --page-margin-bottom: 10mm;
     --page-margin-left: 10mm;
     --preview-bg: #e2e8f0;
-    --preview-scale: 1;
   }
 
   @page {
@@ -188,6 +188,49 @@ export const printStyles = `
     font-weight: 800;
   }
 
+  .summary-table {
+    margin: 8px 0 10px;
+  }
+
+  .summary-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+  }
+
+  .summary-table table {
+    table-layout: auto;
+    margin-bottom: 0;
+    border: 1px solid var(--border-strong);
+  }
+
+  .summary-table td {
+    border: none;
+    padding: 3px 2px;
+    font-size: 12.5px;
+  }
+
+  .summary-table tr + tr td {
+    border-top: 1px solid var(--border);
+  }
+
+  .summary-table td.label {
+    color: var(--ink);
+  }
+
+  .summary-table td.value {
+    font-family: "Courier New", monospace;
+    font-weight: 700;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+
+  .summary-table tr.highlight td.value {
+    font-size: 13.5px;
+  }
+
   table {
     width: 100%;
     border-collapse: collapse;
@@ -203,9 +246,10 @@ export const printStyles = `
     text-transform: uppercase;
     letter-spacing: 0.3px;
     vertical-align: middle;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-word;
   }
   thead {
     display: table-header-group;
@@ -215,9 +259,10 @@ export const printStyles = `
     border: 1px solid var(--border);
     padding: 7px 6px;
     vertical-align: top;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-word;
   }
 
   tbody tr {
@@ -226,6 +271,7 @@ export const printStyles = `
 
   .align-right {
     text-align: right;
+    white-space: nowrap;
   }
 
   .align-center {
@@ -315,6 +361,11 @@ export const printStyles = `
     .page {
       transform: none;
       box-shadow: none;
+      border: none;
+    }
+
+    .doc {
+      padding: 0;
     }
   }
 
@@ -326,8 +377,6 @@ export const printStyles = `
     .page {
       margin: 16px auto;
       box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
-      transform: scale(var(--preview-scale));
-      transform-origin: top center;
     }
 
     .footer {
@@ -337,6 +386,23 @@ export const printStyles = `
 `;
 
 export const dayBookStyles = `
+  :root {
+    --ink: #0b0f19;
+    --muted: #1f2937;
+    --border: #374151;
+    --border-strong: #111827;
+    --accent: #111827;
+    --bg: #ffffff;
+    --soft: #f1f5f9;
+    --soft-strong: #e5e7eb;
+    --page-width: 210mm;
+    --page-height: 297mm;
+    --page-margin-top: 10mm;
+    --page-margin-right: 10mm;
+    --page-margin-bottom: 10mm;
+    --page-margin-left: 10mm;
+  }
+
   @page {
     size: var(--page-width) var(--page-height);
     margin: var(--page-margin-top) var(--page-margin-right) var(--page-margin-bottom) var(--page-margin-left);
@@ -363,6 +429,7 @@ export const dayBookStyles = `
     min-height: var(--page-height);
     margin: 0 auto;
     background: var(--bg);
+    border: 1px solid var(--border-strong);
   }
 
   .doc {
@@ -425,9 +492,10 @@ export const dayBookStyles = `
     border: 1px solid var(--border);
     padding: 7px 6px;
     vertical-align: top;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-word;
   }
 
   tbody tr {
@@ -437,6 +505,7 @@ export const dayBookStyles = `
 
   .align-right {
     text-align: right;
+    white-space: nowrap;
   }
 
   .align-center {
@@ -456,8 +525,17 @@ export const dayBookStyles = `
     .page {
       margin: 16px auto;
       box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
-      transform: scale(var(--preview-scale));
-      transform-origin: top center;
+    }
+  }
+
+  @media print {
+    .page {
+      box-shadow: none;
+      border: none;
+    }
+
+    .doc {
+      padding: 0;
     }
   }
 `;

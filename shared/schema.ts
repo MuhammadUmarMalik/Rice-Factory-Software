@@ -380,6 +380,7 @@ export const purchaseCharges = sqliteTable("purchase_charges", {
       "commission",
       "bardana",
       "broken_allowance",
+      "accountant_clerk",
     ],
   }).notNull(),
   mode: text("mode", { enum: ["add", "less"] }).notNull().default("add"),

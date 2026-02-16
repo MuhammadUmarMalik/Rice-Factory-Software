@@ -124,6 +124,7 @@ const purchaseFormSchema = z.object({
       "commission",
       "bardana",
       "broken_allowance",
+      "accountant_clerk",
     ]),
     mode: z.enum(["add", "less"]).default("add"),
     amount: z.string().default("0"),
@@ -170,6 +171,7 @@ export default function PurchasesPage() {
     "commission",
     "bardana",
     "broken_allowance",
+    "accountant_clerk",
   ] as const).map((type) => ({ type, mode: "add" as const, amount: "0", accountId: "none" })), []);
 
   const form = useForm<PurchaseFormData>({
@@ -461,14 +463,20 @@ export default function PurchasesPage() {
             rateUnit: (item.rateUnit as PurchaseFormData["items"][number]["rateUnit"]) || "kg",
           }))
         : [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }];
+    const chargesByType = new Map(
+      charges.map((c: any) => [
+        c.type,
+        {
+          type: c.type,
+          mode: "add",
+          amount: c.amount || "0",
+          accountId: c.accountId ? String(c.accountId) : "none",
+        },
+      ]),
+    );
     const normalizedCharges =
       charges.length > 0
-        ? charges.map((c: any) => ({
-            type: c.type,
-            mode: c.mode || "add",
-            amount: c.amount || "0",
-            accountId: c.accountId ? String(c.accountId) : "none",
-          }))
+        ? defaultCharges.map((base) => chargesByType.get(base.type) || base)
         : defaultCharges;
 
     form.reset({
@@ -634,9 +642,41 @@ export default function PurchasesPage() {
   const totalBags = watchItems.reduce((sum, i) => sum + (parseFloat(i.bags) || 0), 0);
   const totalGross = computedItems.reduce((sum, i) => sum + i.grossWeight, 0);
   const totalNet = computedItems.reduce((sum, i) => sum + i.netWeight, 0);
+  const totalBardana = watchItems.reduce((sum, i) => sum + (parseFloat(i.bardanaKatKg) || 0), 0);
+  const totalLess = watchItems.reduce((sum, i) => sum + (parseFloat(i.lessKg) || 0), 0);
   const totalWeightPerBag = totalBags > 0 ? totalNet / totalBags : 0;
   const totalMound = Math.floor(totalNet / moundBaseKg);
   const totalMoundRemainder = Math.max(totalNet - totalMound * moundBaseKg, 0);
+  const qualityLessPerBag = totalBags > 0 ? totalLess / totalBags : 0;
+  const accountantClerkCharges = watchCharges.reduce((sum, c) => {
+    if (c.type !== "accountant_clerk") return sum;
+    const amt = parseFloat(c.amount || "0") || 0;
+    return sum + (c.mode === "less" ? -Math.abs(amt) : amt);
+  }, 0);
+  const chargeLabelMap: Record<string, string> = {
+    weight: "Weight Charges",
+    freight: "Freight",
+    loading_filling: "Loading / Filling",
+    market_fee: "Market Fee",
+    mitha_sukri: "Mitha Sukri",
+    other: "Other Charges",
+    phone_analysis: "Phone / Analysis",
+    brokerage: "Brokerage",
+    commission: "Commission",
+    bardana: "Bardana",
+    broken_allowance: "Broken Allowance",
+    accountant_clerk: "Accountant / Clerk",
+  };
+  const chargeBreakdown = watchCharges
+    .map((c) => {
+      const amt = parseFloat(c.amount || "0") || 0;
+      return {
+        label: chargeLabelMap[c.type] || c.type,
+        mode: c.mode,
+        amount: amt,
+      };
+    })
+    .filter((c) => c.amount !== 0);
   const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
   const isViewMode = purchaseMode === "view";
 
@@ -1194,6 +1234,7 @@ export default function PurchasesPage() {
                           commission: "Commission",
                           bardana: "Bardana",
                           broken_allowance: "Broken Allowance",
+                          accountant_clerk: "Accountant / Clerk",
                         };
                         return (
                           <div key={charge.id} className="grid grid-cols-5 gap-2 items-center">
@@ -1262,10 +1303,24 @@ export default function PurchasesPage() {
                       <div className="flex justify-between"><span>Total Bags</span><span className="font-mono">{totalBags.toFixed(2)}</span></div>
                       <div className="flex justify-between"><span>Total Weight</span><span className="font-mono">{totalGross.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Net Weight</span><span className="font-mono">{totalNet.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>Bardana</span><span className="font-mono">{totalBardana.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>Less</span><span className="font-mono">{totalLess.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>Quality Less / Bag</span><span className="font-mono">{qualityLessPerBag.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Weight per Bag</span><span className="font-mono">{totalWeightPerBag.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Maund ({moundBaseKg} kg)</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
                       <div className="flex justify-between"><span>Line Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Commission</span><span className="font-mono">Rs. {commissionAmount.toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span>Accountant / Clerk</span><span className="font-mono">Rs. {accountantClerkCharges.toLocaleString()}</span></div>
+                      {chargeBreakdown.length > 0 ? (
+                        <>
+                          {chargeBreakdown.map((charge, index) => (
+                            <div key={`${charge.label}-${index}`} className="flex justify-between">
+                              <span>{charge.label} ({charge.mode === "less" ? "Less" : "Add"})</span>
+                              <span className="font-mono">Rs. {charge.amount.toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </>
+                      ) : null}
                       <div className="flex justify-between"><span>Charges +</span><span className="font-mono">Rs. {chargesAdd.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Charges -</span><span className="font-mono">Rs. {chargesLess.toLocaleString()}</span></div>
                       <div className="flex justify-between text-lg font-semibold pt-1 border-t">

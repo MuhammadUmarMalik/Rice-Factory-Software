@@ -8,6 +8,7 @@ import { useTheme } from "@/contexts/theme-context";
 import { useToast } from "@/hooks/use-toast";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -195,6 +196,125 @@ export default function SettingsPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader className={isRTL ? "text-right" : ""}>
+            <CardTitle className={`flex items-center gap-2 text-base ${isRTL ? "flex-row-reverse" : ""}`}>
+              <Building className="h-4 w-4" />
+              {language === "ur" ? "کاروباری معلومات" : "Business Details"}
+            </CardTitle>
+            <CardDescription>
+              {language === "ur" ? "مل کی بنیادی تفصیلات" : "Basic information about your mill"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3">
+              <div className="grid gap-2">
+                <Label className={isRTL ? "font-urdu" : ""}>
+                  {language === "ur" ? "مل کا نام" : "Mill Name"}
+                </Label>
+                <Input
+                  value={businessName}
+                  onChange={(event) => setBusinessName(event.target.value)}
+                  placeholder={language === "ur" ? "مل کا نام درج کریں" : "Enter mill name"}
+                  disabled={isLoading || saveMutation.isPending}
+                  data-testid="input-business-name"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label className={isRTL ? "font-urdu" : ""}>
+                  {language === "ur" ? "مل کا نام (اردو)" : "Mill Name (Urdu)"}
+                </Label>
+                <Input
+                  value={businessNameUrdu}
+                  onChange={(event) => setBusinessNameUrdu(event.target.value)}
+                  placeholder={language === "ur" ? "مل کا نام اردو میں" : "Mill name in Urdu"}
+                  disabled={isLoading || saveMutation.isPending}
+                  className={isRTL ? "font-urdu text-right" : ""}
+                  dir={isRTL ? "rtl" : "ltr"}
+                  data-testid="input-business-name-urdu"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label className={isRTL ? "font-urdu" : ""}>{t("phone")}</Label>
+                <Input
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder={language === "ur" ? "فون نمبر" : "Phone number"}
+                  disabled={isLoading || saveMutation.isPending}
+                  data-testid="input-phone"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label className={isRTL ? "font-urdu" : ""}>{t("address")}</Label>
+                <Textarea
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
+                  placeholder={language === "ur" ? "مل کا پتہ" : "Mill address"}
+                  rows={3}
+                  disabled={isLoading || saveMutation.isPending}
+                  data-testid="input-address"
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="grid gap-3">
+              <div className="grid gap-2">
+                <Label className={isRTL ? "font-urdu" : ""}>
+                  {language === "ur" ? "لوگو" : "Logo"}
+                </Label>
+                <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <Input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoFile}
+                    disabled={isLoading || saveMutation.isPending}
+                    data-testid="input-logo"
+                  />
+                  {logoUrl ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setLogoUrl("")}
+                      disabled={isLoading || saveMutation.isPending}
+                    >
+                      {language === "ur" ? "ہٹائیں" : "Clear"}
+                    </Button>
+                  ) : null}
+                </div>
+                {logoUrl ? (
+                  <img
+                    src={logoUrl}
+                    alt={language === "ur" ? "لوگو" : "Logo preview"}
+                    className="h-16 w-16 rounded border object-contain"
+                  />
+                ) : null}
+              </div>
+              <div className="grid gap-2">
+                <Label className={isRTL ? "font-urdu" : ""}>NTN</Label>
+                <Input
+                  value={ntn}
+                  onChange={(event) => setNtn(event.target.value)}
+                  placeholder={language === "ur" ? "NTN نمبر" : "NTN number"}
+                  disabled={isLoading || saveMutation.isPending}
+                  data-testid="input-ntn"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label className={isRTL ? "font-urdu" : ""}>STRN</Label>
+                <Input
+                  value={strn}
+                  onChange={(event) => setStrn(event.target.value)}
+                  placeholder={language === "ur" ? "STRN نمبر" : "STRN number"}
+                  disabled={isLoading || saveMutation.isPending}
+                  data-testid="input-strn"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className={isRTL ? "text-right" : ""}>
