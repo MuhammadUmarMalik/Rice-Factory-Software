@@ -9,11 +9,12 @@ const defaultDbPath = appDataDir
   ? path.join(appDataDir, "data.db")
   : path.resolve(".local", "data.db");
 const dbPath = process.env.DATABASE_URL || defaultDbPath;
-const dbDir = path.dirname(dbPath.startsWith("file:") ? dbPath.replace("file:", "") : dbPath);
+export const resolvedDbPath = dbPath.startsWith("file:") ? dbPath.replace("file:", "") : dbPath;
+const dbDir = path.dirname(resolvedDbPath);
 
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const sqlite = new Database(dbPath.startsWith("file:") ? dbPath.replace("file:", "") : dbPath);
+const sqlite = new Database(resolvedDbPath);
 export const db = drizzle(sqlite, { schema });

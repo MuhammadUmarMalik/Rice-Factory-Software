@@ -88,6 +88,10 @@ const parseApiErrorMessage = (error: unknown) => {
   return message;
 };
 
+const lessLabel = "Watta Kaat (Moisture + Quality)";
+const bardanaLabel = "Bardana (Kaat)";
+const qualityLessPerBagLabel = "Watta Kaat (Moisture + Quality) / Bag";
+
 const purchaseFormSchema = z.object({
   purchaseDate: z.string().optional().refine((val) => !val || !isFutureDateString(val), {
     message: "Date cannot be in the future",
@@ -663,7 +667,7 @@ export default function PurchasesPage() {
     phone_analysis: "Phone / Analysis",
     brokerage: "Brokerage",
     commission: "Commission",
-    bardana: "Bardana",
+    bardana: bardanaLabel,
     broken_allowance: "Broken Allowance",
     accountant_clerk: "Accountant / Clerk",
   };
@@ -1124,7 +1128,7 @@ export default function PurchasesPage() {
                             name={`items.${index}.lessKg`}
                             render={({ field }) => (
                               <FormItem>
-                                {index === 0 && <FormLabel>Less</FormLabel>}
+                                {index === 0 && <FormLabel>{lessLabel}</FormLabel>}
                                 <FormControl>
                                   <Input {...field} type="number" step="0.01" />
                                 </FormControl>
@@ -1139,7 +1143,7 @@ export default function PurchasesPage() {
                             name={`items.${index}.bardanaKatKg`}
                             render={({ field }) => (
                               <FormItem>
-                                {index === 0 && <FormLabel>Bardana</FormLabel>}
+                                {index === 0 && <FormLabel>{bardanaLabel}</FormLabel>}
                                 <FormControl>
                                   <Input {...field} type="number" step="0.01" />
                                 </FormControl>
@@ -1225,14 +1229,14 @@ export default function PurchasesPage() {
                         const labelMap: Record<string, string> = {
                           weight: "Weight Charges",
                           freight: "Freight",
-                          loading_filling: "Loading / Filling",
+                          loading_filling: "Loading / Unloading / Filling",
                           market_fee: "Market Fee",
                           mitha_sukri: "Mitha Sukri",
                           other: "Other Charges",
                           phone_analysis: "Phone / Analysis",
                           brokerage: "Brokerage",
                           commission: "Commission",
-                          bardana: "Bardana",
+                          bardana: bardanaLabel,
                           broken_allowance: "Broken Allowance",
                           accountant_clerk: "Accountant / Clerk",
                         };
@@ -1263,7 +1267,7 @@ export default function PurchasesPage() {
                                     </FormControl>
                                     <SelectContent>
                                       <SelectItem value="add">Add</SelectItem>
-                                      <SelectItem value="less">Less</SelectItem>
+                                      <SelectItem value="less">{lessLabel}</SelectItem>
                                     </SelectContent>
                                   </Select>
                                 </FormItem>
@@ -1303,19 +1307,19 @@ export default function PurchasesPage() {
                       <div className="flex justify-between"><span>Total Bags</span><span className="font-mono">{totalBags.toFixed(2)}</span></div>
                       <div className="flex justify-between"><span>Total Weight</span><span className="font-mono">{totalGross.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Net Weight</span><span className="font-mono">{totalNet.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Bardana</span><span className="font-mono">{totalBardana.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Less</span><span className="font-mono">{totalLess.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Quality Less / Bag</span><span className="font-mono">{qualityLessPerBag.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>{bardanaLabel}</span><span className="font-mono">{totalBardana.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>{lessLabel}</span><span className="font-mono">{totalLess.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>{qualityLessPerBagLabel}</span><span className="font-mono">{qualityLessPerBag.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Weight per Bag</span><span className="font-mono">{totalWeightPerBag.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Maund ({moundBaseKg} kg)</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
-                      <div className="flex justify-between"><span>Line Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span>Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Commission</span><span className="font-mono">Rs. {commissionAmount.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Accountant / Clerk</span><span className="font-mono">Rs. {accountantClerkCharges.toLocaleString()}</span></div>
                       {chargeBreakdown.length > 0 ? (
                         <>
                           {chargeBreakdown.map((charge, index) => (
                             <div key={`${charge.label}-${index}`} className="flex justify-between">
-                              <span>{charge.label} ({charge.mode === "less" ? "Less" : "Add"})</span>
+                              <span>{charge.label} ({charge.mode === "less" ? lessLabel : "Add"})</span>
                               <span className="font-mono">Rs. {charge.amount.toLocaleString()}</span>
                             </div>
                           ))}
@@ -1394,11 +1398,11 @@ export default function PurchasesPage() {
                             <p className="font-mono">{currentPurchase.items[0].looseKgs}</p>
                           </div>
                           <div>
-                            <p className="text-muted-foreground text-xs">Less (kg)</p>
+                            <p className="text-muted-foreground text-xs">{lessLabel} (kg)</p>
                             <p className="font-mono">{currentPurchase.items[0].lessKg}</p>
                           </div>
                           <div>
-                            <p className="text-muted-foreground text-xs">Bardana (kg)</p>
+                            <p className="text-muted-foreground text-xs">{bardanaLabel} (kg)</p>
                             <p className="font-mono">{currentPurchase.items[0].bardanaKatKg}</p>
                           </div>
                           <div>

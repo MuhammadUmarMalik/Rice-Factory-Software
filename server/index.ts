@@ -64,14 +64,14 @@ if (corsOrigins.length > 0) {
 
 app.use(
   express.json({
-    limit: "2mb",
+    limit: "100mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false, limit: "2mb" }));
+app.use(express.urlencoded({ extended: false, limit: "100mb" }));
 
 app.set("trust proxy", 1);
 app.use(

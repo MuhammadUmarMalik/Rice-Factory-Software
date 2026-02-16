@@ -183,7 +183,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
       case "commission":
         return "Commission";
       case "bardana":
-        return "Bardana";
+        return "Bardana / Kaat";
       case "broken_allowance":
         return "Broken Allowance";
       case "accountant_clerk":
@@ -198,7 +198,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
   const chargeRows = charges.map((charge) => {
     const amount = parseFloat(String(charge.amount || "0"));
     const signed = charge.mode === "less" ? -Math.abs(amount) : amount;
-    const label = `${chargeLabel(charge.type)}${charge.mode === "less" ? " (Less)" : ""}`;
+    const label = `${chargeLabel(charge.type)}${charge.mode === "less" ? " (Less / Watta Kaat (Moisture + Quality))" : ""}`;
     return {
       sr: "",
       item: label,
@@ -241,9 +241,9 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
     summaryCard("Total Bags", num(totalBags)),
     summaryCard("Total Weight", `${num(totalGross)} kg`),
     summaryCard("Net Weight", `${num(totalNet)} kg`),
-    summaryCard("Bardana", `${num(totalBardana)} kg`),
-    summaryCard("Less", `${num(totalLess)} kg`),
-    summaryCard("Quality Less / Bag", `${num(qualityLessPerBag)} kg`),
+    summaryCard("Bardana / Kaat", `${num(totalBardana)} kg`),
+    summaryCard("Less / Watta Kaat (Moisture + Quality)", `${num(totalLess)} kg`),
+    summaryCard("Watta Kaat (Moisture + Quality) / Bag", `${num(qualityLessPerBag)} kg`),
     summaryCard("Weight per Bag", `${num(weightPerBag)} kg`),
     summaryCard("Maund (40 kg)", `${moundWhole} + ${num(moundRemainder)}kg`),
     summaryCard("Line Subtotal", money(lineSubtotal), true),
@@ -284,7 +284,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
       ...charges.map((c) => {
         const amount = parseFloat(String(c.amount || "0"));
         const signed = c.mode === "less" ? -Math.abs(amount) : amount;
-        return `${chargeLabel(c.type)}${c.mode === "less" ? " (Less)" : ""}: ${money(signed)}`;
+        return `${chargeLabel(c.type)}${c.mode === "less" ? " (Less / Watta Kaat (Moisture + Quality))" : ""}: ${money(signed)}`;
       }),
       purchase.amountInWords ? `In words: ${purchase.amountInWords}` : "",
       purchase.notes ? `Notes: ${purchase.notes}` : "",
