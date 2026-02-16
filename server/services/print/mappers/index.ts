@@ -78,11 +78,21 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     { label: "Weighing", value: sale.weighingCharges },
     { label: "Other", value: sale.otherCharges },
   ];
+  const chargeSummary = charges.filter((c) => Number(c.value || 0) !== 0);
+  const chargesTotal = chargeSummary.reduce((sum, c) => sum + parseFloat(String(c.value || "0")), 0);
+  const totalQty = items.reduce((sum, item) => sum + parseFloat(String(item.quantity || "0")), 0);
+  const taxAmount = parseFloat(String(sale.taxAmount || "0"));
 
   const sections = [
     summaryCard("Customer", customer?.name || "-"),
     summaryCard("Invoice Date", fmtDate(sale.saleDate)),
+    summaryCard("Total Qty", num(totalQty)),
     summaryCard("Subtotal", money(sale.subtotal), true),
+    ...(Number(sale.loadingCharges || 0) !== 0 ? [summaryCard("Loading", money(sale.loadingCharges))] : []),
+    ...(Number(sale.weighingCharges || 0) !== 0 ? [summaryCard("Weighing", money(sale.weighingCharges))] : []),
+    ...(Number(sale.otherCharges || 0) !== 0 ? [summaryCard("Other Charges", money(sale.otherCharges))] : []),
+    ...(taxAmount !== 0 ? [summaryCard("Tax", money(taxAmount))] : []),
+    ...(chargesTotal !== 0 ? [summaryCard("Charges Total", money(chargesTotal), true)] : []),
     summaryCard("Total", money(sale.totalAmount), true),
   ];
 
@@ -111,7 +121,7 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
       },
     },
     notes: [
-      ...charges.filter((c) => Number(c.value || 0) !== 0).map((c) => `${c.label}: ${money(c.value)}`),
+      ...chargeSummary.map((c) => `${c.label}: ${money(c.value)}`),
       sale.notes ? `Notes: ${sale.notes}` : "",
     ]
       .filter(Boolean)
@@ -176,6 +186,8 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
         return "Bardana";
       case "broken_allowance":
         return "Broken Allowance";
+      case "accountant_clerk":
+        return "Accountant / Clerk";
       case "other":
       default:
         return "Other";
@@ -197,12 +209,49 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
     };
   });
   const rowsWithCharges = [...tableRows, ...chargeRows];
+  const chargesAddTotal = charges
+    .filter((c) => c.mode !== "less")
+    .reduce((sum, c) => sum + parseFloat(String(c.amount || "0")), 0);
+  const chargesLessTotal = charges
+    .filter((c) => c.mode === "less")
+    .reduce((sum, c) => sum + parseFloat(String(c.amount || "0")), 0);
+  const totalBags = parseFloat(String(purchase.totalBags || "0"));
+  const totalGross = parseFloat(String(purchase.totalGrossWeightKg || "0"));
+  const totalNet = parseFloat(String(purchase.totalNetWeightKg || "0"));
+  const totalBardana = (purchase.items || []).reduce((sum, i) => sum + parseFloat(String(i.bardanaKatKg || "0")), 0);
+  const totalLess = (purchase.items || []).reduce((sum, i) => sum + parseFloat(String(i.lessKg || "0")), 0);
+  const weightPerBag = totalBags > 0 ? totalNet / totalBags : 0;
+  const moundQtyRaw = parseFloat(String(purchase.totalMoundQty || "0"));
+  const moundWhole = Math.floor(moundQtyRaw);
+  const moundRemainder = parseFloat(String(purchase.totalMoundRemainderKg || "0"));
+  const commissionAmount = parseFloat(String(purchase.brokerCommissionAmount || "0"));
+  const lineSubtotal = parseFloat(String(purchase.subtotal || "0")) + commissionAmount;
+  const qualityLessPerBag = totalBags > 0 ? totalLess / totalBags : 0;
+  const accountantClerkCharges = charges
+    .filter((c) => c.type === "accountant_clerk")
+    .reduce((sum, c) => {
+      const amt = parseFloat(String(c.amount || "0"));
+      if (!Number.isFinite(amt)) return sum;
+      return sum + (c.mode === "less" ? -Math.abs(amt) : amt);
+    }, 0);
 
   const sections = [
     summaryCard("Supplier", supplier?.name || "-"),
     summaryCard("Invoice Date", fmtDate(purchase.purchaseDate)),
-    summaryCard("Subtotal", money(purchase.subtotal), true),
-    summaryCard("Total", money(purchase.totalAmount), true),
+    summaryCard("Total Bags", num(totalBags)),
+    summaryCard("Total Weight", `${num(totalGross)} kg`),
+    summaryCard("Net Weight", `${num(totalNet)} kg`),
+    summaryCard("Bardana", `${num(totalBardana)} kg`),
+    summaryCard("Less", `${num(totalLess)} kg`),
+    summaryCard("Quality Less / Bag", `${num(qualityLessPerBag)} kg`),
+    summaryCard("Weight per Bag", `${num(weightPerBag)} kg`),
+    summaryCard("Maund (40 kg)", `${moundWhole} + ${num(moundRemainder)}kg`),
+    summaryCard("Line Subtotal", money(lineSubtotal), true),
+    summaryCard("Commission", money(commissionAmount)),
+    ...(accountantClerkCharges !== 0 ? [summaryCard("Accountant / Clerk", money(accountantClerkCharges))] : []),
+    ...(chargesAddTotal !== 0 ? [summaryCard("Charges (+)", money(chargesAddTotal), true)] : []),
+    ...(chargesLessTotal !== 0 ? [summaryCard("Charges (-)", money(chargesLessTotal), true)] : []),
+    summaryCard("Grand Amount", money(purchase.totalAmount), true),
   ];
 
   return {
@@ -231,7 +280,17 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
         amount: money(purchase.totalAmount),
       },
     },
-    notes: purchase.notes || undefined,
+    notes: [
+      ...charges.map((c) => {
+        const amount = parseFloat(String(c.amount || "0"));
+        const signed = c.mode === "less" ? -Math.abs(amount) : amount;
+        return `${chargeLabel(c.type)}${c.mode === "less" ? " (Less)" : ""}: ${money(signed)}`;
+      }),
+      purchase.amountInWords ? `In words: ${purchase.amountInWords}` : "",
+      purchase.notes ? `Notes: ${purchase.notes}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | "),
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },

@@ -2122,6 +2122,8 @@ export class DatabaseStorage implements IStorage {
             return "BARDANA";
           case "broken_allowance":
             return "BROKEN ALLOWANCE";
+          case "accountant_clerk":
+            return "ACCOUNTANT / CLERK";
           case "other":
           default:
             return "OTHER";
@@ -2382,6 +2384,8 @@ export class DatabaseStorage implements IStorage {
             return "BARDANA";
           case "broken_allowance":
             return "BROKEN ALLOWANCE";
+          case "accountant_clerk":
+            return "ACCOUNTANT / CLERK";
           case "other":
           default:
             return "OTHER";
@@ -3115,6 +3119,7 @@ export class DatabaseStorage implements IStorage {
         "COMMISSION",
         "BARDANA",
         "BROKEN ALLOWANCE",
+        "ACCOUNTANT / CLERK",
       ]);
 
       const byRef = new Map<string, typeof entriesBase>();
@@ -3389,9 +3394,20 @@ export class DatabaseStorage implements IStorage {
       ? parseAmount(entriesBase[0].openingBalance)
       : resolveOpeningBalance();
 
-    const narrationFilter = (narration || "").trim().toLowerCase();
-    const filteredEntries = narrationFilter
-      ? entries.filter((e) => (e.description || "").toLowerCase().includes(narrationFilter))
+    const narrationFilterRaw = (narration || "").trim().toLowerCase();
+    const narrationTokens = narrationFilterRaw
+      ? narrationFilterRaw.split(/[,|\s]+/).map((t) => t.trim()).filter(Boolean)
+      : [];
+    const matchesNarration = (value: string) => {
+      if (narrationTokens.length === 0) return true;
+      const haystack = value.toLowerCase();
+      return narrationTokens.some((token) => haystack.includes(token));
+    };
+    const filteredEntries = narrationTokens.length > 0
+      ? entries.filter((e) => {
+          const base = (e.description || "").toLowerCase();
+          return matchesNarration(base);
+        })
       : entries;
 
     const byType = filteredEntries.reduce(
@@ -3699,6 +3715,7 @@ export class DatabaseStorage implements IStorage {
       ["commission", "COMMISSION"],
       ["bardana", "BARDANA"],
       ["broken_allowance", "BROKEN ALLOWANCE"],
+      ["accountant_clerk", "ACCOUNTANT / CLERK"],
       ["broker_commission", "BROKER COMMISSION"],
       ["other", "OTHER"],
       ["loading", "LOADING"],
@@ -3874,6 +3891,11 @@ export class DatabaseStorage implements IStorage {
       } else if (entry.referenceType === "expense") {
         narration = buildExpenseNarration(entry.referenceId);
       }
+
+      const matches = narrationTokens.length === 0
+        || matchesNarration(narration || "")
+        || matchesNarration(entry.description || "");
+      if (!matches) continue;
 
       rows.push({
         id: entry.id,

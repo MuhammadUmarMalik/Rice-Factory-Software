@@ -39,6 +39,7 @@ export const purchaseChargesSchema = z
         "commission",
         "bardana",
         "broken_allowance",
+        "accountant_clerk",
       ]),
       mode: z.enum(["add", "less"]).default("add"),
       amount: numericString,

@@ -37,10 +37,13 @@ function PrintPreviewModalComponent({
   const [marginRightMm, setMarginRightMm] = useState(10);
   const [marginBottomMm, setMarginBottomMm] = useState(10);
   const [marginLeftMm, setMarginLeftMm] = useState(10);
+  const [fitMode, setFitMode] = useState<"page" | "width">("page");
+  const [zoom, setZoom] = useState(1);
   const [ready, setReady] = useState(false);
   const [printers, setPrinters] = useState<Array<{ name: string; displayName?: string }>>([]);
   const [printerName, setPrinterName] = useState("");
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const serializedParams = useMemo(() => JSON.stringify(params || {}), [params]);
   const requestPayload = useMemo(
@@ -70,14 +73,14 @@ function PrintPreviewModalComponent({
     ],
   );
   const isElectron =
-    typeof navigator !== "undefined" &&
-    navigator.userAgent.toLowerCase().includes("electron");
+    typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("electron");
   const pageAspectClass = layout === "portrait" ? "aspect-[210/297]" : "aspect-[297/210]";
-  const pageMaxWidthClass = layout === "portrait" ? "max-w-[820px]" : "max-w-none";
 
   useEffect(() => {
     if (!open) return;
     setLayout(orientation);
+    setFitMode("page");
+    setZoom(1);
     setReady(false);
   }, [open, orientation]);
 
@@ -129,17 +132,27 @@ function PrintPreviewModalComponent({
 
   const updatePreviewScale = useCallback(() => {
     const iframe = iframeRef.current;
+    const preview = previewRef.current;
     const scroll = scrollRef.current;
-    if (!iframe || !scroll) return;
+    if (!iframe || !preview || !scroll) return;
     const doc = iframe.contentDocument;
     if (!doc) return;
     const pages = Array.from(doc.querySelectorAll(".page")) as HTMLElement[];
     const firstPage = pages[0];
     if (!firstPage) return;
-    const pageWidth = firstPage.offsetWidth || firstPage.getBoundingClientRect().width;
-    if (!pageWidth) return;
-    const paddingX = 48;
+    const pageRect = firstPage.getBoundingClientRect();
+    const pageWidth = firstPage.offsetWidth || pageRect.width;
+    const pageHeight = firstPage.offsetHeight || pageRect.height;
+    if (!pageWidth || !pageHeight) return;
+    const scrollStyles = window.getComputedStyle(scroll);
+    const paddingX =
+      (Number.parseFloat(scrollStyles.paddingLeft) || 0) +
+      (Number.parseFloat(scrollStyles.paddingRight) || 0);
+    const paddingY =
+      (Number.parseFloat(scrollStyles.paddingTop) || 0) +
+      (Number.parseFloat(scrollStyles.paddingBottom) || 0);
     const viewportWidth = Math.max(scroll.clientWidth - paddingX, 1);
+    const viewportHeight = Math.max(scroll.clientHeight - paddingY, 1);
     const metrics = pages.reduce(
       (acc, page) => {
         const width = page.offsetWidth || page.getBoundingClientRect().width;
@@ -153,15 +166,20 @@ function PrintPreviewModalComponent({
     );
     const contentWidth = metrics.maxWidth;
     const contentHeight = metrics.maxBottom;
-    const scaleByWidth = viewportWidth / contentWidth;
-    const scale = Math.min(1, scaleByWidth);
-    doc.documentElement.style.setProperty("--preview-scale", scale.toFixed(3));
+    const scaleByWidth = viewportWidth / pageWidth;
+    const scaleByHeight = viewportHeight / pageHeight;
+    const scaleByViewport = fitMode === "width" ? scaleByWidth : Math.min(scaleByWidth, scaleByHeight);
+    const maxScale = 3;
+    const minScale = 0.25;
+    const scale = Math.max(minScale, Math.min(maxScale, scaleByViewport * zoom));
+    preview.style.transform = `scale(${scale.toFixed(3)})`;
+    preview.style.transformOrigin = "top center";
 
-    const scaledHeight = Math.ceil(contentHeight * scale);
-    const scaledWidth = Math.ceil(contentWidth * scale);
-    iframe.style.height = `${scaledHeight}px`;
-    iframe.style.width = `${scaledWidth}px`;
-  }, [layout]);
+    preview.style.height = `${Math.ceil(contentHeight)}px`;
+    preview.style.width = `${Math.ceil(contentWidth)}px`;
+    iframe.style.height = "100%";
+    iframe.style.width = "100%";
+  }, [layout, fitMode, zoom]);
 
   const handleIframeLoad = useCallback(() => {
     setReady(true);
@@ -431,12 +449,45 @@ function PrintPreviewModalComponent({
             </div>
             <div
               ref={scrollRef}
-              className="hide-scrollbar flex-1 min-h-0 overflow-auto bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.35),_rgba(241,245,249,0.6)_45%,_rgba(226,232,240,1))] p-4 sm:p-6"
+              className=" min-w-fu l  min-h-0 overflow-auto bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.35),_rgba(241,245,249,0.6)_45%,_rgba(226,232,240,1))] p-3 sm:p-4"
             >
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Preview
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant={fitMode === "page" ? "default" : "secondary"}
+                    onClick={() => setFitMode("page")}
+                  >
+                    Fit Page
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={fitMode === "width" ? "default" : "secondary"}
+                    onClick={() => setFitMode("width")}
+                  >
+                    Fit Width
+                  </Button>
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                    value={zoom}
+                    onChange={(event) => setZoom(Number(event.target.value))}
+                  >
+                    <option value={0.75}>75%</option>
+                    <option value={0.9}>90%</option>
+                    <option value={1}>100%</option>
+                    <option value={1.1}>110%</option>
+                    <option value={1.25}>125%</option>
+                    <option value={1.5}>150%</option>
+                  </select>
+                </div>
+              </div>
               {loading ? (
                 <div className="flex min-h-full items-center justify-center">
                   <div
-                    className={`print-preview-frame w-full rounded-lg bg-white shadow-lg ${pageMaxWidthClass} ${pageAspectClass}`}
+                    className={`print-preview-frame w-full rounded-lg bg-white shadow-lg ${pageAspectClass}`}
                   >
                     <div className="p-6 space-y-4">
                       <SkeletonBox className="h-5 w-40" />
@@ -450,15 +501,17 @@ function PrintPreviewModalComponent({
                   </div>
                 </div>
               ) : (
-                <div className="flex min-h-full w-full items-start justify-center">
-                  <iframe
-                    key={`${layout}-${format}-${customWidthMm}-${customHeightMm}-${marginTopMm}-${marginRightMm}-${marginBottomMm}-${marginLeftMm}`}
-                    ref={iframeRef}
-                    title="Print preview"
-                    className={`print-preview-frame block rounded-lg bg-white shadow-lg ${pageMaxWidthClass} ${pageAspectClass}`}
-                    srcDoc={html}
-                    onLoad={handleIframeLoad}
-                  />
+                <div className="flex min-h-full w-full items-center justify-center">
+                  <div ref={previewRef} className="origin-top">
+                    <iframe
+                      key={`${layout}-${format}-${customWidthMm}-${customHeightMm}-${marginTopMm}-${marginRightMm}-${marginBottomMm}-${marginLeftMm}`}
+                      ref={iframeRef}
+                      title="Print preview"
+                      className="print-preview-frame flow-root rounded-lg bg-white shadow-lg"
+                      srcDoc={html}
+                      onLoad={handleIframeLoad}
+                    />
+                  </div>
                 </div>
               )}
             </div>

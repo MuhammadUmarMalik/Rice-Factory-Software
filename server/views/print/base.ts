@@ -79,20 +79,42 @@ function renderMeta(payload: PrintableDocumentPayload) {
 
 function renderSections(payload: PrintableDocumentPayload) {
   if (!payload.sections || payload.sections.length === 0) return "";
+  const isInvoice = String(payload.docKey || "").startsWith("invoice.");
+  if (isInvoice) {
+    return `
+      <div class="summary-table">
+        <div class="summary-title">Summary</div>
+        <table>
+          <tbody>
+            ${payload.sections
+              .map(
+                (s) => `
+              <tr class="${s.highlight ? "highlight" : ""}">
+                <td class="label">${escapeHtml(s.label)}</td>
+                <td class="value align-right">${escapeHtml(s.value)}</td>
+              </tr>
+            `,
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
   return `
-    <div class="sections">
-      ${payload.sections
-        .map(
-          (s) => `
-        <div class="section-card${s.highlight ? " highlight" : ""}${isPartyLabel(s.label) ? " party" : ""}">
-          <div class="label">${escapeHtml(s.label)}</div>
-          <div class="value">${escapeHtml(s.value)}</div>
-        </div>
-      `,
-        )
-        .join("")}
-    </div>
-  `;
+      <div class="sections">
+        ${payload.sections
+          .map(
+            (s) => `
+          <div class="section-card${s.highlight ? " highlight" : ""}${isPartyLabel(s.label) ? " party" : ""}">
+            <div class="label">${escapeHtml(s.label)}</div>
+            <div class="value">${escapeHtml(s.value)}</div>
+          </div>
+        `,
+          )
+          .join("")}
+      </div>
+    `;
 }
 
 function alignClass(col: PrintableTableColumn) {
