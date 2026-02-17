@@ -11,6 +11,7 @@ import {
 } from "date-fns";
 
 export type DateRangePreset =
+  | "all"
   | "today"
   | "yesterday"
   | "thisWeek"
@@ -40,6 +41,9 @@ export function parseDateInput(value?: string) {
 }
 
 export function getPresetRange(preset: DateRangePreset, baseDate: Date = new Date()) {
+  if (preset === "all") {
+    return { from: null, to: null };
+  }
   const today = startOfDay(baseDate);
   switch (preset) {
     case "yesterday": {

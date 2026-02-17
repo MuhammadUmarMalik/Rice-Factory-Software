@@ -35,7 +35,7 @@ type TrialBalanceResponse = {
 export default function TrialBalancePage() {
   const { t, isRTL, language } = useLanguage();
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const asOfDate = toDate || fromDate;
 
   const { data, isLoading } = useQuery<TrialBalanceResponse>({

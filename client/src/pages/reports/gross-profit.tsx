@@ -28,7 +28,7 @@ type GrossProfitReport = {
 type GrossProfitRow = NonNullable<GrossProfitReport["rows"]>[number];
 
 export default function GrossProfitPage() {
-  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data, isLoading, error } = useQuery<GrossProfitReport>({

@@ -72,10 +72,13 @@ function endOfDay(value: Date) {
   return d;
 }
 
-async function resolveRange(params: Partial<DashboardRange>) {
+async function resolveRange(params: Partial<DashboardRange>): Promise<{ fromDate?: Date; toDate?: Date }> {
+  if (!params.fromDate && !params.toDate) {
+    return {}; // No filter - show all data
+  }
   const now = new Date();
-  let fromDate = params.fromDate ? startOfDay(params.fromDate) : startOfDay(now);
-  let toDate = params.toDate ? endOfDay(params.toDate) : endOfDay(now);
+  const fromDate = params.fromDate ? startOfDay(params.fromDate) : startOfDay(now);
+  const toDate = params.toDate ? endOfDay(params.toDate) : endOfDay(now);
   return { fromDate, toDate };
 }
 
@@ -132,6 +135,12 @@ export async function getDashboardSummary(
   scope: DashboardSummaryScope = "full",
 ): Promise<DashboardSummaryCore | DashboardSummaryDetails | DashboardSummaryFull> {
   const { fromDate, toDate } = await resolveRange(params);
+  const hasDateFilter = fromDate != null || toDate != null;
+  const filterFrom = fromDate ?? new Date(0);
+  const filterTo = toDate ?? new Date();
+  const filtersDisplay = hasDateFilter
+    ? { fromDate: filterFrom.toISOString(), toDate: filterTo.toISOString() }
+    : { fromDate: "all", toDate: "all" };
 
   const includeCore = scope === "full" || scope === "core";
   const includeDetails = scope === "full" || scope === "details";
@@ -150,7 +159,7 @@ export async function getDashboardSummary(
     const [profitLoss, trialBalance, purchasesReport, salesReport, accounts, outstandingCustomers, outstandingSuppliers] =
       await Promise.all([
         storage.getProfitLoss(fromDate, toDate),
-        storage.getTrialBalance(toDate),
+        storage.getTrialBalance(toDate ?? undefined),
         storage.getPurchaseReport({ fromDate, toDate }),
         storage.getSalesReport({ fromDate, toDate }),
         storage.getAccounts(),
@@ -177,7 +186,7 @@ export async function getDashboardSummary(
         .map((a) => a.id),
     );
 
-    const ledgerToDate = await storage.getLedgerEntries(undefined, undefined, undefined, toDate);
+    const ledgerToDate = await storage.getLedgerEntries(undefined, undefined, undefined, toDate ?? undefined);
     let cashBalance = 0;
     let bankBalance = 0;
     for (const entry of ledgerToDate) {
@@ -198,10 +207,7 @@ export async function getDashboardSummary(
     const osTotals = outstandingSuppliers?.totals;
 
     coreData = {
-      filters: {
-        fromDate: fromDate.toISOString(),
-        toDate: toDate.toISOString(),
-      },
+      filters: filtersDisplay,
       kpis: {
         totalPurchases: parseAmount(pt?.total),
         totalSales: parseAmount(st?.total),
@@ -221,7 +227,7 @@ export async function getDashboardSummary(
     };
   } catch (err) {
     console.error("[dashboard summary] core data failed:", err instanceof Error ? err.message : err);
-    coreData = emptyCoreData(fromDate, toDate);
+    coreData = emptyCoreData(filterFrom, filterTo);
   }
   }
 
@@ -232,8 +238,8 @@ export async function getDashboardSummary(
     const [products, accounts, ledgerInRange, dayBook] = await Promise.all([
       storage.getProducts(),
       storage.getAccounts(),
-      storage.getLedgerEntries(undefined, undefined, fromDate, toDate),
-      storage.getDayBook(toDate),
+      storage.getLedgerEntries(undefined, undefined, fromDate ?? undefined, toDate ?? undefined),
+      storage.getDayBook(toDate ?? new Date()),
     ]);
 
     const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
@@ -322,7 +328,7 @@ export async function getDashboardSummary(
     }
   }
 
-  if (scope === "core") return coreData ?? emptyCoreData(fromDate, toDate);
+  if (scope === "core") return coreData ?? emptyCoreData(filterFrom, filterTo);
   if (scope === "details") return detailsData ?? ({} as DashboardSummaryDetails);
 
   return { ...(coreData ?? {}), ...(detailsData ?? {}) } as DashboardSummaryFull;

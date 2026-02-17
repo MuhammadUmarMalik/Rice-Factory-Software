@@ -17,7 +17,7 @@ type CapitalStatement = {
 };
 
 export default function CapitalPage() {
-  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
 
   const { data, isLoading, error } = useQuery<CapitalStatement>({
     queryKey: ["/api/financial/capital", fromDate, toDate],

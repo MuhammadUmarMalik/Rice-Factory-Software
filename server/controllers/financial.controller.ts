@@ -1,11 +1,11 @@
 import type { Request, Response } from "express";
 import * as financialService from "../services/financial.service";
-import { parseOptionalDate, parseRequiredDate } from "../utils/parse";
+import { parseOptionalDate } from "../utils/parse";
 
 export async function incomeStatement(req: Request, res: Response) {
   try {
-    const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
-    const toDate = parseRequiredDate(req.query.toDate, "toDate");
+    const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date(0);
+    const toDate = parseOptionalDate(req.query.toDate) ?? new Date(9999, 11, 31);
     const report = await financialService.getIncomeStatement(fromDate, toDate);
     res.json(report);
   } catch (error) {
@@ -27,8 +27,8 @@ export async function balanceSheet(req: Request, res: Response) {
 
 export async function capitalStatement(req: Request, res: Response) {
   try {
-    const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
-    const toDate = parseRequiredDate(req.query.toDate, "toDate");
+    const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date(0);
+    const toDate = parseOptionalDate(req.query.toDate) ?? new Date(9999, 11, 31);
     const report = await financialService.getCapitalStatement(fromDate, toDate);
     res.json(report);
   } catch (error) {
@@ -39,8 +39,8 @@ export async function capitalStatement(req: Request, res: Response) {
 
 export async function salaryStatement(req: Request, res: Response) {
   try {
-    const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
-    const toDate = parseRequiredDate(req.query.toDate, "toDate");
+    const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date(0);
+    const toDate = parseOptionalDate(req.query.toDate) ?? new Date(9999, 11, 31);
     const report = await financialService.getSalaryAccount(fromDate, toDate);
     res.json(report);
   } catch (error) {

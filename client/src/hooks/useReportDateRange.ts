@@ -7,7 +7,7 @@ type UseReportDateRangeOptions = {
 };
 
 export function useReportDateRange(options: UseReportDateRangeOptions = {}) {
-  const initialPreset = options.preset ?? "thisMonth";
+  const initialPreset = options.preset ?? "all";
   const [range, setRange] = useState<DateRangeValue>(() => {
     const initial = getPresetRange(initialPreset);
     return { preset: initialPreset, from: initial.from, to: initial.to };
@@ -15,7 +15,7 @@ export function useReportDateRange(options: UseReportDateRangeOptions = {}) {
 
   const fromDate = useMemo(() => formatDateInput(range.from), [range.from]);
   const toDate = useMemo(() => formatDateInput(range.to), [range.to]);
-  const isReady = Boolean(range.from && range.to);
+  const isReady = range.preset === "all" || Boolean(range.from && range.to);
 
   return { range, setRange, fromDate, toDate, isReady };
 }
