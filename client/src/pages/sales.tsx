@@ -247,15 +247,17 @@ export default function SalesPage() {
       const product = products.find((p) => p.id === parseInt(item.productId));
       if (!product) continue;
 
-      const available = parseFloat(product.currentStock || "0");
-      const requested = parseFloat(item.quantity || "0");
+      const available = Number(product.currentStock);
+      const requested = Number(item.quantity);
+      const avail = Number.isFinite(available) && available >= 0 ? available : 0;
+      const req = Number.isFinite(requested) && requested >= 0 ? requested : 0;
 
-      if (requested > available) {
+      if (req > avail) {
         form.setError(`items.${index}.quantity`, { type: "manual", message: "Insufficient stock" });
         toast({
           variant: "destructive",
           title: language === "ur" ? "Insufficient stock" : "Insufficient stock",
-          description: `${product.name} has only ${available.toLocaleString()} ${product.unit} available.`,
+          description: `${product.name} has only ${avail.toLocaleString()} ${product.unit} available.`,
         });
         return;
       }

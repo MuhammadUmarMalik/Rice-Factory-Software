@@ -3,6 +3,7 @@ import session from "express-session";
 import createMemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { ensureDesktopAdmin } from "./utils/bootstrap";
+import { ensureSchema } from "./utils/ensure-schema";
 import { ensureDesktopSecret } from "./utils/desktop-secret";
 import { serveStatic } from "./config/static";
 import { createServer } from "http";
@@ -150,6 +151,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  ensureSchema();
   await ensureDesktopAdmin();
   await registerRoutes(httpServer, app);
 

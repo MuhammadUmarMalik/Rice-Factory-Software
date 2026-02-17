@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil, Minus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -140,8 +140,7 @@ export default function PaymentsPage() {
     [payments]
   );
 
-  const fetchNextNumber = async () => {
-    // Skip sequence calls while viewing or editing to avoid bumping numbers
+  const fetchNextNumber = useCallback(async () => {
     if (editingId || viewId) {
       return form.getValues("voucherNumber") || "";
     }
@@ -154,13 +153,13 @@ export default function PaymentsPage() {
       console.error(err);
       return "";
     }
-  };
+  }, [form, editingId, viewId]);
 
   useEffect(() => {
     if (isDialogOpen && !editingId && !viewId) {
       fetchNextNumber();
     }
-  }, [isDialogOpen, editingId, viewId]);
+  }, [isDialogOpen, editingId, viewId, fetchNextNumber]);
 
   useEffect(() => {
     if (!isDialogOpen) {
@@ -252,12 +251,16 @@ export default function PaymentsPage() {
       const credit = parseFloat(l.credit || "0");
       return debit > 0 ? l.debit : credit > 0 ? l.credit : "0";
     };
+    // Exclude settlement lines (auto-generated); including them would double the amount on save
+    const paymentLines = (voucher.lines || []).filter(
+      (l: { narration?: string }) => !(l.narration || "").toLowerCase().includes("settlement")
+    );
     form.reset({
       voucherType: "DR",
       voucherNumber: voucher.voucherNumber,
       voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
       narration: voucher.narration || "",
-      lines: (voucher.lines || []).map((l) => ({
+      lines: paymentLines.map((l: { accountId: number; narration?: string; debit?: string; credit?: string }) => ({
         accountId: l.accountId.toString(),
         narration: l.narration || "",
         amount: lineAmount(l),

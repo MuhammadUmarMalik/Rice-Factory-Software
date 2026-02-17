@@ -152,9 +152,18 @@ export default function ExpensesPage() {
       resetForm();
       toast({ title: t("savedSuccessfully") });
     },
-    onError: async (err: any) => {
-      const msg = await err?.json?.()?.error || err?.message || "Failed to save expense";
-      toast({ title: "Save failed", description: String(msg), variant: "destructive" });
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const parsed = msg.includes(":") ? msg.slice(msg.indexOf(":") + 1).trim() : msg;
+      let description = parsed;
+      try {
+        const j = JSON.parse(parsed);
+        if (typeof j?.error === "string") description = j.error;
+        else if (Array.isArray(j?.error)) description = j.error.map((e: { message?: string }) => e?.message).filter(Boolean).join(", ") || parsed;
+      } catch {
+        description = parsed || "Failed to save expense";
+      }
+      toast({ title: "Save failed", description: description || "Failed to save expense", variant: "destructive" });
     },
   });
 
@@ -178,9 +187,18 @@ export default function ExpensesPage() {
       resetForm();
       toast({ title: t("savedSuccessfully") });
     },
-    onError: async (err: any) => {
-      const msg = await err?.json?.()?.error || err?.message || "Failed to update expense";
-      toast({ title: "Update failed", description: String(msg), variant: "destructive" });
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const parsed = msg.includes(":") ? msg.slice(msg.indexOf(":") + 1).trim() : msg;
+      let description = parsed;
+      try {
+        const j = JSON.parse(parsed);
+        if (typeof j?.error === "string") description = j.error;
+        else if (Array.isArray(j?.error)) description = j.error.map((e: { message?: string }) => e?.message).filter(Boolean).join(", ") || parsed;
+      } catch {
+        description = parsed || "Failed to update expense";
+      }
+      toast({ title: "Update failed", description: description || "Failed to update expense", variant: "destructive" });
     },
   });
 
@@ -194,9 +212,18 @@ export default function ExpensesPage() {
       }
       toast({ title: t("deletedSuccessfully") });
     },
-    onError: async (err: any) => {
-      const msg = await err?.json?.()?.error || err?.message || "Failed to delete expense";
-      toast({ title: "Delete failed", description: String(msg), variant: "destructive" });
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      const parsed = msg.includes(":") ? msg.slice(msg.indexOf(":") + 1).trim() : msg;
+      let description = parsed;
+      try {
+        const j = JSON.parse(parsed);
+        if (typeof j?.error === "string") description = j.error;
+        else if (Array.isArray(j?.error)) description = j.error.map((e: { message?: string }) => e?.message).filter(Boolean).join(", ") || parsed;
+      } catch {
+        description = parsed || "Failed to delete expense";
+      }
+      toast({ title: "Delete failed", description: description || "Failed to delete expense", variant: "destructive" });
     },
   });
 

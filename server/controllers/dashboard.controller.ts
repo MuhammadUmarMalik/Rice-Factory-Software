@@ -43,8 +43,13 @@ export async function getSummary(req: Request, res: Response) {
     const summary = await getDashboardSummary({ fromDate, toDate }, scope);
     res.json(summary);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to fetch dashboard summary" });
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error("[dashboard summary]", err.message, err.stack);
+    const isDev = process.env.NODE_ENV !== "production";
+    res.status(500).json({
+      error: "Failed to fetch dashboard summary",
+      ...(isDev && { detail: err.message }),
+    });
   }
 }
 
@@ -55,7 +60,12 @@ export async function getAlerts(req: Request, res: Response) {
     const alerts = await getDashboardAlerts({ fromDate, toDate });
     res.json(alerts);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to fetch dashboard alerts" });
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error("[dashboard alerts]", err.message, err.stack);
+    const isDev = process.env.NODE_ENV !== "production";
+    res.status(500).json({
+      error: "Failed to fetch dashboard alerts",
+      ...(isDev && { detail: err.message }),
+    });
   }
 }

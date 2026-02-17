@@ -8,7 +8,10 @@ export const purchasesApi = {
   list: () => apiGet<Purchase[]>("/api/purchases"),
   get: (id: number) => apiGet<PurchaseWithDetails>(`/api/purchases/${id}`),
   getNextBillNumber: () =>
-    apiRequest("GET", "/api/purchases/next-bill-number").then((r) => r.json() as Promise<{ billNo: string }>),
+    apiRequest("GET", "/api/purchases/next-bill-number").then((r) => {
+      if (!r.ok) throw new Error(`Failed to fetch next bill number: ${r.status}`);
+      return r.json() as Promise<{ billNo: string }>;
+    }),
   create: (data: unknown) => apiPost<Purchase>("/api/purchases", data),
   update: (id: number, data: unknown) => apiPatch<Purchase>(`/api/purchases/${id}`, data),
   delete: (id: number, force = false) =>

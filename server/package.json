@@ -7,10 +7,9 @@
     "dev": "cross-env NODE_ENV=development tsx index.ts",
     "build": "node scripts/build.mjs",
     "start": "cross-env NODE_ENV=production node ../dist/index.cjs",
-    "db:push": "drizzle-kit push",
+    "db:push": "cross-env NODE_OPTIONS=\"--import tsx\" drizzle-kit push",
     "check": "tsc --noEmit",
-    "db:seed": "tsx ../script/seed-admin.ts",
-  "db:push": "drizzle-kit push"
+    "db:seed": "tsx ../script/seed-admin.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
@@ -45,6 +44,8 @@
     "@types/passport": "^1.0.16",
     "@types/passport-local": "^1.0.38",
     "@types/ws": "^8.5.13",
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.17",
     "@vitejs/plugin-react": "^4.7.0",
     "cross-env": "^7.0.3",
     "drizzle-kit": "^0.31.4",

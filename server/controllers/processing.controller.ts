@@ -40,7 +40,11 @@ export async function createProcessing(req: Request, res: Response) {
     }
     parsed.sourceQuantity = numericString.parse(parsed.sourceQuantity);
     const batch = await processingService.createProcessing(parsed);
-    await notifyLowStock(parsed.sourceProductId);
+    try {
+      await notifyLowStock(parsed.sourceProductId);
+    } catch (notifyErr) {
+      console.error("Low stock notification failed:", notifyErr);
+    }
     res.status(201).json(batch);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -169,7 +173,11 @@ export async function completeProcessing(req: Request, res: Response) {
       entityType: "processing",
       entityId: existing.id,
     });
-    await notifyLowStock(existing.sourceProductId);
+    try {
+      await notifyLowStock(existing.sourceProductId);
+    } catch (notifyErr) {
+      console.error("Low stock notification failed:", notifyErr);
+    }
     res.json(batch);
   } catch (error) {
     if (error instanceof z.ZodError) {
