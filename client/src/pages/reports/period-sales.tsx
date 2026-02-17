@@ -60,7 +60,20 @@ export default function PeriodSalesPage() {
   });
 
   const rows = data?.rows || [];
-  const totals = data?.totals || { totalAmount: "0", receivedAmount: "0", balanceAmount: "0", invoiceCount: 0 };
+  const totals = useMemo(
+    () =>
+      rows.reduce(
+        (acc, r) => {
+          acc.totalAmount += Number(r.totalAmount || 0);
+          acc.receivedAmount += Number(r.receivedAmount || 0);
+          acc.balanceAmount += Number(r.balanceAmount || 0);
+          acc.invoiceCount += Number(r.invoiceCount || 0);
+          return acc;
+        },
+        { totalAmount: 0, receivedAmount: 0, balanceAmount: 0, invoiceCount: 0 },
+      ),
+    [rows],
+  );
 
   const columns: Column<PeriodSalesRow>[] = useMemo(
     () => [
@@ -171,9 +184,9 @@ export default function PeriodSalesPage() {
       </Card>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <SummaryCard label="Total Sales" value={totals.totalAmount} />
-        <SummaryCard label="Received" value={totals.receivedAmount} />
-        <SummaryCard label="Balance" value={totals.balanceAmount} />
+        <SummaryCard label="Total Sales" value={totals.totalAmount.toString()} />
+        <SummaryCard label="Received" value={totals.receivedAmount.toString()} />
+        <SummaryCard label="Balance" value={totals.balanceAmount.toString()} />
         <SummaryCard label="Invoices" value={totals.invoiceCount.toString()} highlight />
       </div>
 

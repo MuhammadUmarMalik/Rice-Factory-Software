@@ -20,6 +20,6 @@ export async function updatePurchase(id: number, data: any, items: any[], charge
   return storage.updatePurchase(id, data, items, charges, moundBaseKg);
 }
 
-export async function deletePurchase(id: number, userId?: number) {
-  return storage.deletePurchase(id, userId);
+export async function deletePurchase(id: number, userId?: number, options?: { force?: boolean }) {
+  return storage.deletePurchase(id, userId, options);
 }

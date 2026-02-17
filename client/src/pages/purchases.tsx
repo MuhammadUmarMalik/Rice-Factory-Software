@@ -403,7 +403,7 @@ export default function PurchasesPage() {
   };
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: number) => apiRequest("DELETE", `/api/purchases/${id}`),
+    mutationFn: async (id: number) => apiRequest("DELETE", `/api/purchases/${id}?force=1`),
     onMutate: async (id: number) => {
       await queryClient.cancelQueries({ queryKey: ["/api/purchases"] });
       const prev = queryClient.getQueryData<Purchase[]>(["/api/purchases"]);
@@ -412,11 +412,15 @@ export default function PurchasesPage() {
       );
       return { prev };
     },
-    onError: (_err, id, ctx) => {
+    onError: (err, id, ctx) => {
       if (ctx?.prev) {
         queryClient.setQueryData(["/api/purchases"], ctx.prev);
       }
-      toast({ title: `Delete failed for purchase ${id}`, variant: "destructive" });
+      toast({
+        title: `Delete failed for purchase ${id}`,
+        description: parseApiErrorMessage(err),
+        variant: "destructive",
+      });
     },
     onSuccess: () => {
       toast({ title: t("deletedSuccessfully") });
@@ -1267,7 +1271,7 @@ export default function PurchasesPage() {
                                     </FormControl>
                                     <SelectContent>
                                       <SelectItem value="add">Add</SelectItem>
-                                      <SelectItem value="less">{lessLabel}</SelectItem>
+                                      <SelectItem value="less">Less</SelectItem>
                                     </SelectContent>
                                   </Select>
                                 </FormItem>

@@ -1,5 +1,6 @@
 import type { PrintableDocumentPayload } from "@shared/print";
 import {
+  mapBardanaReport,
   mapBalanceSheet,
   mapCapital,
   mapCashVoucher,
@@ -8,6 +9,7 @@ import {
   mapIncomeStatement,
   mapJournalVoucher,
   mapLedgerReport,
+  mapLessReport,
   mapOutstandingCustomers,
   mapOutstandingSuppliers,
   mapPeriodPurchases,
@@ -46,6 +48,8 @@ export const docRegistry: DocConfig[] = [
   { key: "report.stock", mapper: mapStockReport },
   { key: "report.purchases", mapper: mapPurchaseReport },
   { key: "report.sales", mapper: mapSalesReport },
+  { key: "report.bardana", mapper: mapBardanaReport },
+  { key: "report.less", mapper: mapLessReport },
   { key: "report.periodPurchases", mapper: mapPeriodPurchases },
   { key: "report.periodSales", mapper: mapPeriodSales },
   { key: "report.grossProfit", mapper: mapGrossProfit },

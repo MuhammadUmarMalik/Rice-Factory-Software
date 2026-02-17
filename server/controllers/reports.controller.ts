@@ -159,6 +159,32 @@ export async function outstandingSuppliers(req: Request, res: Response) {
   }
 }
 
+export async function bardanaReport(req: Request, res: Response) {
+  try {
+    const fromDate = parseOptionalDate(req.query.fromDate);
+    const toDate = parseOptionalDate(req.query.toDate);
+    const supplierId = parseOptionalInt(req.query.supplierId);
+    const report = await reportsService.getBardanaReport({ fromDate, toDate, supplierId });
+    res.json(report);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch bardana report" });
+  }
+}
+
+export async function lessReport(req: Request, res: Response) {
+  try {
+    const fromDate = parseOptionalDate(req.query.fromDate);
+    const toDate = parseOptionalDate(req.query.toDate);
+    const supplierId = parseOptionalInt(req.query.supplierId);
+    const report = await reportsService.getLessReport({ fromDate, toDate, supplierId });
+    res.json(report);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch less report" });
+  }
+}
+
 export async function reportDetail(req: Request, res: Response) {
   try {
     const type = (req.query.type as string) || "";

@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import { storage } from "../../../models/storage";
+import * as daybooksService from "../../daybooks.service";
 import type { PrintableDocumentPayload, PrintableSection, PrintableTableColumn } from "@shared/print";
 
 type PrintContext = {
@@ -62,12 +63,32 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     { key: "amount", label: "Amount", align: "right" },
   ]);
 
+  const toKg = (qty: number, unit?: string) => {
+    if (unit === "mound") return qty * 40;
+    if (unit === "quintal") return qty * 100;
+    if (unit === "ton") return qty * 1000;
+    if (unit === "kg") return qty;
+    return null;
+  };
+
+  const resolveUnit = (it: any) => (it as any).unit || "";
+
   const tableRows = items.map((it, index) => {
     const product = productMap.get(it.productId);
+    const rawUnit = resolveUnit(it);
+    const unitLabel = rawUnit;
+    const qtyValue = parseFloat(String(it.quantity || "0"));
+    const kgValue = toKg(qtyValue, rawUnit);
+    const qtyLabel =
+      unitLabel && kgValue != null && rawUnit !== "kg"
+        ? `${num(qtyValue)} ${unitLabel} (${num(kgValue)} kg)`
+        : unitLabel
+          ? `${num(qtyValue)} ${unitLabel}`
+          : num(qtyValue);
     return {
       sr: String(index + 1),
-      item: product ? `${product.name} (${product.unit})` : `#${it.productId}`,
-      qty: num(it.quantity),
+      item: product ? `${product.name}${rawUnit ? ` (${rawUnit})` : ""}` : `#${it.productId}`,
+      qty: qtyLabel,
       rate: money(it.pricePerUnit),
       amount: money(it.totalPrice),
     };
@@ -80,13 +101,53 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
   ];
   const chargeSummary = charges.filter((c) => Number(c.value || 0) !== 0);
   const chargesTotal = chargeSummary.reduce((sum, c) => sum + parseFloat(String(c.value || "0")), 0);
-  const totalQty = items.reduce((sum, item) => sum + parseFloat(String(item.quantity || "0")), 0);
+  const unitSet = new Set(items.map((it) => resolveUnit(it)).filter(Boolean));
+  const totalQtyLabel = (() => {
+    if (unitSet.size === 1) {
+      const [rawUnit] = Array.from(unitSet);
+      const unitLabel = rawUnit;
+      const totalQty = items.reduce((sum, item) => sum + parseFloat(String(item.quantity || "0")), 0);
+      const kgValue = toKg(totalQty, rawUnit);
+      if (unitLabel && kgValue != null && rawUnit !== "kg") {
+        return `${num(totalQty)} ${unitLabel} (${num(kgValue)} kg)`;
+      }
+      return unitLabel ? `${num(totalQty)} ${unitLabel}` : num(totalQty);
+    }
+    const totalKg = items.reduce((sum, item) => {
+      const rawUnit = resolveUnit(item);
+      const qty = parseFloat(String(item.quantity || "0"));
+      const kgValue = toKg(qty, rawUnit);
+      return kgValue == null ? sum : sum + kgValue;
+    }, 0);
+    return totalKg > 0 ? `${num(totalKg)} kg` : "Mixed";
+  })();
   const taxAmount = parseFloat(String(sale.taxAmount || "0"));
+  const chargeRows = [
+    ...chargeSummary.map((c, idx) => ({
+      sr: "",
+      item: `${c.label}${Number(c.value || 0) < 0 ? " (less)" : ""}`,
+      qty: "",
+      rate: "",
+      amount: money(c.value),
+    })),
+    ...(taxAmount !== 0
+      ? [
+          {
+            sr: "",
+            item: "Tax",
+            qty: "",
+            rate: "",
+            amount: money(taxAmount),
+          },
+        ]
+      : []),
+  ];
+  const tableRowsWithCharges = [...tableRows, ...chargeRows];
 
   const sections = [
     summaryCard("Customer", customer?.name || "-"),
     summaryCard("Invoice Date", fmtDate(sale.saleDate)),
-    summaryCard("Total Qty", num(totalQty)),
+    summaryCard("Total Qty", totalQtyLabel, true),
     summaryCard("Subtotal", money(sale.subtotal), true),
     ...(Number(sale.loadingCharges || 0) !== 0 ? [summaryCard("Loading", money(sale.loadingCharges))] : []),
     ...(Number(sale.weighingCharges || 0) !== 0 ? [summaryCard("Weighing", money(sale.weighingCharges))] : []),
@@ -111,21 +172,16 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     sections,
     table: {
       columns: tableColumns,
-      rows: tableRows,
+      rows: tableRowsWithCharges,
       totalsRow: {
         sr: "",
         item: "Totals",
         qty: "",
         rate: "",
-        amount: money(sale.subtotal),
+        amount: money(sale.totalAmount),
       },
     },
-    notes: [
-      ...chargeSummary.map((c) => `${c.label}: ${money(c.value)}`),
-      sale.notes ? `Notes: ${sale.notes}` : "",
-    ]
-      .filter(Boolean)
-      .join(" | "),
+    notes: sale.notes ? `Notes: ${sale.notes}` : "",
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },
@@ -800,6 +856,19 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     productId: params.productId ? Number(params.productId) : undefined,
     paymentStatus: params.paymentStatus,
   });
+  const totals = report.rows.reduce(
+    (acc, r) => {
+      acc.subtotal += parseFloat(String(r.subtotal || "0"));
+      acc.discount += parseFloat(String(r.discount || "0"));
+      acc.tax += parseFloat(String(r.tax || "0"));
+      acc.otherCharges += parseFloat(String(r.otherCharges || "0"));
+      acc.total += parseFloat(String(r.total || "0"));
+      acc.received += parseFloat(String(r.received || "0"));
+      acc.balance += parseFloat(String(r.balance || "0"));
+      return acc;
+    },
+    { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, received: 0, balance: 0 },
+  );
 
   const columns = buildColumns([
     { key: "invoice", label: "Sales No" },
@@ -842,9 +911,9 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
       },
     }),
     sections: [
-      summaryCard("Total", money(report.totals.total), true),
-      summaryCard("Received", money(report.totals.received)),
-      summaryCard("Balance", money(report.totals.balance)),
+      summaryCard("Total", money(totals.total), true),
+      summaryCard("Received", money(totals.received)),
+      summaryCard("Balance", money(totals.balance)),
     ],
     table: {
       columns,
@@ -853,15 +922,73 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
         invoice: "",
         date: "",
         customer: "Totals",
-        subtotal: money(report.totals.subtotal),
-        discount: money(report.totals.discount),
-        tax: money(report.totals.tax),
-        other: money(report.totals.otherCharges),
-        total: money(report.totals.total),
-        received: money(report.totals.received),
-        balance: money(report.totals.balance),
+        subtotal: money(totals.subtotal),
+        discount: money(totals.discount),
+        tax: money(totals.tax),
+        other: money(totals.otherCharges),
+        total: money(totals.total),
+        received: money(totals.received),
+        balance: money(totals.balance),
       },
     },
+    settings: { currency: "PKR" },
+  };
+}
+
+export async function mapBardanaReport(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : undefined;
+  const toDate = params.toDate ? new Date(String(params.toDate)) : undefined;
+  const supplierId = params.supplierId ? Number(params.supplierId) : undefined;
+  const supplier = supplierId ? await storage.getAccount(supplierId) : undefined;
+  const report = await storage.getBardanaReport({ fromDate, toDate, supplierId });
+
+  return {
+    docType: "REPORT",
+    docKey: "report.bardana",
+    title: "Bardana / Kaat Report",
+    company: ctx.company,
+    meta: baseMeta(ctx, {
+      dateFrom: fromDate ? fmtDate(fromDate) : undefined,
+      dateTo: toDate ? fmtDate(toDate) : undefined,
+      filters: {
+        Supplier: supplier?.name || (supplierId ? String(supplierId) : "All"),
+      },
+    }),
+    sections: [
+      summaryCard("Total Bardana / Kaat", `${num(report.totals.totalKg)} kg`, true),
+      summaryCard("Total Bags", num(report.totals.totalBags)),
+      summaryCard("Avg / Bag", `${num(report.totals.avgPerBag)} kg`),
+      summaryCard("Purchases", String(report.totals.purchaseCount)),
+    ],
+    settings: { currency: "PKR" },
+  };
+}
+
+export async function mapLessReport(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : undefined;
+  const toDate = params.toDate ? new Date(String(params.toDate)) : undefined;
+  const supplierId = params.supplierId ? Number(params.supplierId) : undefined;
+  const supplier = supplierId ? await storage.getAccount(supplierId) : undefined;
+  const report = await storage.getLessReport({ fromDate, toDate, supplierId });
+
+  return {
+    docType: "REPORT",
+    docKey: "report.less",
+    title: "Less / Watta Kaat (Moisture + Quality) Report",
+    company: ctx.company,
+    meta: baseMeta(ctx, {
+      dateFrom: fromDate ? fmtDate(fromDate) : undefined,
+      dateTo: toDate ? fmtDate(toDate) : undefined,
+      filters: {
+        Supplier: supplier?.name || (supplierId ? String(supplierId) : "All"),
+      },
+    }),
+    sections: [
+      summaryCard("Total Less / Watta Kaat (Moisture + Quality)", `${num(report.totals.totalKg)} kg`, true),
+      summaryCard("Total Bags", num(report.totals.totalBags)),
+      summaryCard("Avg / Bag", `${num(report.totals.avgPerBag)} kg`),
+      summaryCard("Purchases", String(report.totals.purchaseCount)),
+    ],
     settings: { currency: "PKR" },
   };
 }
@@ -1011,70 +1138,324 @@ export async function mapGrossProfit(params: Record<string, any>, ctx: PrintCont
 }
 
 export async function mapDayBook(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  const date = params.date ? new Date(String(params.date)) : new Date();
-  const report = await storage.getDayBook(date);
-
-  const dayBookDate = (value?: Date) => (value ? format(value, "dd-MM-yyyy") : "");
-  const balanceLabel = (amount?: string | number | null, type?: string) => {
-    const numValue = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0"));
-    if (!Number.isFinite(numValue) || numValue === 0) return "0.00";
-    const side = type || (numValue >= 0 ? "DR" : "CR");
-    return `${Math.abs(numValue).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${side}`;
+  const type = String(params.daybookType || "").trim() || "legacy";
+  const dateFrom = params.dateFrom ? new Date(String(params.dateFrom)) : undefined;
+  const dateTo = params.dateTo ? new Date(String(params.dateTo)) : undefined;
+  const filters = {
+    dateFrom: dateFrom ? dateFrom.toISOString() : undefined,
+    dateTo: dateTo ? dateTo.toISOString() : undefined,
+    status: params.status ? String(params.status) : undefined,
+    search: params.search ? String(params.search) : undefined,
   };
 
-  const columns = buildColumns([
-    { key: "srNo", label: "Sr.No", width: "8%" },
-    { key: "id", label: "ID", width: "12%" },
-    { key: "type", label: "Type", width: "8%" },
-    { key: "particulars", label: "Particulars" },
-    { key: "receipt", label: "Receipt", align: "right", width: "14%" },
-    { key: "payment", label: "Payment", align: "right", width: "14%" },
-    { key: "balance", label: "Balance", align: "right", width: "14%" },
-  ]);
+  if (!["sales", "purchases", "cash", "sales-returns", "purchase-returns", "general-journal"].includes(type)) {
+    const date = params.date ? new Date(String(params.date)) : new Date();
+    const report = await storage.getDayBook(date);
+    const balanceLabel = (amount?: string | number | null, side?: string) => {
+      const n = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0"));
+      if (!Number.isFinite(n) || n === 0) return "0.00";
+      const t = side || (n >= 0 ? "DR" : "CR");
+      return `${Math.abs(n).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${t}`;
+    };
 
-  const rows = [
-    {
-      srNo: "",
-      id: "",
-      type: "",
-      particulars: "OPENING BALANCE",
-      receipt: "0.00",
-      payment: "0.00",
-      balance: balanceLabel(report.openingBalance.amount, report.openingBalance.type),
-    },
-    ...report.rows.map((r: any) => ({
-      srNo: String(r.srNo),
-      id: r.id || "-",
-      type: r.type || "-",
-      particulars: [`[${r.partyName || "-"}]`, r.mode || ""].filter(Boolean).join("\n"),
-      receipt: parseFloat(r.receipt || "0") > 0 ? num(r.receipt) : "0.00",
-      payment: parseFloat(r.payment || "0") > 0 ? num(r.payment) : "0.00",
-      balance: balanceLabel(r.balanceAmount, r.balanceType),
-    })),
-  ];
+    const columns = buildColumns([
+      { key: "srNo", label: "Sr.No", width: "8%" },
+      { key: "id", label: "ID", width: "12%" },
+      { key: "type", label: "Type", width: "8%" },
+      { key: "particulars", label: "Particulars" },
+      { key: "receipt", label: "Receipt", align: "right", width: "14%" },
+      { key: "payment", label: "Payment", align: "right", width: "14%" },
+      { key: "balance", label: "Balance", align: "right", width: "14%" },
+    ]);
+
+    const rows = [
+      {
+        srNo: "",
+        id: "",
+        type: "",
+        particulars: "OPENING BALANCE",
+        receipt: "0.00",
+        payment: "0.00",
+        balance: balanceLabel(report.openingBalance.amount, report.openingBalance.type),
+      },
+      ...report.rows.map((r: any) => ({
+        srNo: String(r.srNo),
+        id: r.id || "-",
+        type: r.type || "-",
+        particulars: [`[${r.partyName || "-"}]`, r.mode || ""].filter(Boolean).join("\n"),
+        receipt: parseFloat(r.receipt || "0") > 0 ? num(r.receipt) : "0.00",
+        payment: parseFloat(r.payment || "0") > 0 ? num(r.payment) : "0.00",
+        balance: balanceLabel(r.balanceAmount, r.balanceType),
+      })),
+    ];
+
+    return {
+      docType: "REPORT",
+      docKey: "report.dayBook",
+      title: "Day Book",
+      company: ctx.company,
+      meta: baseMeta(ctx, { dateFrom: fmtDate(date), dateTo: fmtDate(date) }),
+      table: {
+        columns,
+        rows,
+        totalsRow: {
+          srNo: "",
+          id: "",
+          type: "",
+          particulars: "Total:",
+          receipt: num(report.totals.receipt),
+          payment: num(report.totals.payment),
+          balance: "",
+        },
+      },
+      settings: { currency: "PKR" },
+    };
+  }
+
+  let title = "Day Book";
+  let columns: PrintableTableColumn[] = [];
+  let rows: Array<Record<string, any>> = [];
+  let sections: PrintableSection[] = [];
+
+  if (type === "all") {
+    const sales = daybooksService.listSalesDaybook(filters as any) as any[];
+    const purchases = daybooksService.listPurchasesDaybook(filters as any) as any[];
+    const cash = daybooksService.listCashBook(filters as any) as any[];
+    const salesReturns = daybooksService.listSalesReturnsDaybook(filters as any) as any[];
+    const purchaseReturns = daybooksService.listPurchaseReturnsDaybook(filters as any) as any[];
+    const journals = daybooksService.listGeneralJournal(filters as any) as any[];
+
+    const sectionHeader = (name: string) => ({
+      book: `${name}`,
+      date: "",
+      reference: "",
+      party: "",
+      details: "",
+      amount: "",
+      status: "",
+      __groupTotal: true as any,
+    });
+    const spacer = () => ({ book: "", date: "", reference: "", party: "", details: "", amount: "", status: "" });
+
+    columns = buildColumns([
+      { key: "book", label: "Daybook" },
+      { key: "date", label: "Date", width: "12%" },
+      { key: "reference", label: "Reference", width: "14%" },
+      { key: "party", label: "Party" },
+      { key: "details", label: "Details" },
+      { key: "amount", label: "Amount", align: "right", width: "14%" },
+      { key: "status", label: "Status", width: "12%" },
+    ]);
+
+    const salesRows = sales.map((r) => ({
+      book: "Sales",
+      date: fmtDate(r.transaction_date),
+      reference: r.invoice_number || "-",
+      party: r.customer_name || "-",
+      details: r.description || "",
+      amount: money(r.total_amount),
+      status: r.status || "-",
+    }));
+    const purchaseRows = purchases.map((r) => ({
+      book: "Purchases",
+      date: fmtDate(r.transaction_date),
+      reference: r.invoice_number || "-",
+      party: r.supplier_name || "-",
+      details: r.description || "",
+      amount: money(r.total_amount),
+      status: r.status || "-",
+    }));
+    const cashRows = cash.map((r) => ({
+      book: "Cash",
+      date: fmtDate(r.transaction_date),
+      reference: r.reference_number || "-",
+      party: r.party_name || "-",
+      details: `${r.account_type || ""} ${r.transaction_type || ""}`.trim(),
+      amount: money(r.amount),
+      status: r.transaction_type || "-",
+    }));
+    const salesReturnRows = salesReturns.map((r) => ({
+      book: "Sales Returns",
+      date: fmtDate(r.return_date),
+      reference: r.credit_note_number || "-",
+      party: r.customer_name || "-",
+      details: r.reason || r.description || "",
+      amount: money(r.total_credit_amount),
+      status: r.status || "-",
+    }));
+    const purchaseReturnRows = purchaseReturns.map((r) => ({
+      book: "Purchase Returns",
+      date: fmtDate(r.return_date),
+      reference: r.debit_note_number || "-",
+      party: r.supplier_name || "-",
+      details: r.reason || r.description || "",
+      amount: money(r.total_debit_amount),
+      status: r.status || "-",
+    }));
+    const journalRows = journals.map((r) => ({
+      book: "General Journal",
+      date: fmtDate(r.transaction_date),
+      reference: r.journal_entry_number || "-",
+      party: "-",
+      details: r.description || "",
+      amount: money(r.total_debits || r.total_credits || 0),
+      status: r.status || "-",
+    }));
+
+    rows = [
+      sectionHeader("Sales Daybook"),
+      ...salesRows,
+      spacer(),
+      sectionHeader("Purchases Daybook"),
+      ...purchaseRows,
+      spacer(),
+      sectionHeader("Cash Book"),
+      ...cashRows,
+      spacer(),
+      sectionHeader("Sales Returns Daybook"),
+      ...salesReturnRows,
+      spacer(),
+      sectionHeader("Purchase Returns Daybook"),
+      ...purchaseReturnRows,
+      spacer(),
+      sectionHeader("General Journal"),
+      ...journalRows,
+    ];
+
+    sections = [
+      summaryCard("Sales Entries", String(sales.length), true),
+      summaryCard("Purchase Entries", String(purchases.length), true),
+      summaryCard("Cash Entries", String(cash.length), true),
+      summaryCard("Sales Returns", String(salesReturns.length), true),
+      summaryCard("Purchase Returns", String(purchaseReturns.length), true),
+      summaryCard("Journal Entries", String(journals.length), true),
+    ];
+
+    return {
+      docType: "REPORT",
+      docKey: "report.dayBook",
+      title: "All Daybooks",
+      company: ctx.company,
+      meta: baseMeta(ctx, {
+        dateFrom: dateFrom ? fmtDate(dateFrom) : undefined,
+        dateTo: dateTo ? fmtDate(dateTo) : undefined,
+        filters: { Type: "all" },
+      }),
+      sections,
+      table: { columns, rows },
+      settings: { currency: "PKR" },
+    };
+  }
+
+  if (type === "sales") {
+    title = "Sales Daybook";
+    const data = daybooksService.listSalesDaybook(filters as any) as any[];
+    columns = buildColumns([
+      { key: "date", label: "Date" },
+      { key: "invoice", label: "Invoice" },
+      { key: "party", label: "Customer" },
+      { key: "amount", label: "Amount", align: "right" },
+      { key: "status", label: "Status" },
+    ]);
+    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), invoice: r.invoice_number, party: r.customer_name, amount: money(r.total_amount), status: r.status }));
+    const total = data.reduce((s, r) => s + parseFloat(String(r.total_amount || "0")), 0);
+    const paid = data.reduce((s, r) => s + parseFloat(String(r.paid_amount || "0")), 0);
+    sections = [summaryCard("Total Sales", money(total), true), summaryCard("Paid", money(paid)), summaryCard("Outstanding", money(total - paid))];
+  } else if (type === "purchases") {
+    title = "Purchases Daybook";
+    const data = daybooksService.listPurchasesDaybook(filters as any) as any[];
+    columns = buildColumns([
+      { key: "date", label: "Date" },
+      { key: "invoice", label: "Invoice" },
+      { key: "party", label: "Supplier" },
+      { key: "amount", label: "Amount", align: "right" },
+      { key: "status", label: "Status" },
+    ]);
+    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), invoice: r.invoice_number, party: r.supplier_name, amount: money(r.total_amount), status: r.status }));
+    const total = data.reduce((s, r) => s + parseFloat(String(r.total_amount || "0")), 0);
+    const paid = data.reduce((s, r) => s + parseFloat(String(r.paid_amount || "0")), 0);
+    sections = [summaryCard("Total Purchases", money(total), true), summaryCard("Paid", money(paid)), summaryCard("Outstanding", money(total - paid))];
+  } else if (type === "cash") {
+    title = "Cash Book";
+    const data = daybooksService.listCashBook(filters as any) as any[];
+    columns = buildColumns([
+      { key: "date", label: "Date" },
+      { key: "type", label: "Type" },
+      { key: "account", label: "Account" },
+      { key: "party", label: "Party" },
+      { key: "amount", label: "Amount", align: "right" },
+      { key: "running", label: "Running", align: "right" },
+    ]);
+    rows = data.map((r) => ({
+      date: fmtDate(r.transaction_date),
+      type: r.transaction_type,
+      account: r.account_type,
+      party: r.party_name || "-",
+      amount: money(r.amount),
+      running: num(r.runningBalance || 0),
+    }));
+    const receipt = data.filter((r) => r.transaction_type === "Receipt").reduce((s, r) => s + parseFloat(String(r.amount || "0")), 0);
+    const payment = data.filter((r) => r.transaction_type === "Payment").reduce((s, r) => s + parseFloat(String(r.amount || "0")), 0);
+    sections = [summaryCard("Receipts", money(receipt), true), summaryCard("Payments", money(payment)), summaryCard("Net", money(receipt - payment))];
+  } else if (type === "sales-returns") {
+    title = "Sales Returns Daybook";
+    const data = daybooksService.listSalesReturnsDaybook(filters as any) as any[];
+    columns = buildColumns([
+      { key: "date", label: "Date" },
+      { key: "note", label: "Credit Note" },
+      { key: "party", label: "Customer" },
+      { key: "amount", label: "Amount", align: "right" },
+      { key: "status", label: "Status" },
+    ]);
+    rows = data.map((r) => ({ date: fmtDate(r.return_date), note: r.credit_note_number, party: r.customer_name, amount: money(r.total_credit_amount), status: r.status }));
+    const total = data.reduce((s, r) => s + parseFloat(String(r.total_credit_amount || "0")), 0);
+    sections = [summaryCard("Total Returns", money(total), true), summaryCard("Entries", String(data.length))];
+  } else if (type === "purchase-returns") {
+    title = "Purchase Returns Daybook";
+    const data = daybooksService.listPurchaseReturnsDaybook(filters as any) as any[];
+    columns = buildColumns([
+      { key: "date", label: "Date" },
+      { key: "note", label: "Debit Note" },
+      { key: "party", label: "Supplier" },
+      { key: "amount", label: "Amount", align: "right" },
+      { key: "status", label: "Status" },
+    ]);
+    rows = data.map((r) => ({ date: fmtDate(r.return_date), note: r.debit_note_number, party: r.supplier_name, amount: money(r.total_debit_amount), status: r.status }));
+    const total = data.reduce((s, r) => s + parseFloat(String(r.total_debit_amount || "0")), 0);
+    sections = [summaryCard("Total Returns", money(total), true), summaryCard("Entries", String(data.length))];
+  } else {
+    title = "General Journal";
+    const data = daybooksService.listGeneralJournal(filters as any) as any[];
+    columns = buildColumns([
+      { key: "date", label: "Date" },
+      { key: "entryNo", label: "Entry No" },
+      { key: "narration", label: "Narration" },
+      { key: "debit", label: "Debit", align: "right" },
+      { key: "credit", label: "Credit", align: "right" },
+      { key: "status", label: "Status" },
+    ]);
+    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), entryNo: r.journal_entry_number, narration: r.description, debit: money(r.total_debits), credit: money(r.total_credits), status: r.status }));
+    const debit = data.reduce((s, r) => s + parseFloat(String(r.total_debits || "0")), 0);
+    const credit = data.reduce((s, r) => s + parseFloat(String(r.total_credits || "0")), 0);
+    sections = [summaryCard("Total Debits", money(debit), true), summaryCard("Total Credits", money(credit), true), summaryCard("Entries", String(data.length))];
+  }
 
   return {
     docType: "REPORT",
     docKey: "report.dayBook",
-    title: "Day Book",
+    title,
     company: ctx.company,
     meta: baseMeta(ctx, {
-      dateFrom: dayBookDate(date),
-      dateTo: dayBookDate(date),
-    }),
-    table: {
-      columns,
-      rows,
-      totalsRow: {
-        srNo: "",
-        id: "",
-        type: "",
-        particulars: "Total:",
-        receipt: num(report.totals.receipt),
-        payment: num(report.totals.payment),
-        balance: "",
+      dateFrom: dateFrom ? fmtDate(dateFrom) : undefined,
+      dateTo: dateTo ? fmtDate(dateTo) : undefined,
+      filters: {
+        Type: type,
+        ...(filters.status ? { Status: filters.status } : {}),
+        ...(filters.search ? { Search: filters.search } : {}),
       },
-    },
+    }),
+    sections,
+    table: { columns, rows },
     settings: { currency: "PKR" },
   };
 }

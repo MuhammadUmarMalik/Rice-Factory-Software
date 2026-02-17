@@ -302,7 +302,7 @@ export default function SalesPage() {
           return {
             productId,
             quantity: item.quantity?.toString() || "0",
-            unit: getUnitForProduct(productId) || "",
+            unit: item.unit || getUnitForProduct(productId) || "",
             pricePerUnit: item.pricePerUnit?.toString() || "0",
           };
         }),

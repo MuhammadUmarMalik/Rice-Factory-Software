@@ -361,7 +361,9 @@ export default function SettingsPage() {
           const { done, value } = await reader.read();
           if (done) break;
           if (value) {
-            chunks.push(value);
+            const safeChunk = new Uint8Array(value.byteLength);
+            safeChunk.set(value);
+            chunks.push(safeChunk);
             received += value.length;
             if (totalBytes) {
               setExportProgress(Math.min(100, Math.round((received / totalBytes) * 100)));
