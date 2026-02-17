@@ -31,7 +31,7 @@ type LessReport = {
 
 export default function LessReportPage() {
   const { t } = useLanguage();
-  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const [supplierId, setSupplierId] = useState<string>("all");
 
   const { data: suppliers = [] } = useQuery<Account[]>({

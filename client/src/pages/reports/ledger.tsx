@@ -48,7 +48,7 @@ export default function LedgerPage() {
   const { t, isRTL } = useLanguage();
   const [location] = useLocation();
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const [voucherType, setVoucherType] = useState<string>("all");
   const [narrationSearch, setNarrationSearch] = useState<string>("");
 

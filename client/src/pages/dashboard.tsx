@@ -17,8 +17,9 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { SkeletonBox } from "@/components/ui/skeletons";
 import { format } from "date-fns";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 import {
   Select,
   SelectContent,
@@ -137,10 +138,7 @@ export default function Dashboard() {
   const { t, isRTL, language } = useLanguage();
   const { reference, detail, isLoading: detailLoading, openDetail, closeDetail } = useReportDetail();
 
-  const today = new Date();
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const [fromDate, setFromDate] = useState(format(monthStart, "yyyy-MM-dd"));
-  const [toDate, setToDate] = useState(format(today, "yyyy-MM-dd"));
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const [godown, setGodown] = useState<string>("all");
 
   const chartsSection = useLazySection<HTMLDivElement>("300px");
@@ -387,13 +385,9 @@ export default function Dashboard() {
       <Card>
         <CardContent className="pt-6">
           <div className={`grid gap-4 md:grid-cols-3 ${isRTL ? "direction-rtl" : ""}`}>
-            <div>
-              <Label className={isRTL ? "font-urdu" : ""}>From Date</Label>
-              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-            </div>
-            <div>
-              <Label className={isRTL ? "font-urdu" : ""}>To Date</Label>
-              <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            <div className="md:col-span-2">
+              <Label className={isRTL ? "font-urdu" : ""}>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div>
               <Label className={isRTL ? "font-urdu" : ""}>Godown</Label>

@@ -56,7 +56,7 @@ type OutstandingSuppliersReport = {
 };
 
 export default function OutstandingSuppliersPage() {
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const asOfDate = toDate || fromDate;
   const [supplierId, setSupplierId] = useState<string>("all");
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();

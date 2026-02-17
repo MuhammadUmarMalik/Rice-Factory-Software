@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import * as reportsService from "../services/reports.service";
-import { parseOptionalDate, parseOptionalInt, parseRequiredDate } from "../utils/parse";
+import { parseOptionalDate, parseOptionalInt } from "../utils/parse";
 
 export async function stockReport(req: Request, res: Response) {
   try {
@@ -84,8 +84,8 @@ export async function salesReport(req: Request, res: Response) {
 
 export async function periodPurchases(req: Request, res: Response) {
   try {
-    const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
-    const toDate = parseRequiredDate(req.query.toDate, "toDate");
+    const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date(0);
+    const toDate = parseOptionalDate(req.query.toDate) ?? new Date(9999, 11, 31);
     const supplierId = parseOptionalInt(req.query.supplierId);
     const groupBy = typeof req.query.groupBy == "string" ? (req.query.groupBy as any) : "month";
     const report = await reportsService.getPeriodPurchases(fromDate, toDate, supplierId, groupBy);
@@ -98,8 +98,8 @@ export async function periodPurchases(req: Request, res: Response) {
 
 export async function periodSales(req: Request, res: Response) {
   try {
-    const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
-    const toDate = parseRequiredDate(req.query.toDate, "toDate");
+    const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date(0);
+    const toDate = parseOptionalDate(req.query.toDate) ?? new Date(9999, 11, 31);
     const customerId = parseOptionalInt(req.query.customerId);
     const groupBy = typeof req.query.groupBy == "string" ? (req.query.groupBy as any) : "month";
     const report = await reportsService.getPeriodSales(fromDate, toDate, customerId, groupBy);
@@ -112,8 +112,8 @@ export async function periodSales(req: Request, res: Response) {
 
 export async function grossProfit(req: Request, res: Response) {
   try {
-    const fromDate = parseRequiredDate(req.query.fromDate, "fromDate");
-    const toDate = parseRequiredDate(req.query.toDate, "toDate");
+    const fromDate = parseOptionalDate(req.query.fromDate) ?? new Date(0);
+    const toDate = parseOptionalDate(req.query.toDate) ?? new Date(9999, 11, 31);
     const report = await reportsService.getGrossProfit(fromDate, toDate);
     res.json(report);
   } catch (error) {

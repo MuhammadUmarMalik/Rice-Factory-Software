@@ -18,7 +18,7 @@ type IncomeStatement = {
 };
 
 export default function IncomeStatementPage() {
-  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
 
   const { data, isLoading, error } = useQuery<IncomeStatement>({
     queryKey: ["/api/financial/income-statement", fromDate, toDate],

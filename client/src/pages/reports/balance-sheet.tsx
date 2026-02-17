@@ -23,7 +23,7 @@ type BalanceSheetRow =
   | { type: "line" | "total" | "grand"; label: string; debit?: string; credit?: string };
 
 export default function BalanceSheetPage() {
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const asOfDate = toDate || fromDate;
 
   const { data, isLoading, error } = useQuery<BalanceSheet>({

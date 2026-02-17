@@ -56,7 +56,7 @@ type OutstandingCustomersReport = {
 };
 
 export default function OutstandingCustomersPage() {
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const asOfDate = toDate || fromDate;
   const [customerId, setCustomerId] = useState<string>("all");
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();

@@ -34,7 +34,7 @@ type SalaryReport = {
 };
 
 export default function SalaryAccountPage() {
-  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { data, isLoading } = useQuery<SalaryReport>({

@@ -17,6 +17,7 @@ type DateRangeFilterProps = {
 };
 
 const presets: Array<{ key: DateRangePreset; label: string }> = [
+  { key: "all", label: "All" },
   { key: "today", label: "Today" },
   { key: "yesterday", label: "Yesterday" },
   { key: "thisWeek", label: "This Week" },
@@ -46,6 +47,9 @@ export function DateRangeFilter({
   const currentFrom = useMemo(() => formatDateInput(value.from), [value.from]);
   const currentTo = useMemo(() => formatDateInput(value.to), [value.to]);
   const displayLabel = useMemo(() => {
+    if (value.preset === "all" || (!value.from && !value.to)) {
+      return "All";
+    }
     if (value.from && value.to) {
       return `${format(value.from, "dd MMM yy")} - ${format(value.to, "dd MMM yy")}`;
     }
@@ -53,7 +57,7 @@ export function DateRangeFilter({
       return format(value.from, "dd MMM yy");
     }
     return "Select range";
-  }, [value.from, value.to]);
+  }, [value.preset, value.from, value.to]);
 
   useEffect(() => {
     setDraftRange({ from: value.from ?? undefined, to: value.to ?? undefined });
@@ -63,6 +67,11 @@ export function DateRangeFilter({
     if (preset === value.preset) return;
     if (preset === "custom") {
       onChange({ ...value, preset: "custom" });
+      return;
+    }
+    if (preset === "all") {
+      setDraftRange(undefined);
+      onChange({ preset: "all", from: null, to: null });
       return;
     }
     const next = getPresetRange(preset);
@@ -81,6 +90,11 @@ export function DateRangeFilter({
 
   const handleReset = () => {
     const preset = initialPresetRef.current;
+    if (preset === "all") {
+      setDraftRange(undefined);
+      onChange({ preset: "all", from: null, to: null });
+      return;
+    }
     if (preset === "custom") {
       const initialRange = initialRangeRef.current;
       setDraftRange(initialRange);

@@ -55,7 +55,7 @@ type StockReport = {
 export default function StockReportPage() {
   const { t, isRTL, language } = useLanguage();
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const [productId, setProductId] = useState<string>("all");
   const [category, setCategory] = useState<string>("all");
   const [unit, setUnit] = useState<string>("all");

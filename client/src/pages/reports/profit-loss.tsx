@@ -21,7 +21,7 @@ type ProfitLossResponse = {
 
 export default function ProfitLossPage() {
   const { t, isRTL, language } = useLanguage();
-  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
 
   const { data: profitLoss } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", fromDate, toDate],

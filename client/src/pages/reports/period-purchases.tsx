@@ -36,7 +36,7 @@ type PeriodPurchaseReport = {
 };
 
 export default function PeriodPurchasesPage() {
-  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const [supplierId, setSupplierId] = useState<string>("all");
   const [groupBy, setGroupBy] = useState<string>("month");
 

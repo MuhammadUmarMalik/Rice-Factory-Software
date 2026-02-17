@@ -65,7 +65,7 @@ function formatSafeDate(value: string | number | Date) {
 
 export default function PurchaseReportPage() {
   const { t, isRTL, language } = useLanguage();
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "thisMonth" });
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const [supplierId, setSupplierId] = useState<string>("all");
   const [productId, setProductId] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");

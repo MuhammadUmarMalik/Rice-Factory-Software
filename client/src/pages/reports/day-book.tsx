@@ -41,25 +41,56 @@ type DayBookDisplayRow = {
   isTotal?: boolean;
 };
 
-export default function DayBookPage() {
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "today" });
-  const selectedDate = toDate || fromDate;
+type DayBookTab = "sales" | "purchases" | "cash" | "sales-returns" | "purchase-returns" | "general-journal";
 
-  const { data, isLoading } = useQuery<DayBookReport>({
-    queryKey: ["/api/reports/day-book", selectedDate],
-    enabled: !!selectedDate,
+const DAYBOOK_API_MAP: Record<DayBookTab, string> = {
+  sales: "/api/daybooks/sales",
+  purchases: "/api/daybooks/purchases",
+  cash: "/api/daybooks/cash",
+  "sales-returns": "/api/daybooks/sales-returns",
+  "purchase-returns": "/api/daybooks/purchase-returns",
+  "general-journal": "/api/daybooks/general-journal",
+};
+
+type DayBookPageProps = {
+  initialTab?: DayBookTab;
+  singleTab?: boolean;
+  pageTitle?: string;
+};
+
+export default function DayBookPage({ initialTab, singleTab, pageTitle }: DayBookPageProps = {}) {
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
+  const selectedDate = toDate || fromDate;
+  const dateForApi = selectedDate || format(new Date(), "yyyy-MM-dd");
+  const isSpecialized = Boolean(initialTab && DAYBOOK_API_MAP[initialTab]);
+
+  const { data: combinedData, isLoading: combinedLoading } = useQuery<DayBookReport>({
+    queryKey: ["/api/reports/day-book", dateForApi],
+    enabled: !isSpecialized,
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (selectedDate) params.set("date", selectedDate);
+      params.set("date", dateForApi);
       const res = await fetchWithAuth(`/api/reports/day-book?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load day book");
       return res.json();
     },
   });
 
-  const rows = data?.rows || [];
-  // const openingBalance = data?.openingBalance || { amount: "0", type: "" };
-  const totals = data?.totals || { receipt: "0", payment: "0" };
+  const { data: specializedData, isLoading: specializedLoading } = useQuery<Record<string, unknown>[]>({
+    queryKey: [DAYBOOK_API_MAP[initialTab!], fromDate, toDate],
+    enabled: isSpecialized && !!initialTab,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (fromDate) params.set("dateFrom", fromDate);
+      if (toDate) params.set("dateTo", toDate);
+      const url = `${DAYBOOK_API_MAP[initialTab!]}?${params.toString()}`;
+      const res = await fetchWithAuth(url);
+      if (!res.ok) throw new Error(`Failed to load ${pageTitle || initialTab}`);
+      return res.json();
+    },
+  });
+
+  const isLoading = isSpecialized ? specializedLoading : combinedLoading;
 
   const formatAmount = (value?: string | number) => {
     const num = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
@@ -74,18 +105,131 @@ export default function DayBookPage() {
     return `${Math.abs(num).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${side}`;
   };
 
-  const displayRows = useMemo(() => {
-    // const openingRow: DayBookDisplayRow = {
-    //   srNo: "",
-    //   id: "",
-    //   type: "",
-    //   particulars: "OPENING BALANCE",
-    //   receipt: "0.00",
-    //   payment: "0.00",
-    //   balance: formatBalance(openingBalance.amount, openingBalance.type),
-    //   isOpening: true,
-    // };
+  const mapSpecializedToDisplay = (): DayBookDisplayRow[] => {
+    if (!initialTab || !specializedData?.length) return [];
+    const rows = specializedData as any[];
+    switch (initialTab) {
+      case "sales":
+        return rows.map((r, i) => ({
+          srNo: String(i + 1),
+          id: r.invoice_number || String(r.id || "-"),
+          type: "Sale",
+          particulars: [r.customer_name, r.description].filter(Boolean).join("\n"),
+          receipt: formatAmount(r.total_amount),
+          payment: formatAmount(r.paid_amount),
+          balance: formatBalance(parseFloat(r.total_amount || "0") - parseFloat(r.paid_amount || "0")),
+          isTotal: false,
+        }));
+      case "purchases":
+        return rows.map((r, i) => ({
+          srNo: String(i + 1),
+          id: r.invoice_number || String(r.id || "-"),
+          type: "Purchase",
+          particulars: [r.supplier_name, r.description].filter(Boolean).join("\n"),
+          receipt: "0.00",
+          payment: formatAmount(r.total_amount),
+          balance: formatBalance(parseFloat(r.total_amount || "0") - parseFloat(r.paid_amount || "0")),
+          isTotal: false,
+        }));
+      case "cash":
+        return rows.map((r, i) => ({
+          srNo: String(i + 1),
+          id: r.reference_number || String(r.id || "-"),
+          type: r.transaction_type || "-",
+          particulars: [r.party_name, r.description].filter(Boolean).join("\n"),
+          receipt: (r.transaction_type || "").toLowerCase() === "receipt" ? formatAmount(r.amount) : "0.00",
+          payment: (r.transaction_type || "").toLowerCase() === "payment" ? formatAmount(r.amount) : "0.00",
+          balance: "",
+          isTotal: false,
+        }));
+      case "sales-returns":
+        return rows.map((r, i) => ({
+          srNo: String(i + 1),
+          id: r.credit_note_number || String(r.id || "-"),
+          type: "Sales Return",
+          particulars: [r.customer_name, r.description].filter(Boolean).join("\n"),
+          receipt: "0.00",
+          payment: formatAmount(r.total_credit_amount),
+          balance: "",
+          isTotal: false,
+        }));
+      case "purchase-returns":
+        return rows.map((r, i) => ({
+          srNo: String(i + 1),
+          id: r.debit_note_number || String(r.id || "-"),
+          type: "Purchase Return",
+          particulars: [r.supplier_name, r.description].filter(Boolean).join("\n"),
+          receipt: formatAmount(r.total_debit_amount),
+          payment: "0.00",
+          balance: "",
+          isTotal: false,
+        }));
+      case "general-journal":
+        return rows.map((r, i) => ({
+          srNo: String(i + 1),
+          id: r.journal_entry_number || String(r.id || "-"),
+          type: "Journal",
+          particulars: r.description || "",
+          receipt: formatAmount(r.total_debits),
+          payment: formatAmount(r.total_credits),
+          balance: "",
+          isTotal: false,
+        }));
+      default:
+        return [];
+    }
+  };
 
+  const specializedTotals = useMemo(() => {
+    if (!initialTab || !specializedData?.length) return { receipt: "0.00", payment: "0.00" };
+    const rows = specializedData as any[];
+    if (initialTab === "sales") {
+      const total = rows.reduce((s, r) => s + parseFloat(r.total_amount || "0"), 0);
+      const paid = rows.reduce((s, r) => s + parseFloat(r.paid_amount || "0"), 0);
+      return { receipt: formatAmount(total), payment: formatAmount(paid) };
+    }
+    if (initialTab === "purchases") {
+      const total = rows.reduce((s, r) => s + parseFloat(r.total_amount || "0"), 0);
+      return { receipt: "0.00", payment: formatAmount(total) };
+    }
+    if (initialTab === "cash") {
+      const receipt = rows.filter((r) => (r.transaction_type || "").toLowerCase() === "receipt").reduce((s, r) => s + parseFloat(r.amount || "0"), 0);
+      const payment = rows.filter((r) => (r.transaction_type || "").toLowerCase() === "payment").reduce((s, r) => s + parseFloat(r.amount || "0"), 0);
+      return { receipt: formatAmount(receipt), payment: formatAmount(payment) };
+    }
+    if (initialTab === "sales-returns") {
+      const total = rows.reduce((s, r) => s + parseFloat(r.total_credit_amount || "0"), 0);
+      return { receipt: "0.00", payment: formatAmount(total) };
+    }
+    if (initialTab === "purchase-returns") {
+      const total = rows.reduce((s, r) => s + parseFloat(r.total_debit_amount || "0"), 0);
+      return { receipt: formatAmount(total), payment: "0.00" };
+    }
+    if (initialTab === "general-journal") {
+      const debit = rows.reduce((s, r) => s + parseFloat(r.total_debits || "0"), 0);
+      const credit = rows.reduce((s, r) => s + parseFloat(r.total_credits || "0"), 0);
+      return { receipt: formatAmount(debit), payment: formatAmount(credit) };
+    }
+    return { receipt: "0.00", payment: "0.00" };
+  }, [initialTab, specializedData]);
+
+  const displayRows = useMemo((): DayBookDisplayRow[] => {
+    if (isSpecialized) {
+      const mapped = mapSpecializedToDisplay();
+      const totalRow: DayBookDisplayRow = {
+        srNo: "",
+        id: "",
+        type: "",
+        particulars: "Total:",
+        receipt: specializedTotals.receipt,
+        payment: specializedTotals.payment,
+        balance: "",
+        isTotal: true,
+      };
+      return [...mapped, totalRow];
+    }
+    const rows = combinedData?.rows || [];
+    const totals = combinedData?.totals || { receipt: "0", payment: "0" };
     const voucherRows = rows.map((row) => ({
       srNo: String(row.srNo),
       id: row.id || "-",
@@ -94,8 +238,8 @@ export default function DayBookPage() {
       receipt: formatAmount(row.receipt),
       payment: formatAmount(row.payment),
       balance: formatBalance(row.balanceAmount, row.balanceType),
+      isTotal: false,
     }));
-
     const totalRow: DayBookDisplayRow = {
       srNo: "",
       id: "",
@@ -106,9 +250,8 @@ export default function DayBookPage() {
       balance: "",
       isTotal: true,
     };
-
     return [...voucherRows, totalRow];
-  }, [  rows, totals.payment, totals.receipt]);
+  }, [isSpecialized, combinedData, specializedData, initialTab, specializedTotals]);
 
   const columns: Column<DayBookDisplayRow>[] = [
     { key: "srNo", title: "Sr.No", align: "center" },
@@ -143,22 +286,30 @@ export default function DayBookPage() {
     },
   ];
 
-  const selectedDateLabel = selectedDate ? format(new Date(selectedDate), "dd MMM yyyy") : "";
+  const title = pageTitle || "Day Book";
+  const selectedDateLabel = (selectedDate || dateForApi) ? format(new Date(selectedDate || dateForApi), "dd MMM yyyy") : "";
+  const subtitle = isSpecialized
+    ? (fromDate || toDate ? `${title} (${fromDate ? format(new Date(fromDate), "dd MMM yy") : "..."} - ${toDate ? format(new Date(toDate), "dd MMM yy") : "..."})` : title)
+    : selectedDateLabel ? `Day Book (${selectedDateLabel})` : "Daily voucher summary";
+
+  const printParams = isSpecialized
+    ? { dateFrom: fromDate || undefined, dateTo: toDate || undefined, kind: initialTab }
+    : { date: dateForApi };
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Day Book</h1>
-          <p className="text-sm text-muted-foreground">
-            {selectedDateLabel ? `Day Book (${selectedDateLabel})` : "Daily voucher summary"}
-          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          <p className="text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        <PrintActions
-          docKey={docKeys.dayBook}
-          params={{ date: selectedDate || undefined }}
-          title="Day Book"
-        />
+        {!isSpecialized && (
+          <PrintActions
+            docKey={docKeys.dayBook}
+            params={printParams as { date?: string }}
+            title={title}
+          />
+        )}
       </div>
 
       <Card>
