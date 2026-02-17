@@ -53,7 +53,7 @@ type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
 type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
 type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
 type JournalEntryInput = Omit<InsertJournalVoucherEntry, "id" | "journalVoucherId">;
-type CashTxInput = Omit<InsertCashTransaction, "id" | "createdAt">;
+type CashTxInput = Omit<InsertCashTransaction, "id" | "createdAt" | "referenceType" | "referenceId"> & Partial<Pick<InsertCashTransaction, "journalVoucherId" | "receiptVoucherId" | "contraVoucherId" | "expenseEntryId">>;
 type LedgerReportRow = {
   id: number;
   entryDate: Date | number;
@@ -451,7 +451,7 @@ export interface IStorage {
   createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher>;
   updateReceiptVoucher(id: number, data: Partial<InsertReceiptVoucher>, lines: ReceiptLineInput[]): Promise<ReceiptVoucher | undefined>;
   deleteReceiptVoucher(id: number): Promise<boolean>;
-  getNextReceiptVoucherNumber(voucherType?: string): Promise<string>;
+  getNextReceiptVoucherNumber(voucherType?: "CR" | "CP" | "BR" | "BP"): Promise<string>;
 
   // Journal Vouchers
   getJournalVouchers(): Promise<(JournalVoucher & { entries: JournalVoucherEntry[] })[]>;
@@ -535,13 +535,108 @@ export interface IStorage {
     return new Date();
   }
 
-  function normalizeReceiptVoucherType(value?: string | null): "CR" | "DR" {
+  function normalizeReceiptVoucherType(value?: string | null): "CR" | "CP" | "BR" | "BP" {
     const v = (value || "CR").toString().trim().toUpperCase();
-    if (v === "CR" || v === "DR") return v;
-    if (v === "RECEIPT" || v === "CRV" || v === "BRV") return "CR";
-    if (v === "PAYMENT" || v === "CPV" || v === "BPV") return "DR";
+    if (v === "CR" || v === "CP" || v === "BR" || v === "BP") return v;
+    if (v === "RECEIPT" || v === "CRV") return "CR";
+    if (v === "BRV") return "BR";
+    if (v === "PAYMENT" || v === "CPV" || v === "DR") return "CP";
+    if (v === "BPV") return "BP";
     return "CR";
   }
+
+function normalizeLedgerReferenceType(value?: string | null): "sale" | "purchase" | "receipt_voucher" | "journal_voucher" | "contra_voucher" | "expense" | null {
+  const v = (value || "").trim().toLowerCase();
+  if (!v) return null;
+  if (v === "sale") return "sale";
+  if (v === "purchase") return "purchase";
+  if (v === "receipt_voucher" || v === "receipt" || v === "payment" || v === "cr" || v === "cp" || v === "br" || v === "bp") return "receipt_voucher";
+  if (v === "journal_voucher" || v === "journal" || v === "jv") return "journal_voucher";
+  if (v === "contra_voucher" || v === "contra" || v === "cv") return "contra_voucher";
+  if (v === "expense" || v === "expense_entry") return "expense";
+  return null;
+}
+
+function getLedgerReference(entry: LedgerEntry): { referenceType: string | null; referenceId: number | null } {
+  if (entry.saleId) return { referenceType: "sale", referenceId: entry.saleId };
+  if (entry.purchaseId) return { referenceType: "purchase", referenceId: entry.purchaseId };
+  if (entry.receiptVoucherId) return { referenceType: "receipt_voucher", referenceId: entry.receiptVoucherId };
+  if (entry.journalVoucherId) return { referenceType: "journal_voucher", referenceId: entry.journalVoucherId };
+  if (entry.contraVoucherId) return { referenceType: "contra_voucher", referenceId: entry.contraVoucherId };
+  if (entry.expenseEntryId) return { referenceType: "expense", referenceId: entry.expenseEntryId };
+  return { referenceType: null, referenceId: null };
+}
+
+function getLedgerReferenceFromValues(entry: {
+  saleId?: number | null;
+  purchaseId?: number | null;
+  receiptVoucherId?: number | null;
+  journalVoucherId?: number | null;
+  contraVoucherId?: number | null;
+  expenseEntryId?: number | null;
+}): { referenceType: string | null; referenceId: number | null } {
+  if (entry.saleId) return { referenceType: "sale", referenceId: entry.saleId };
+  if (entry.purchaseId) return { referenceType: "purchase", referenceId: entry.purchaseId };
+  if (entry.receiptVoucherId) return { referenceType: "receipt_voucher", referenceId: entry.receiptVoucherId };
+  if (entry.journalVoucherId) return { referenceType: "journal_voucher", referenceId: entry.journalVoucherId };
+  if (entry.contraVoucherId) return { referenceType: "contra_voucher", referenceId: entry.contraVoucherId };
+  if (entry.expenseEntryId) return { referenceType: "expense", referenceId: entry.expenseEntryId };
+  return { referenceType: null, referenceId: null };
+}
+
+function getLedgerReferenceColumns(referenceType?: string | null, referenceId?: number | null): Partial<InsertLedgerEntry> {
+  const id = referenceId != null ? Number(referenceId) : null;
+  if (!id) return {};
+  const normalized = normalizeLedgerReferenceType(referenceType);
+  if (normalized === "sale") return { saleId: id };
+  if (normalized === "purchase") return { purchaseId: id };
+  if (normalized === "receipt_voucher") return { receiptVoucherId: id };
+  if (normalized === "journal_voucher") return { journalVoucherId: id };
+  if (normalized === "contra_voucher") return { contraVoucherId: id };
+  if (normalized === "expense") return { expenseEntryId: id };
+  return {};
+}
+
+function getCashReferenceColumns(referenceType?: string | null, referenceId?: number | null): Partial<InsertCashTransaction> {
+  const id = referenceId != null ? Number(referenceId) : null;
+  if (!id) return {};
+  const normalized = normalizeLedgerReferenceType(referenceType);
+  if (normalized === "receipt_voucher") return { receiptVoucherId: id };
+  if (normalized === "journal_voucher") return { journalVoucherId: id };
+  if (normalized === "contra_voucher") return { contraVoucherId: id };
+  if (normalized === "expense") return { expenseEntryId: id };
+  return {};
+}
+
+function getTaxLedgerReferenceColumns(sourceType?: string | null, sourceId?: number | null): { saleId?: number; purchaseId?: number } {
+  const id = sourceId != null ? Number(sourceId) : null;
+  if (!id) return {};
+  const normalized = (sourceType || "").trim().toLowerCase();
+  if (normalized === "sale") return { saleId: id };
+  if (normalized === "purchase") return { purchaseId: id };
+  return {};
+}
+
+function buildLedgerReferenceWhere(referenceType?: string | null, referenceId?: number | null) {
+  const normalized = normalizeLedgerReferenceType(referenceType);
+  const id = referenceId != null ? Number(referenceId) : null;
+  if (!normalized) return undefined;
+  if (normalized === "sale") return id ? eq(ledgerEntries.saleId, id) : sql`${ledgerEntries.saleId} IS NOT NULL`;
+  if (normalized === "purchase") return id ? eq(ledgerEntries.purchaseId, id) : sql`${ledgerEntries.purchaseId} IS NOT NULL`;
+  if (normalized === "receipt_voucher") return id ? eq(ledgerEntries.receiptVoucherId, id) : sql`${ledgerEntries.receiptVoucherId} IS NOT NULL`;
+  if (normalized === "journal_voucher") return id ? eq(ledgerEntries.journalVoucherId, id) : sql`${ledgerEntries.journalVoucherId} IS NOT NULL`;
+  if (normalized === "contra_voucher") return id ? eq(ledgerEntries.contraVoucherId, id) : sql`${ledgerEntries.contraVoucherId} IS NOT NULL`;
+  if (normalized === "expense") return id ? eq(ledgerEntries.expenseEntryId, id) : sql`${ledgerEntries.expenseEntryId} IS NOT NULL`;
+  return undefined;
+}
+
+async function getEmployeeCurrentSalary(employeeId: number): Promise<string> {
+  const latest = await db.query.employeeSalaryStructures.findFirst({
+    where: eq(employeeSalaryStructures.employeeId, employeeId),
+    orderBy: [desc(employeeSalaryStructures.effectiveFrom)],
+  });
+  return latest?.basicSalary ?? "0";
+}
 
 function resolveReceiptLineAmount(line: ReceiptLineInput & { amount?: string | number | null }): number {
   const debitValue = parseAmount(line.debit || "0");
@@ -564,12 +659,12 @@ function ensureSaleItemUnitColumn() {
 
 ensureSaleItemUnitColumn();
 
-function collectSaleIdsFromReceiptLines(lines: Array<{ referenceType?: string | null; referenceId?: number | null }>) {
+function collectSaleIdsFromReceiptLines(lines: Array<{ saleId?: number | null }>) {
   return Array.from(
     new Set(
       lines
-        .filter((line) => line.referenceType === "sale" && line.referenceId != null)
-        .map((line) => Number(line.referenceId)),
+        .filter((line) => line.saleId != null)
+        .map((line) => Number(line.saleId)),
     ),
   );
 }
@@ -585,8 +680,7 @@ function recomputeSalePaidAmounts(tx: DbClient, saleIds: number[]) {
       .leftJoin(receiptVouchers, eq(receiptVoucherLines.voucherId, receiptVouchers.id))
       .where(
         and(
-          eq(receiptVoucherLines.referenceType, "sale"),
-          eq(receiptVoucherLines.referenceId, saleId),
+          eq(receiptVoucherLines.saleId, saleId),
           eq(receiptVouchers.voucherType, "CR"),
           isNull(receiptVouchers.deletedAt),
         ),
@@ -1022,8 +1116,7 @@ export class DatabaseStorage implements IStorage {
         transactionType: "debit",
         amount: amount.toString(),
         description: `Expense ${voucherNo}`,
-        referenceType: "expense",
-        referenceId: created.id,
+        expenseEntryId: created.id,
         entryDate: postingDate,
       });
       this.postLedgerEntry(client, {
@@ -1031,8 +1124,7 @@ export class DatabaseStorage implements IStorage {
         transactionType: "credit",
         amount: amount.toString(),
         description: `Expense ${voucherNo}`,
-        referenceType: "expense",
-        referenceId: created.id,
+        expenseEntryId: created.id,
         entryDate: postingDate,
       });
 
@@ -1067,11 +1159,11 @@ export class DatabaseStorage implements IStorage {
       const priorEntries = tx
         .select()
         .from(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .where(eq(ledgerEntries.expenseEntryId, id))
         .all();
       const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
       tx.delete(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .where(eq(ledgerEntries.expenseEntryId, id))
         .run();
       this.recomputeAccountBalances(client, affectedAccountIds);
 
@@ -1089,8 +1181,7 @@ export class DatabaseStorage implements IStorage {
         transactionType: "debit",
         amount: amount.toString(),
         description: `Expense ${existing.voucherNo}`,
-        referenceType: "expense",
-        referenceId: id,
+        expenseEntryId: id,
         entryDate: postingDate,
       });
       this.postLedgerEntry(client, {
@@ -1098,8 +1189,7 @@ export class DatabaseStorage implements IStorage {
         transactionType: "credit",
         amount: amount.toString(),
         description: `Expense ${existing.voucherNo}`,
-        referenceType: "expense",
-        referenceId: id,
+        expenseEntryId: id,
         entryDate: postingDate,
       });
 
@@ -1119,11 +1209,11 @@ export class DatabaseStorage implements IStorage {
       const priorEntries = tx
         .select()
         .from(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .where(eq(ledgerEntries.expenseEntryId, id))
         .all();
       const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
       tx.delete(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, id)))
+        .where(eq(ledgerEntries.expenseEntryId, id))
         .run();
       this.recomputeAccountBalances(client, affectedAccountIds);
       tx.delete(expenseEntries).where(eq(expenseEntries.id, id)).run();
@@ -1304,7 +1394,7 @@ export class DatabaseStorage implements IStorage {
     const asOf = startOfPayrollMonth(month);
 
     return db.transaction((tx) => {
-      const activeEmployees = tx.select().from(employees).where(eq(employees.status, "Active" as any)).all();
+      const activeEmployees = tx.select().from(employees).where(eq(employees.status, "active" as any)).all();
       let created = 0;
       let skipped = 0;
 
@@ -1328,7 +1418,7 @@ export class DatabaseStorage implements IStorage {
           .limit(1)
           .all();
 
-        const basic = parseAmount(structure?.basicSalary ?? emp.basicSalary ?? "0");
+        const basic = parseAmount(structure?.basicSalary ?? "0");
         const allowances = parseAmount(structure?.allowances ?? "0");
         const deductions = parseAmount(structure?.deductions ?? "0");
         const net = Math.max(basic + allowances - deductions, 0);
@@ -1340,7 +1430,6 @@ export class DatabaseStorage implements IStorage {
           allowances: allowances.toString(),
           deductions: deductions.toString(),
           netSalary: net.toString(),
-          paymentStatus: "Unpaid",
           status: "generated",
           createdBy: performedBy?.userId,
           createdAt: new Date(),
@@ -1393,15 +1482,12 @@ export class DatabaseStorage implements IStorage {
         const year = new Date().getFullYear();
         const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
         const voucherNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
-        const amountInWords = `${toWords(Math.round(total))} only`;
-
         const v = tx.insert(journalVouchers).values({
           voucherNo,
           voucherDate,
           narration,
           status: "approved",
           totalAmount: total.toString(),
-          amountInWords,
           createdBy: performedBy?.userId,
           approvedBy: performedBy?.userId,
           createdAt: new Date(),
@@ -1450,8 +1536,8 @@ export class DatabaseStorage implements IStorage {
       const client = tx as unknown as DbClient;
       const [payroll] = tx.select().from(payrolls).where(eq(payrolls.id, payrollId)).all();
       if (!payroll) return undefined;
+      if (payroll.status === "paid") throw new Error("Payroll is already paid");
       if (payroll.status !== "approved") throw new Error("Payroll must be approved before payment");
-      if (payroll.paymentStatus === "Paid") throw new Error("Payroll is already paid");
 
       const [emp] = tx.select().from(employees).where(eq(employees.id, payroll.employeeId)).all();
       if (!emp) throw new Error("Employee not found");
@@ -1485,15 +1571,12 @@ export class DatabaseStorage implements IStorage {
       const year = new Date().getFullYear();
       const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
       const voucherNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
-      const amountInWords = `${toWords(Math.round(total))} only`;
-
       const v = tx.insert(journalVouchers).values({
         voucherNo,
         voucherDate: paymentDate,
         narration,
         status: "approved",
         totalAmount: total.toString(),
-        amountInWords,
         createdBy: performedBy?.userId,
         approvedBy: performedBy?.userId,
         createdAt: new Date(),
@@ -1511,7 +1594,6 @@ export class DatabaseStorage implements IStorage {
       this.postJournalToLedger(client, v as any, normalized);
 
       const updated = tx.update(payrolls).set({
-        paymentStatus: "Paid",
         paymentMethod: payment.method,
         paymentAccountId: payment.method === "Bank" ? payment.paymentAccountId : null,
         status: "paid",
@@ -1663,16 +1745,17 @@ export class DatabaseStorage implements IStorage {
 
     // Auto record cash movement for system Cash in Hand
     if (account.isSystemAccount && account.name === "Cash in Hand") {
-      const tx: CashTxInput = {
+      const ref = getLedgerReference(newEntry as LedgerEntry);
+      const cashCols = getCashReferenceColumns(ref.referenceType, ref.referenceId) as any;
+      const txObj: CashTxInput = {
         accountId: account.id,
         transactionType: entry.transactionType === "debit" ? "DEBIT" : "CREDIT",
         transactionDate: entry.entryDate || new Date(),
-        referenceType: entry.referenceType,
-        referenceId: entry.referenceId,
+        ...cashCols,
         amount: entry.amount,
         narration: entry.description,
       };
-      client.insert(cashTransactions).values(tx).run();
+      client.insert(cashTransactions).values(txObj).run();
     }
 
     return newEntry as any;
@@ -2122,8 +2205,6 @@ export class DatabaseStorage implements IStorage {
       const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
       const paidAmount = 0;
       const balanceDue = grandAmount;
-      const amountInWords = `${toWords(Math.round(grandAmount))} only`;
-
       const newPurchase = tx.insert(purchases).values({
         ...purchase,
         invoiceNumber,
@@ -2143,7 +2224,6 @@ export class DatabaseStorage implements IStorage {
         balanceDue: balanceDue.toString(),
         brokerCommissionAmount: brokerCommission.toString(),
         paidAmount: paidAmount.toString(),
-        amountInWords,
       }).returning().get();
 
       for (const item of normalizedItems) {
@@ -2195,8 +2275,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount,
           description: purchaseBaseLabel,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
         pushLine({
@@ -2204,8 +2283,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount,
           description: purchaseBaseLabel,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
       }
@@ -2218,8 +2296,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount,
           description: commissionLabel,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
         pushLine({
@@ -2227,8 +2304,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount,
           description: commissionLabel,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
       }
@@ -2274,8 +2350,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: entryType,
           amount: amt.toString(),
           description: label,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
         pushLine({
@@ -2283,8 +2358,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: entryType === "debit" ? "credit" : "debit",
           amount: amt.toString(),
           description: label,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
       }
@@ -2305,8 +2379,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount: taxAmount.toString(),
           description: taxLabel,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
         pushLine({
@@ -2314,14 +2387,12 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount: taxAmount.toString(),
           description: taxLabel,
-          referenceType: "purchase",
-          referenceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           entryDate: postingDate,
         });
         tx.insert(taxLedgers).values({
           taxTypeId: taxTypeId ?? null,
-          sourceType: "purchase",
-          sourceId: newPurchase.id,
+          purchaseId: newPurchase.id,
           taxBase: lineSubtotal.toString(),
           taxAmount: taxAmount.toString(),
           postingDate,
@@ -2360,11 +2431,11 @@ export class DatabaseStorage implements IStorage {
       const priorEntries = tx
         .select()
         .from(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
+        .where(buildLedgerReferenceWhere("purchase", id) as any)
         .all();
       const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
       tx.delete(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
+        .where(buildLedgerReferenceWhere("purchase", id) as any)
         .run();
       this.recomputeAccountBalances(client, affectedAccountIds);
 
@@ -2404,8 +2475,6 @@ export class DatabaseStorage implements IStorage {
       const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
       const paidAmount = parseAmount(existing.paidAmount ?? 0);
       const balanceDue = grandAmount - paidAmount;
-      const amountInWords = `${toWords(Math.round(grandAmount))} only`;
-
       const updatedPurchase = tx.update(purchases).set({
         ...purchase,
         subtotal: lineSubtotal.toString(),
@@ -2421,7 +2490,6 @@ export class DatabaseStorage implements IStorage {
         balanceDue: balanceDue.toString(),
         brokerCommissionAmount: brokerCommission.toString(),
         paidAmount: paidAmount.toString(),
-        amountInWords,
       }).where(eq(purchases.id, id)).returning().get();
 
       // Replace items
@@ -2450,15 +2518,14 @@ export class DatabaseStorage implements IStorage {
 
       const pushLine = (line: Omit<InsertLedgerEntry, "balance">) => ledgerLines.push(line);
 
-      if (baseAmount > 0) {
+        if (baseAmount > 0) {
         const amount = baseAmount.toString();
         pushLine({
           accountId: debitAccountId,
           transactionType: "debit",
           amount,
           description: purchaseBaseLabel,
-          referenceType: "purchase",
-          referenceId: id,
+            ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
         pushLine({
@@ -2466,13 +2533,12 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount,
           description: purchaseBaseLabel,
-          referenceType: "purchase",
-          referenceId: id,
+            ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
       }
 
-      if (brokerCommission > 0) {
+        if (brokerCommission > 0) {
         const amount = brokerCommission.toString();
         const commissionLabel = "BROKER COMMISSION";
         pushLine({
@@ -2480,8 +2546,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount,
           description: commissionLabel,
-          referenceType: "purchase",
-          referenceId: id,
+            ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
         pushLine({
@@ -2489,8 +2554,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount,
           description: commissionLabel,
-          referenceType: "purchase",
-          referenceId: id,
+            ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
       }
@@ -2536,8 +2600,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: entryType,
           amount: amt.toString(),
           description: label,
-          referenceType: "purchase",
-          referenceId: id,
+          ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
         pushLine({
@@ -2545,8 +2608,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: entryType === "debit" ? "credit" : "debit",
           amount: amt.toString(),
           description: label,
-          referenceType: "purchase",
-          referenceId: id,
+          ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
       }
@@ -2567,8 +2629,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount: taxAmount.toString(),
           description: taxLabel,
-          referenceType: "purchase",
-          referenceId: id,
+          ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
         pushLine({
@@ -2576,8 +2637,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount: taxAmount.toString(),
           description: taxLabel,
-          referenceType: "purchase",
-          referenceId: id,
+          ...getLedgerReferenceColumns("purchase", id),
           entryDate: postingDate,
         });
       }
@@ -2623,11 +2683,11 @@ export class DatabaseStorage implements IStorage {
       const priorEntries = tx
         .select()
         .from(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
+        .where(buildLedgerReferenceWhere("purchase", id) as any)
         .all();
       const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
       tx.delete(ledgerEntries)
-        .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, id)))
+        .where(buildLedgerReferenceWhere("purchase", id) as any)
         .run();
       this.recomputeAccountBalances(client, affectedAccountIds);
 
@@ -2648,7 +2708,7 @@ export class DatabaseStorage implements IStorage {
       tx.update(purchaseItems).set({ deletedAt: new Date(), deletedBy }).where(eq(purchaseItems.purchaseId, id)).run();
       tx.update(purchases).set({ deletedAt: new Date(), deletedBy }).where(eq(purchases.id, id)).run();
       tx.delete(purchaseCharges).where(eq(purchaseCharges.purchaseId, id)).run();
-      tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "purchase"), eq(taxLedgers.sourceId, id))).run();
+      tx.delete(taxLedgers).where(eq(taxLedgers.purchaseId, id)).run();
 
       return true;
     });
@@ -2841,8 +2901,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount,
           description: saleBaseLabel,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
         pushLine({
@@ -2850,8 +2909,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount,
           description: saleBaseLabel,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
       }
@@ -2871,8 +2929,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: entryType,
           amount,
           description: line.label,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
         pushLine({
@@ -2880,8 +2937,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: entryType === "credit" ? "debit" : "credit",
           amount,
           description: line.label,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
       }
@@ -2902,8 +2958,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount: taxAmount.toString(),
           description: taxLabel,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
         pushLine({
@@ -2911,14 +2966,12 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount: taxAmount.toString(),
           description: taxLabel,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
         tx.insert(taxLedgers).values({
           taxTypeId: taxTypeId ?? null,
-          sourceType: "sale",
-          sourceId: newSale.id,
+          saleId: newSale.id,
           taxBase: subtotal.toString(),
           taxAmount: taxAmount.toString(),
           postingDate,
@@ -2945,8 +2998,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "debit",
           amount: totalCogs.toString(),
           description: `COGS ${invoiceNumber}`,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
         this.postLedgerEntry(client, {
@@ -2954,8 +3006,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: "credit",
           amount: totalCogs.toString(),
           description: `Inventory Relief ${invoiceNumber}`,
-          referenceType: "sale",
-          referenceId: newSale.id,
+          ...getLedgerReferenceColumns("sale", newSale.id),
           entryDate: postingDate,
         });
       }
@@ -2978,11 +3029,11 @@ export class DatabaseStorage implements IStorage {
           const priorEntries = tx
             .select()
             .from(ledgerEntries)
-            .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
+            .where(buildLedgerReferenceWhere("sale", id) as any)
             .all();
           const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
           tx.delete(ledgerEntries)
-            .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
+            .where(buildLedgerReferenceWhere("sale", id) as any)
             .run();
           this.recomputeAccountBalances(client, affectedAccountIds);
 
@@ -3041,7 +3092,7 @@ export class DatabaseStorage implements IStorage {
           this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
         }
 
-        tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "sale"), eq(taxLedgers.sourceId, id))).run();
+        tx.delete(taxLedgers).where(eq(taxLedgers.saleId, id)).run();
 
         const customerId = sale.customerId ?? existing.customerId;
         const ledgerLines: Omit<InsertLedgerEntry, "balance">[] = [];
@@ -3057,8 +3108,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: "debit",
             amount,
             description: saleBaseLabel,
-            referenceType: "sale",
-            referenceId: id,
+            ...getLedgerReferenceColumns("sale", id),
             entryDate: postingDate,
           });
           pushLine({
@@ -3066,8 +3116,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: "credit",
             amount,
             description: saleBaseLabel,
-            referenceType: "sale",
-            referenceId: id,
+            ...getLedgerReferenceColumns("sale", id),
             entryDate: postingDate,
           });
         }
@@ -3086,8 +3135,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: entryType,
             amount,
             description: line.label,
-            referenceType: "sale",
-            referenceId: id,
+            ...getLedgerReferenceColumns("sale", id),
             entryDate: postingDate,
           });
           pushLine({
@@ -3095,8 +3143,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: entryType === "credit" ? "debit" : "credit",
             amount,
             description: line.label,
-            referenceType: "sale",
-            referenceId: id,
+            ...getLedgerReferenceColumns("sale", id),
             entryDate: postingDate,
           });
         }
@@ -3117,8 +3164,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: "credit",
             amount: taxAmount.toString(),
             description: taxLabel,
-            referenceType: "sale",
-            referenceId: id,
+            ...getLedgerReferenceColumns("sale", id),
             entryDate: postingDate,
           });
           pushLine({
@@ -3126,14 +3172,12 @@ export class DatabaseStorage implements IStorage {
             transactionType: "debit",
             amount: taxAmount.toString(),
             description: taxLabel,
-            referenceType: "sale",
-            referenceId: id,
+            ...getLedgerReferenceColumns("sale", id),
             entryDate: postingDate,
           });
           tx.insert(taxLedgers).values({
             taxTypeId: taxTypeId ?? null,
-            sourceType: "sale",
-            sourceId: id,
+            saleId: id,
             taxBase: subtotal.toString(),
             taxAmount: taxAmount.toString(),
             postingDate,
@@ -3164,7 +3208,7 @@ export class DatabaseStorage implements IStorage {
           const priorEntries = tx
             .select()
             .from(ledgerEntries)
-            .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id)))
+            .where(buildLedgerReferenceWhere("sale", id) as any)
             .all();
           const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
 
@@ -3172,9 +3216,9 @@ export class DatabaseStorage implements IStorage {
             this.updateProductStockInternal(client, item.productId, item.quantity, "add");
           }
 
-          tx.delete(ledgerEntries).where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, id))).run();
+          tx.delete(ledgerEntries).where(buildLedgerReferenceWhere("sale", id) as any).run();
           this.recomputeAccountBalances(client, affectedAccountIds);
-          tx.delete(taxLedgers).where(and(eq(taxLedgers.sourceType, "sale"), eq(taxLedgers.sourceId, id))).run();
+          tx.delete(taxLedgers).where(eq(taxLedgers.saleId, id)).run();
           tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
         tx.delete(sales).where(eq(sales.id, id)).run();
 
@@ -3206,7 +3250,7 @@ export class DatabaseStorage implements IStorage {
       let opening = parseAmount(account.openingBalance || "0");
       if (startDate) {
         const movementWhere = [eq(ledgerEntries.accountId, accountId), lt(ledgerEntries.entryDate, startDate)];
-        if (referenceType) movementWhere.push(eq(ledgerEntries.referenceType, referenceType));
+        if (referenceType) movementWhere.push(buildLedgerReferenceWhere(referenceType, null) as any);
         const [movementRow] = db
           .select({
             total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = ${
@@ -3282,18 +3326,19 @@ export class DatabaseStorage implements IStorage {
 
       const byRef = new Map<string, typeof entriesBase>();
       for (const entry of entriesBase) {
-        if (!entry.referenceType || !entry.referenceId) continue;
-        const key = `${entry.referenceType}:${entry.referenceId}`;
+        const ref = getLedgerReference(entry as any);
+        if (!ref.referenceType || !ref.referenceId) continue;
+        const key = `${ref.referenceType}:${ref.referenceId}`;
         const list = byRef.get(key) || [];
         list.push(entry);
         byRef.set(key, list);
       }
 
       const purchaseIds = expandPurchase
-        ? Array.from(new Set(entriesBase.filter((e) => e.referenceType === "purchase").map((e) => e.referenceId).filter(Boolean) as number[]))
+        ? Array.from(new Set(entriesBase.filter((e) => getLedgerReference(e as any).referenceType === "purchase").map((e) => getLedgerReference(e as any).referenceId).filter(Boolean) as number[]))
         : [];
       const saleIds = expandSale
-        ? Array.from(new Set(entriesBase.filter((e) => e.referenceType === "sale").map((e) => e.referenceId).filter(Boolean) as number[]))
+        ? Array.from(new Set(entriesBase.filter((e) => getLedgerReference(e as any).referenceType === "sale").map((e) => getLedgerReference(e as any).referenceId).filter(Boolean) as number[]))
         : [];
 
       const purchaseItemSubtotalById = new Map<number, string>(
@@ -3408,8 +3453,7 @@ export class DatabaseStorage implements IStorage {
           transactionType: args.transactionType,
           amount: amount.toString(),
           description: args.description,
-          referenceType: args.refType,
-          referenceId: args.refId,
+          ...getLedgerReferenceColumns(args.refType, args.refId),
           debit: args.transactionType === "debit" ? amount.toString() : "0",
           credit: args.transactionType === "credit" ? amount.toString() : "0",
         } as LedgerEntry & { debit?: string; credit?: string };
@@ -3418,12 +3462,13 @@ export class DatabaseStorage implements IStorage {
       const result: typeof entriesBase = [];
       const processed = new Set<string>();
       for (const entry of entriesBase) {
-        if (!entry.referenceType || !entry.referenceId) {
+        const ref = getLedgerReference(entry as any);
+        if (!ref.referenceType || !ref.referenceId) {
           result.push(entry);
           continue;
         }
-        const refType = entry.referenceType;
-        const refId = entry.referenceId;
+        const refType = ref.referenceType as string;
+        const refId = ref.referenceId as number;
         const key = `${refType}:${refId}`;
         const list = byRef.get(key);
         if (!list || !shouldExpand(refType, refId, list)) {
@@ -3570,10 +3615,11 @@ export class DatabaseStorage implements IStorage {
 
     const byType = filteredEntries.reduce(
       (acc, e) => {
-        if (!e.referenceType || !e.referenceId) return acc;
-        const list = acc[e.referenceType] || [];
-        list.push(e.referenceId);
-        acc[e.referenceType] = list;
+        const ref = getLedgerReference(e as any);
+        if (!ref.referenceType || !ref.referenceId) return acc;
+        const list = acc[ref.referenceType] || [];
+        list.push(ref.referenceId as number);
+        acc[ref.referenceType] = list;
         return acc;
       },
       {} as Record<string, number[]>,
@@ -4033,21 +4079,22 @@ export class DatabaseStorage implements IStorage {
       const credit = parseAmount(entry.credit || "0");
       const delta = normalSide === "DEBIT" ? debit - credit : credit - debit;
       running += delta;
-      const voucher = resolveVoucher(entry.referenceType, entry.referenceId);
+      const ref = getLedgerReference(entry as any);
+      const voucher = resolveVoucher(ref.referenceType, ref.referenceId);
 
       let narration = entry.description || "";
-      if (entry.referenceType === "purchase") {
-        narration = buildPurchaseNarration(entry, entry.referenceId);
-      } else if (entry.referenceType === "sale") {
-        narration = buildSaleNarration(entry, entry.referenceId);
-      } else if (entry.referenceType === "receipt") {
-        narration = buildReceiptNarration(entry.referenceId);
-      } else if (entry.referenceType === "payment") {
-        narration = buildPaymentNarration(entry.referenceId);
-      } else if (entry.referenceType === "journal_voucher") {
-        narration = buildJournalNarration(entry.referenceId);
-      } else if (entry.referenceType === "expense") {
-        narration = buildExpenseNarration(entry.referenceId);
+      if (ref.referenceType === "purchase") {
+        narration = buildPurchaseNarration(entry, ref.referenceId as any);
+      } else if (ref.referenceType === "sale") {
+        narration = buildSaleNarration(entry, ref.referenceId as any);
+      } else if (ref.referenceType === "receipt") {
+        narration = buildReceiptNarration(ref.referenceId as any);
+      } else if (ref.referenceType === "payment") {
+        narration = buildPaymentNarration(ref.referenceId as any);
+      } else if (ref.referenceType === "journal_voucher") {
+        narration = buildJournalNarration(ref.referenceId as any);
+      } else if (ref.referenceType === "expense") {
+        narration = buildExpenseNarration(ref.referenceId as any);
       }
 
       const matches = narrationTokens.length === 0
@@ -4064,8 +4111,8 @@ export class DatabaseStorage implements IStorage {
         debit: debit.toString(),
         credit: credit.toString(),
         runningBalance: running.toString(),
-        referenceType: entry.referenceType,
-        referenceId: entry.referenceId,
+        referenceType: ref.referenceType,
+        referenceId: ref.referenceId,
       });
     }
 
@@ -4108,7 +4155,7 @@ export class DatabaseStorage implements IStorage {
     ): Promise<(LedgerEntry & { runningBalance?: string; debit?: string; credit?: string; openingBalance?: string })[]> {
     const whereClauses = [];
     if (accountId) whereClauses.push(eq(ledgerEntries.accountId, accountId));
-    if (referenceType) whereClauses.push(eq(ledgerEntries.referenceType, referenceType));
+    if (referenceType) whereClauses.push(buildLedgerReferenceWhere(referenceType, null) as any);
     if (startDate) whereClauses.push(gte(ledgerEntries.entryDate, startDate));
     if (endDate) whereClauses.push(lte(ledgerEntries.entryDate, endOfDay(endDate)));
 
@@ -4126,7 +4173,7 @@ export class DatabaseStorage implements IStorage {
     let opening = parseAmount(account?.openingBalance || "0");
     if (startDate) {
       const movementWhere = [eq(ledgerEntries.accountId, accountId), lt(ledgerEntries.entryDate, startDate)];
-      if (referenceType) movementWhere.push(eq(ledgerEntries.referenceType, referenceType));
+      if (referenceType) movementWhere.push(buildLedgerReferenceWhere(referenceType, null) as any);
 
       const [movementRow] = db
         .select({
@@ -4220,7 +4267,7 @@ export class DatabaseStorage implements IStorage {
     return { ...voucher, lines };
   }
 
-  async getNextReceiptVoucherNumber(voucherType = "CR"): Promise<string> {
+  async getNextReceiptVoucherNumber(voucherType: "CR" | "CP" | "BR" | "BP" = "CR"): Promise<string> {
     const year = new Date().getFullYear();
     const [last] = db.select().from(receiptVouchers)
       .where(eq(receiptVouchers.voucherType, voucherType))
@@ -4259,8 +4306,8 @@ export class DatabaseStorage implements IStorage {
           const amt = resolveReceiptLineAmount(line).toString();
           return {
             ...line,
-            debit: voucherType === "DR" ? amt : "0",
-            credit: voucherType === "CR" ? amt : "0",
+            debit: (voucherType === "CP" || voucherType === "BP") ? amt : "0",
+            credit: (voucherType === "CR" || voucherType === "BR") ? amt : "0",
           };
         });
 
@@ -4274,11 +4321,10 @@ export class DatabaseStorage implements IStorage {
 
       const normalizedLines = [...cleanLines, settlementLine];
       const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
-      const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
 
       const year = new Date().getFullYear();
       const [last] = tx.select().from(receiptVouchers)
-        .where(eq(receiptVouchers.voucherType, data.voucherType || "CR"))
+        .where(eq(receiptVouchers.voucherType, normalizeReceiptVoucherType(data.voucherType || "CR")))
         .orderBy(desc(receiptVouchers.id))
         .limit(1)
         .all();
@@ -4294,7 +4340,6 @@ export class DatabaseStorage implements IStorage {
         voucherNumber,
         totalDebit: totalDebit.toString(),
         totalCredit: totalCredit.toString(),
-        amountInWords,
         updatedAt: new Date(),
       }).returning().get();
 
@@ -4315,8 +4360,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: "debit",
             amount: debit.toString(),
             description: `Receipt ${voucher.voucherNumber}`,
-            referenceType: voucherType === "CR" ? "receipt" : "payment",
-            referenceId: voucher.id,
+            ...getLedgerReferenceColumns("receipt_voucher", voucher.id),
             entryDate: postingDate,
           });
         }
@@ -4326,8 +4370,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: "credit",
             amount: credit.toString(),
             description: `Receipt ${voucher.voucherNumber}`,
-            referenceType: voucherType === "CR" ? "receipt" : "payment",
-            referenceId: voucher.id,
+            ...getLedgerReferenceColumns("receipt_voucher", voucher.id),
             entryDate: postingDate,
           });
         }
@@ -4347,7 +4390,7 @@ export class DatabaseStorage implements IStorage {
 
       // Reverse previous ledger impacts by recalculating balances from remaining entries (simpler approach: adjust via new postings only)
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
-      tx.delete(ledgerEntries).where(and(eq(ledgerEntries.referenceType, existing.voucherType === "CR" ? "receipt" : "payment"), eq(ledgerEntries.referenceId, id))).run();
+      tx.delete(ledgerEntries).where(buildLedgerReferenceWhere("receipt_voucher", id) as any).run();
 
         const voucherType = normalizeReceiptVoucherType(data.voucherType || existing.voucherType || "CR");
         const settlementAccount =
@@ -4359,8 +4402,8 @@ export class DatabaseStorage implements IStorage {
           const amt = resolveReceiptLineAmount(line).toString();
           return {
             ...line,
-            debit: voucherType === "DR" ? amt : "0",
-            credit: voucherType === "CR" ? amt : "0",
+            debit: (voucherType === "CP" || voucherType === "BP") ? amt : "0",
+            credit: (voucherType === "CR" || voucherType === "BR") ? amt : "0",
           };
         });
 
@@ -4373,14 +4416,12 @@ export class DatabaseStorage implements IStorage {
 
       const normalizedLines = [...cleanLines, settlementLine];
       const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
-      const amountInWords = `${toWords(Math.round(totalDebit || totalCredit))} only`;
 
       const updated = tx.update(receiptVouchers).set({
         ...data,
         settlementAccountId: settlementAccount,
         totalDebit: totalDebit.toString(),
         totalCredit: totalCredit.toString(),
-        amountInWords,
         updatedAt: new Date(),
       }).where(eq(receiptVouchers.id, id)).returning().get();
 
@@ -4401,8 +4442,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: "debit",
             amount: debit.toString(),
             description: `Receipt ${updated.voucherNumber}`,
-            referenceType: voucherType === "CR" ? "receipt" : "payment",
-            referenceId: id,
+            ...getLedgerReferenceColumns("receipt_voucher", id),
             entryDate: postingDate,
           });
         }
@@ -4412,8 +4452,7 @@ export class DatabaseStorage implements IStorage {
             transactionType: "credit",
             amount: credit.toString(),
             description: `Receipt ${updated.voucherNumber}`,
-            referenceType: voucherType === "CR" ? "receipt" : "payment",
-            referenceId: id,
+            ...getLedgerReferenceColumns("receipt_voucher", id),
             entryDate: postingDate,
           });
         }
@@ -4428,15 +4467,14 @@ export class DatabaseStorage implements IStorage {
     if (!existing) return false;
       return db.transaction((tx) => {
         const client = tx as unknown as DbClient;
-        const refType = existing.voucherType === "CR" ? "receipt" : "payment";
         const priorEntries = tx
           .select()
           .from(ledgerEntries)
-          .where(and(eq(ledgerEntries.referenceType, refType), eq(ledgerEntries.referenceId, id)))
+          .where(buildLedgerReferenceWhere("receipt_voucher", id) as any)
           .all();
         const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
         tx.delete(ledgerEntries)
-          .where(and(eq(ledgerEntries.referenceType, refType), eq(ledgerEntries.referenceId, id)))
+          .where(buildLedgerReferenceWhere("receipt_voucher", id) as any)
           .run();
         this.recomputeAccountBalances(client, affectedAccountIds);
         tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
@@ -4520,8 +4558,7 @@ export class DatabaseStorage implements IStorage {
         transactionType: entry.entryType === "DEBIT" ? "debit" : "credit",
         amount,
         description: `Journal Voucher ${voucher.voucherNo}`,
-        referenceType: "journal_voucher",
-        referenceId: voucher.id,
+        ...getLedgerReferenceColumns("journal_voucher", voucher.id),
         entryDate: voucher.voucherDate ? new Date(voucher.voucherDate as any) : new Date(),
       });
     }
@@ -4542,7 +4579,6 @@ export class DatabaseStorage implements IStorage {
       const generatedNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
       const voucherNo = (data as any).voucherNo && (data as any).voucherNo !== "" ? (data as any).voucherNo : generatedNo;
 
-      const amountInWords = `${toWords(Math.round(total))} only`;
       const status = (data.status || "draft") as "draft" | "approved";
 
       const voucher = tx.insert(journalVouchers).values({
@@ -4550,7 +4586,6 @@ export class DatabaseStorage implements IStorage {
         voucherNo,
         voucherDate: postingDate,
         totalAmount: total.toString(),
-        amountInWords,
         status,
         updatedAt: new Date(),
       }).returning().get();
@@ -4582,9 +4617,8 @@ export class DatabaseStorage implements IStorage {
     const { normalized, total } = this.normalizeJournalEntries(entries);
 
     return db.transaction((tx) => {
-      const amountInWords = `${toWords(Math.round(total))} only`;
 
-      tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
+    tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
 
       for (const entry of normalized) {
         tx.insert(journalVoucherEntries).values({
@@ -4600,7 +4634,7 @@ export class DatabaseStorage implements IStorage {
         createdBy: data.createdBy ?? existing.createdBy,
         status: existing.status,
         totalAmount: total.toString(),
-        amountInWords,
+        
         updatedAt: new Date(),
       }).where(eq(journalVouchers.id, id)).returning().all();
 
@@ -4618,14 +4652,12 @@ export class DatabaseStorage implements IStorage {
       const entries = tx.select().from(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).all();
       this.ensureAccountsExist(entries);
       const { total } = this.normalizeJournalEntries(entries);
-      const amountInWords = `${toWords(Math.round(total))} only`;
       const postingDate = existing.voucherDate ? new Date(existing.voucherDate as any) : new Date();
       this.assertPostingAllowed(client, postingDate, "journal voucher approval");
 
       const [updated] = tx.update(journalVouchers).set({
         status: "approved",
         approvedBy: approverId ?? existing.approvedBy,
-        amountInWords,
         totalAmount: total.toString(),
         updatedAt: new Date(),
       }).where(eq(journalVouchers.id, id)).returning().all();
@@ -5402,19 +5434,19 @@ export class DatabaseStorage implements IStorage {
       cogsAccountIds.length
         ? db
             .select({
-              saleId: ledgerEntries.referenceId,
+              saleId: ledgerEntries.saleId,
               amount: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = 'debit' THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
             })
             .from(ledgerEntries)
             .where(
               and(
                 inArray(ledgerEntries.accountId, cogsAccountIds),
-                eq(ledgerEntries.referenceType, "sale"),
+                buildLedgerReferenceWhere("sale", null) as any,
                 gte(ledgerEntries.entryDate, from),
                 lte(ledgerEntries.entryDate, to),
               ),
             )
-            .groupBy(ledgerEntries.referenceId)
+            .groupBy(ledgerEntries.saleId)
             .all()
             .map((r) => [r.saleId ?? 0, r.amount])
         : [],
@@ -5484,9 +5516,10 @@ export class DatabaseStorage implements IStorage {
           .all()
       : [{ total: "0" }];
     const openingValue = parseAmount(openingRow?.total || "0");
+    const balType: "" | "CR" | "DR" = openingValue === 0 ? "" : openingValue >= 0 ? "DR" : "CR";
     const openingBalance = {
       amount: Math.abs(openingValue).toString(),
-      type: openingValue === 0 ? "" : openingValue >= 0 ? "DR" : "CR",
+      type: balType,
     };
 
     const purchaseRows = db
@@ -5656,8 +5689,12 @@ export class DatabaseStorage implements IStorage {
         transactionType: ledgerEntries.transactionType,
         amount: ledgerEntries.amount,
         description: ledgerEntries.description,
-        referenceType: ledgerEntries.referenceType,
-        referenceId: ledgerEntries.referenceId,
+        saleId: ledgerEntries.saleId,
+        purchaseId: ledgerEntries.purchaseId,
+        receiptVoucherId: ledgerEntries.receiptVoucherId,
+        journalVoucherId: ledgerEntries.journalVoucherId,
+        contraVoucherId: ledgerEntries.contraVoucherId,
+        expenseEntryId: ledgerEntries.expenseEntryId,
         accountId: ledgerEntries.accountId,
         accountName: accounts.name,
         accountType: accounts.type,
@@ -5674,8 +5711,9 @@ export class DatabaseStorage implements IStorage {
 
     const groupMap = new Map<string, Group>();
     for (const entry of entries) {
-      if (!entry.referenceType || !entry.referenceId) continue;
-      const key = `${entry.referenceType}:${entry.referenceId}`;
+      const ref = getLedgerReferenceFromValues(entry as any);
+      if (!ref.referenceType || !ref.referenceId) continue;
+      const key = `${ref.referenceType}:${ref.referenceId}`;
       const meta = voucherMetaByKey.get(key);
       if (!meta) continue;
       const group = groupMap.get(key);
@@ -6195,7 +6233,7 @@ export class DatabaseStorage implements IStorage {
         allowances: payrolls.allowances,
         deductions: payrolls.deductions,
         netSalary: payrolls.netSalary,
-        paymentStatus: payrolls.paymentStatus,
+        status: payrolls.status,
         employeeName: employees.name,
         accountId: employees.accountId,
       })
@@ -6207,7 +6245,7 @@ export class DatabaseStorage implements IStorage {
 
     const mapped = rows.map((r) => {
       const net = parseAmount(r.netSalary || "0");
-      const paid = r.paymentStatus === "Paid" ? net : 0;
+      const paid = (r as any).status === "paid" ? net : 0;
       const balance = Math.max(net - paid, 0);
       return {
         accountId: r.accountId ?? null,
@@ -6301,18 +6339,23 @@ export class DatabaseStorage implements IStorage {
             transactionType: ledgerEntries.transactionType,
             amount: ledgerEntries.amount,
             description: ledgerEntries.description,
-            referenceType: ledgerEntries.referenceType,
-            referenceId: ledgerEntries.referenceId,
+            saleId: ledgerEntries.saleId,
+            purchaseId: ledgerEntries.purchaseId,
+            receiptVoucherId: ledgerEntries.receiptVoucherId,
+            journalVoucherId: ledgerEntries.journalVoucherId,
+            contraVoucherId: ledgerEntries.contraVoucherId,
+            expenseEntryId: ledgerEntries.expenseEntryId,
             accountId: ledgerEntries.accountId,
             accountName: accounts.name,
           })
           .from(ledgerEntries)
           .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-          .where(and(eq(ledgerEntries.referenceType, "sale"), eq(ledgerEntries.referenceId, referenceId)))
+          .where(buildLedgerReferenceWhere("sale", referenceId) as any)
           .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
           .all()
           .map((le) => ({
             ...le,
+            ...getLedgerReferenceFromValues(le as any),
             description: saleNarration || le.description,
             debit: le.transactionType === "debit" ? le.amount : "0",
             credit: le.transactionType === "credit" ? le.amount : "0",
@@ -6400,18 +6443,23 @@ export class DatabaseStorage implements IStorage {
             transactionType: ledgerEntries.transactionType,
             amount: ledgerEntries.amount,
             description: ledgerEntries.description,
-            referenceType: ledgerEntries.referenceType,
-            referenceId: ledgerEntries.referenceId,
+            saleId: ledgerEntries.saleId,
+            purchaseId: ledgerEntries.purchaseId,
+            receiptVoucherId: ledgerEntries.receiptVoucherId,
+            journalVoucherId: ledgerEntries.journalVoucherId,
+            contraVoucherId: ledgerEntries.contraVoucherId,
+            expenseEntryId: ledgerEntries.expenseEntryId,
             accountId: ledgerEntries.accountId,
             accountName: accounts.name,
           })
           .from(ledgerEntries)
           .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-          .where(and(eq(ledgerEntries.referenceType, "purchase"), eq(ledgerEntries.referenceId, referenceId)))
+          .where(buildLedgerReferenceWhere("purchase", referenceId) as any)
           .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
           .all()
           .map((le) => ({
             ...le,
+            ...getLedgerReferenceFromValues(le as any),
             description: purchaseNarration || le.description,
             debit: le.transactionType === "debit" ? le.amount : "0",
             credit: le.transactionType === "credit" ? le.amount : "0",
@@ -6431,18 +6479,23 @@ export class DatabaseStorage implements IStorage {
             transactionType: ledgerEntries.transactionType,
             amount: ledgerEntries.amount,
             description: ledgerEntries.description,
-            referenceType: ledgerEntries.referenceType,
-            referenceId: ledgerEntries.referenceId,
+            saleId: ledgerEntries.saleId,
+            purchaseId: ledgerEntries.purchaseId,
+            receiptVoucherId: ledgerEntries.receiptVoucherId,
+            journalVoucherId: ledgerEntries.journalVoucherId,
+            contraVoucherId: ledgerEntries.contraVoucherId,
+            expenseEntryId: ledgerEntries.expenseEntryId,
             accountId: ledgerEntries.accountId,
             accountName: accounts.name,
           })
           .from(ledgerEntries)
           .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-          .where(and(eq(ledgerEntries.referenceType, "expense"), eq(ledgerEntries.referenceId, referenceId)))
+          .where(buildLedgerReferenceWhere("expense", referenceId) as any)
           .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
           .all()
           .map((le) => ({
             ...le,
+            ...getLedgerReferenceFromValues(le as any),
             debit: le.transactionType === "debit" ? le.amount : "0",
             credit: le.transactionType === "credit" ? le.amount : "0",
           }));
@@ -6536,18 +6589,23 @@ export class DatabaseStorage implements IStorage {
           transactionType: ledgerEntries.transactionType,
           amount: ledgerEntries.amount,
           description: ledgerEntries.description,
-          referenceType: ledgerEntries.referenceType,
-          referenceId: ledgerEntries.referenceId,
+          saleId: ledgerEntries.saleId,
+          purchaseId: ledgerEntries.purchaseId,
+          receiptVoucherId: ledgerEntries.receiptVoucherId,
+          journalVoucherId: ledgerEntries.journalVoucherId,
+          contraVoucherId: ledgerEntries.contraVoucherId,
+          expenseEntryId: ledgerEntries.expenseEntryId,
           accountId: ledgerEntries.accountId,
           accountName: accounts.name,
         })
         .from(ledgerEntries)
         .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-        .where(and(eq(ledgerEntries.referenceType, type), eq(ledgerEntries.referenceId, referenceId)))
+        .where(buildLedgerReferenceWhere(type, referenceId) as any)
         .orderBy(ledgerEntries.entryDate)
         .all()
         .map((le) => ({
           ...le,
+          ...getLedgerReferenceFromValues(le as any),
           debit: le.transactionType === "debit" ? le.amount : "0",
           credit: le.transactionType === "credit" ? le.amount : "0",
         }));
@@ -6564,18 +6622,23 @@ export class DatabaseStorage implements IStorage {
           transactionType: ledgerEntries.transactionType,
           amount: ledgerEntries.amount,
           description: ledgerEntries.description,
-          referenceType: ledgerEntries.referenceType,
-          referenceId: ledgerEntries.referenceId,
+          saleId: ledgerEntries.saleId,
+          purchaseId: ledgerEntries.purchaseId,
+          receiptVoucherId: ledgerEntries.receiptVoucherId,
+          journalVoucherId: ledgerEntries.journalVoucherId,
+          contraVoucherId: ledgerEntries.contraVoucherId,
+          expenseEntryId: ledgerEntries.expenseEntryId,
           accountId: ledgerEntries.accountId,
           accountName: accounts.name,
         })
         .from(ledgerEntries)
         .leftJoin(accounts, eq(ledgerEntries.accountId, accounts.id))
-        .where(and(eq(ledgerEntries.referenceType, "journal_voucher"), eq(ledgerEntries.referenceId, referenceId)))
+        .where(buildLedgerReferenceWhere("journal_voucher", referenceId) as any)
         .orderBy(ledgerEntries.entryDate)
         .all()
         .map((le) => ({
           ...le,
+          ...getLedgerReferenceFromValues(le as any),
           debit: le.transactionType === "debit" ? le.amount : "0",
           credit: le.transactionType === "credit" ? le.amount : "0",
         }));
