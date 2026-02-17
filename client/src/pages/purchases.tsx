@@ -2,17 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { Plus, Eye, Truck, Calculator, ArrowLeft, Edit, Trash2 } from "lucide-react";
+import { Plus, Calculator, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import {
+  usePurchases,
+  useNextBillNumber,
+  useCreatePurchase,
+  useUpdatePurchase,
+  useDeletePurchase,
+} from "@/hooks/use-purchases";
+import { useAccounts, useProducts } from "@/hooks";
+import { productsApi } from "@/api/products.api";
+import { purchasesApi } from "@/api/purchases.api";
+import { PurchasesList } from "@/pages/purchases/PurchasesList";
 import { useToast } from "@/hooks/use-toast";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -42,7 +50,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import type { Purchase, Account, Product } from "@shared/schema";
 import { format } from "date-fns";
-import { useQuery as useRQQuery } from "@tanstack/react-query";
 import { useUIStore } from "@/stores/ui.store";
 import { usePurchaseStore } from "@/stores/purchase/store";
 import type { PurchaseMode } from "@/stores/purchase/types";
@@ -205,41 +212,14 @@ export default function PurchasesPage() {
     name: "charges",
   });
 
-  const { data: purchasesData, isLoading } = useQuery<Purchase[]>({
-    queryKey: ["/api/purchases"],
-  });
+  const { data: purchasesData, isLoading } = usePurchases();
   const purchases = Array.isArray(purchasesData) ? purchasesData : [];
 
-  const { data: suppliers = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=supplier"],
-  });
+  const { data: suppliers = [] } = useAccounts({ type: "supplier" });
+  const { data: accounts = [] } = useAccounts();
+  const { data: products = [] } = useProducts();
 
-  const { data: accounts = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts"],
-  });
-
-  const { data: products = [] } = useQuery<Product[]>({
-    queryKey: ["/api/products"],
-  });
-
-  const { data: settings } = useRQQuery<{ businessName?: string; businessNameUrdu?: string }>({
-    queryKey: ["/api/settings/summary"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/settings/summary");
-      return res.json();
-    },
-    staleTime: 60 * 60 * 1000,
-  });
-
-  const { data: nextBill, refetch: refetchBillNo } = useQuery<{ billNo: string }>({
-    queryKey: ["/api/purchases/next-bill-number"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/purchases/next-bill-number");
-      return res.json();
-    },
-    enabled: isDialogOpen,
-    refetchOnWindowFocus: false,
-  });
+  const { data: nextBill, refetch: refetchBillNo } = useNextBillNumber(isDialogOpen);
 
   useEffect(() => {
     if (isDialogOpen && nextBill?.billNo) {
@@ -277,14 +257,13 @@ export default function PurchasesPage() {
     }
     try {
       setCreatingProductIndex(index);
-      const res = await apiRequest("POST", "/api/products", {
+      const product = await productsApi.create({
         name: draft.name.trim(),
         unit: draft.unit,
         salePrice: "0",
         currentStock: "0",
         avgPurchasePrice: "0",
       });
-      const product: Product = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       form.setValue(`items.${index}.productId`, product.id.toString(), { shouldDirty: true, shouldValidate: true });
       setCustomProductDrafts((prev) => {
@@ -293,144 +272,78 @@ export default function PurchasesPage() {
         return copy;
       });
       toast({ title: "Product added", description: `${product.name} (${product.unit})` });
-    } catch (err: any) {
-      toast({ title: "Failed to add product", description: err?.message || "Unknown error", variant: "destructive" });
+    } catch (err: unknown) {
+      toast({ title: "Failed to add product", description: (err as Error)?.message || "Unknown error", variant: "destructive" });
     } finally {
       setCreatingProductIndex(null);
     }
   };
 
-  const createMutation = useMutation({
-    mutationFn: (data: PurchaseFormData) =>
-      apiRequest("POST", "/api/purchases", {
-        ...data,
-        billNo: data.billNo || nextBill?.billNo || undefined,
-        supplierId: parseInt(data.supplierId),
-        purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
-        brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
-        paidAmount: "0",
-        moundBaseKg: moundBaseKg.toString(),
-        items: data.items.map((item, idx) => ({
-          productId: parseInt(item.productId),
-          marka: item.marka,
-          serialNo: idx + 1,
-          bags: item.bags || "0",
-          fillingPerBagKg: item.fillingPerBagKg || "0",
-          looseKgs: item.looseKgs || "0",
-          lessKg: item.lessKg || "0",
-          bardanaKatKg: item.bardanaKatKg || "0",
-          rate: item.rate || "0",
-          rateUnit: item.rateUnit,
-        })),
-        charges: data.charges.map((c) => ({
-          ...c,
-          amount: c.amount || "0",
-          accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
-        })),
-      }),
-    onError: (error: Error) => {
+  const createMutation = useCreatePurchase();
+  const updateMutation = useUpdatePurchase();
+  const deleteMutation = useDeletePurchase();
+
+  const buildPurchasePayload = (data: PurchaseFormData) => ({
+    billNo: data.billNo || nextBill?.billNo || undefined,
+    bookNo: data.bookNo,
+    supplierId: parseInt(data.supplierId),
+    purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
+    brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
+    paidAmount: "0",
+    moundBaseKg: moundBaseKg.toString(),
+    items: data.items.map((item, idx) => ({
+      productId: parseInt(item.productId),
+      marka: item.marka,
+      serialNo: idx + 1,
+      bags: item.bags || "0",
+      fillingPerBagKg: item.fillingPerBagKg || "0",
+      looseKgs: item.looseKgs || "0",
+      lessKg: item.lessKg || "0",
+      bardanaKatKg: item.bardanaKatKg || "0",
+      rate: item.rate || "0",
+      rateUnit: item.rateUnit,
+    })),
+    charges: data.charges.map((c) => ({
+      ...c,
+      amount: c.amount || "0",
+      accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
+    })),
+  });
+
+  const handleSubmit = (data: PurchaseFormData) => {
+    const payload = buildPurchasePayload(data);
+    const onSuccess = () => {
+      closeDialog("purchaseForm");
+      setMode(null);
+      resetPurchaseState();
+      form.reset();
+      toast({ title: t("savedSuccessfully") });
+    };
+    const onError = (error: Error) => {
       toast({
         variant: "destructive",
         title: "Unable to save purchase",
         description: parseApiErrorMessage(error),
       });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      closeDialog("purchaseForm");
-      setMode(null);
-      resetPurchaseState();
-      form.reset();
-      toast({ title: t("savedSuccessfully") });
-    },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (payload: { id: number; data: PurchaseFormData }) =>
-      apiRequest("PATCH", `/api/purchases/${payload.id}`, {
-        ...payload.data,
-        billNo: payload.data.billNo || undefined,
-        supplierId: parseInt(payload.data.supplierId),
-        purchaseDate: payload.data.purchaseDate ? new Date(payload.data.purchaseDate) : undefined,
-        brokerId: payload.data.brokerId && payload.data.brokerId !== "none" ? parseInt(payload.data.brokerId) : null,
-        paidAmount: "0",
-        moundBaseKg: moundBaseKg.toString(),
-        items: payload.data.items.map((item, idx) => ({
-          productId: parseInt(item.productId),
-          marka: item.marka,
-          serialNo: idx + 1,
-          bags: item.bags || "0",
-          fillingPerBagKg: item.fillingPerBagKg || "0",
-          looseKgs: item.looseKgs || "0",
-          lessKg: item.lessKg || "0",
-          bardanaKatKg: item.bardanaKatKg || "0",
-          rate: item.rate || "0",
-          rateUnit: item.rateUnit,
-        })),
-        charges: payload.data.charges.map((c) => ({
-          ...c,
-          amount: c.amount || "0",
-          accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
-        })),
-      }),
-    onError: (error: Error) => {
-      toast({
-        variant: "destructive",
-        title: "Unable to update purchase",
-        description: parseApiErrorMessage(error),
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      closeDialog("purchaseForm");
-      setMode(null);
-      resetPurchaseState();
-      form.reset();
-      toast({ title: t("savedSuccessfully") });
-    },
-  });
-
-  const handleSubmit = (data: PurchaseFormData) => {
+    };
     if (purchaseMode === "edit" && activePurchaseId) {
-      updateMutation.mutate({ id: activePurchaseId, data });
+      updateMutation.mutate({ id: activePurchaseId, data: payload }, { onSuccess, onError });
     } else {
-      createMutation.mutate(data);
+      createMutation.mutate(payload as Parameters<typeof createMutation.mutate>[0], { onSuccess, onError });
     }
   };
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: number) => apiRequest("DELETE", `/api/purchases/${id}?force=1`),
-    onMutate: async (id: number) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/purchases"] });
-      const prev = queryClient.getQueryData<Purchase[]>(["/api/purchases"]);
-      queryClient.setQueryData<Purchase[]>(["/api/purchases"], (old) =>
-        old ? old.filter((p) => p.id !== id) : old
-      );
-      return { prev };
-    },
-    onError: (err, id, ctx) => {
-      if (ctx?.prev) {
-        queryClient.setQueryData(["/api/purchases"], ctx.prev);
-      }
-      toast({
-        title: `Delete failed for purchase ${id}`,
-        description: parseApiErrorMessage(err),
-        variant: "destructive",
-      });
-    },
-    onSuccess: () => {
-      toast({ title: t("deletedSuccessfully") });
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-    },
-  });
+  const handleDelete = (purchase: Purchase) => {
+    deleteMutation.mutate({ id: purchase.id, force: true }, {
+      onError: (err) =>
+        toast({
+          title: `Delete failed for purchase ${purchase.id}`,
+          description: parseApiErrorMessage(err),
+          variant: "destructive",
+        }),
+      onSuccess: () => toast({ title: t("deletedSuccessfully") }),
+    });
+  };
 
   const handleAddNew = () => {
     resetPurchaseState();
@@ -503,9 +416,7 @@ export default function PurchasesPage() {
   };
 
   const loadPurchaseDetail = async (purchaseId: number) => {
-    const res = await apiRequest("GET", `/api/purchases/${purchaseId}`);
-    if (!res.ok) throw new Error("Failed to load purchase detail");
-    return res.json();
+    return purchasesApi.get(purchaseId);
   };
 
   const handleEditById = async (purchaseId: number) => {
@@ -688,151 +599,18 @@ export default function PurchasesPage() {
   const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
   const isViewMode = purchaseMode === "view";
 
-  const columns: Column<Purchase & { supplier?: Account }>[] = [
-    {
-      key: "invoiceNumber",
-      title: "Invoice #",
-      render: (item) => (
-        <span className="font-mono text-sm font-medium">{item.invoiceNumber}</span>
-      ),
-    },
-    {
-      key: "supplier",
-      title: "Supplier",
-      render: (item) => (
-        <div>
-          <p className="font-medium">{item.supplier?.name || "-"}</p>
-          {item.supplier?.nameUrdu && (
-            <p className="text-sm text-muted-foreground font-urdu">{item.supplier.nameUrdu}</p>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "vehicleNumber",
-      title: "Vehicle",
-      render: (item) => (
-        <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          {item.vehicleNumber && (
-            <>
-              <Truck className="h-3 w-3 text-muted-foreground" />
-              <span className="font-mono text-sm">{item.vehicleNumber}</span>
-            </>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "purchaseDate",
-      title: "Date",
-      render: (item) => (
-        <span className="text-sm">
-          {format(new Date(item.purchaseDate), "dd MMM yyyy")}
-        </span>
-      ),
-    },
-    {
-      key: "totalAmount",
-      title: "Total",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono font-medium">
-          Rs. {parseFloat(item.totalAmount || "0").toLocaleString()}
-        </span>
-      ),
-    },
-    {
-      key: "actions",
-      title: "Actions",
-      align: "center",
-      render: (item) => (
-        <div className={`flex gap-1 justify-center ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => handleView(item)}
-            data-testid={`button-view-${item.id}`}
-            title="View"
-          >
-            <Eye className="h-4 w-4" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => {
-              handleEdit(item);
-            }}
-            data-testid={`button-edit-${item.id}`}
-          >
-            <Edit className="h-4 w-4" />
-          </Button>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={(e) => e.stopPropagation()}
-                data-testid={`button-delete-${item.id}`}
-              >
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader className={isRTL ? "text-right" : ""}>
-                <AlertDialogTitle>
-                  {t("delete")} {item.invoiceNumber}
-                </AlertDialogTitle>
-                <AlertDialogDescription className={isRTL ? "font-urdu text-right" : ""}>
-                  {t("confirmDelete")}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter className={isRTL ? "flex-row-reverse" : ""}>
-                <AlertDialogCancel disabled={deleteMutation.isPending}>
-                  {t("cancel")}
-                </AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={() => deleteMutation.mutate(item.id)}
-                  disabled={deleteMutation.isPending}
-                  data-testid={`confirm-delete-${item.id}`}
-                >
-                  {t("delete")}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      ),
-    },
-  ];
-
   return (
     <>
-      <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""} screen-only`}>
-        <div className={`flex items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <div className={isRTL ? "text-right" : ""}>
-            <h1 className="text-2xl font-semibold">{t("purchases")}</h1>
-            <p className="text-sm text-muted-foreground">
-              {language === "ur" ? "Manage purchase orders" : "Manage purchase orders"}
-            </p>
-          </div>
-          <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <Button onClick={handleAddNew} data-testid="button-add-purchase">
-              <Plus className="h-4 w-4" />
-              {t("newPurchase")}
-            </Button>
-          </div>
-        </div>
-
-        <Card>
-          <CardContent className="pt-6">
-            <DataTable
-              columns={columns}
-              data={purchasesWithSupplier}
-              isLoading={isLoading}
-              testIdPrefix="purchases"
-            />
-          </CardContent>
-        </Card>
+      <PurchasesList
+        purchases={purchasesWithSupplier}
+        isLoading={isLoading}
+        onAddNew={handleAddNew}
+        onView={handleView}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        isDeleting={deleteMutation.isPending}
+        t={t}
+      />
 
       <Dialog
         open={isDialogOpen}
@@ -1445,8 +1223,6 @@ export default function PurchasesPage() {
           </Form>
         </DialogContent>
       </Dialog>
-    </div>
-
     </>
   );
 }
