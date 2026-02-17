@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { z } from "zod";
-import type { PrintableCompany } from "@shared/print";
+import type { PrintableCompany } from "../../types/print";
 
 const settingsSchema = z.object({
   businessName: z.string().default(""),

@@ -1,4 +1,4 @@
-import type { PrintableDocumentPayload } from "@shared/print";
+import type { PrintableDocumentPayload } from "../../types/print";
 import {
   mapBardanaReport,
   mapBalanceSheet,

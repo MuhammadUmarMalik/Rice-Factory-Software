@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { insertSaleSchema } from "@shared/schema";
+import { insertSaleSchema } from "../db/schema";
 import { saleItemsSchema } from "../schemas/sales.schema";
 import * as salesService from "../services/sales.service";
 import { notifyLowStock, notifyUsers } from "../utils/notifications";

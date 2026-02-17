@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { apiRequest } from "@/lib/queryClient";
-import type { Product, Account } from "@shared/schema";
+import type { Product, Account } from "@/types/schema";
 
 type RequestStatus = "idle" | "loading" | "success" | "error";
 

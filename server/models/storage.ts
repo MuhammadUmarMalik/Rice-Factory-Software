@@ -41,7 +41,7 @@ import {
   budgets, budgetLines,
   expenseEntries,
   type ExpenseEntry, type InsertExpenseEntry, insertExpenseEntrySchema,
-} from "@shared/schema";
+} from "../db/schema";
 
 type DbClient = typeof db;
 type PurchaseItemInput = Omit<

@@ -48,7 +48,7 @@ import {
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Purchase, Account, Product } from "@shared/schema";
+import type { Purchase, Account, Product } from "@/types/schema";
 import { format } from "date-fns";
 import { useUIStore } from "@/stores/ui.store";
 import { usePurchaseStore } from "@/stores/purchase/store";
@@ -609,7 +609,7 @@ export default function PurchasesPage() {
         onEdit={handleEdit}
         onDelete={handleDelete}
         isDeleting={deleteMutation.isPending}
-        t={t}
+        t={t as (key: string) => string}
       />
 
       <Dialog

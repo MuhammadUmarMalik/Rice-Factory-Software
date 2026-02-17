@@ -12,7 +12,7 @@ import type {
   PurchaseChargeInput,
   SaleItemInput,
 } from "./types";
-import type { InsertAccount, InsertProduct, InsertPurchase, InsertSale } from "@shared/schema";
+import type { InsertAccount, InsertProduct, InsertPurchase, InsertSale } from "../db/schema";
 
 export class AccountsRepositoryAdapter implements IAccountsRepository {
   getAccounts = (type?: string, active?: boolean) =>

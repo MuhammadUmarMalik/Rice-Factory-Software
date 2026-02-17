@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 import { format } from "date-fns";
 import clsx from "clsx";
 import { Link, useLocation } from "wouter";

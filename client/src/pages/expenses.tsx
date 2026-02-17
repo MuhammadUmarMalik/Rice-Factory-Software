@@ -36,7 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { Account, ExpenseEntry } from "@shared/schema";
+import type { Account, ExpenseEntry } from "@/types/schema";
 
 const expenseFormSchema = z.object({
   expenseAccountId: z.string().min(1, "Select expense category"),

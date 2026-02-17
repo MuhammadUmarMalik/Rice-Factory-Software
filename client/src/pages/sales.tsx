@@ -35,7 +35,7 @@ import {
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Sale, Account, Product } from "@shared/schema";
+import type { Sale, Account, Product } from "@/types/schema";
 import { format } from "date-fns";
 
 const formatDateInput = (date: Date) => {

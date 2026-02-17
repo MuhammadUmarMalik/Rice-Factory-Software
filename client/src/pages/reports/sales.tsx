@@ -7,7 +7,7 @@ import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
 import { Label } from "@/components/ui/label";
-import type { Account, Product } from "@shared/schema";
+import type { Account, Product } from "@/types/schema";
 import { format } from "date-fns";
 import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";

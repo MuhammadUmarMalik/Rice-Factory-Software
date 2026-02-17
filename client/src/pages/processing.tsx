@@ -36,7 +36,7 @@ import {
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Processing, Product } from "@shared/schema";
+import type { Processing, Product } from "@/types/schema";
 import { format } from "date-fns";
 
 const processingFormSchema = z.object({

@@ -1,4 +1,4 @@
-import type { InsertPurchase } from "@shared/schema";
+import type { InsertPurchase } from "../db/schema";
 
 /**
  * DTOs for Purchase API - replaces 'any' with explicit types.
