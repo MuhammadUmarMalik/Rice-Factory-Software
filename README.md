@@ -3,7 +3,7 @@
 Mill Manager is a full-stack ERP for rice mills covering procurement, stock processing, sales, accounting, HR/payroll, reporting, and printing. It runs as a web app (React + Express + SQLite) and can be packaged as a Windows desktop app with Electron.
 
 ## Overview
-- Single repo with `client` (React UI), `server` (Express API), `shared` (schema + print types), and `electron` (desktop wrapper).
+- Single repo with separate `client/` and `server/` packages, each with its own `package.json` and `node_modules`. Electron wrapper at root for desktop build.
 - Database is SQLite via Drizzle ORM. Default location is `.local/data.db` (or `APP_DATA_DIR/data.db` for desktop).
 - UI is bilingual (English/Urdu) with RTL support and print-ready reports/invoices.
 
@@ -23,7 +23,7 @@ Client (React + Vite)
       -> storage (Drizzle ORM)
       -> SQLite database (.local/data.db)
 Electron (desktop) wraps server + UI and handles printing
-Shared package exposes schema and print payload types
+Server owns schema and print payload types; client has its own API types
 ```
 
 ## Tech Stack
@@ -51,17 +51,23 @@ server/                 Express API and business logic
   services/             Domain services, print engine, report calculations
   models/               Drizzle DB connection and storage layer
   schemas/              Zod validation schemas
+  db/                   Drizzle schema and DB types
+  types/                Print payload types
   utils/                Auth, notifications, caching, parsing helpers
   views/                Server-rendered print templates
-shared/                 Shared schema and print payload types
+client/src/types/       API entity and print types (frontend)
 electron/               Desktop main/preload processes
 script/                 Build, seed, migration, and test scripts
 dist/                   Production build output (generated)
 dist-desktop/           Electron build output (generated)
 .local/                 Local DB + settings (runtime)
 design_guidelines.md    UI/UX design system notes
-components.json         shadcn UI config
-drizzle.config.ts       Drizzle migration config
+client/package.json    Client deps (React, Vite, Tailwind)
+client/vite.config.ts  Client Vite config
+client/components.json shadcn UI config
+client/tailwind.config.ts  Client Tailwind config
+server/package.json    Server deps (Express, Drizzle)
+server/drizzle.config.ts Server Drizzle config
 ```
 
 ## Functional Modules (UI + API)
@@ -147,7 +153,7 @@ drizzle.config.ts       Drizzle migration config
 - **Docs:** Invoices, vouchers, stock and financial reports, statements (see Print Doc Keys below).
 
 ## Database Schema (SQLite via Drizzle)
-The schema is defined in `shared/schema.ts`. All money/quantity fields are stored as strings for precision and formatted at the UI layer.
+The schema is defined in `server/db/schema.ts`. All money/quantity fields are stored as strings for precision and formatted at the UI layer.
 
 | Table | Purpose |
 | --- | --- |
@@ -330,7 +336,7 @@ Settings and System
 - DELETE `/api/period-locks/:id`
 
 ## Printing and PDF
-- Print payloads are defined in `shared/print.ts`.
+- Print payloads are defined in `server/types/print.ts`; client uses `client/src/types/print.ts`.
 - Server print registry is in `server/services/print/registry.ts`.
 - PDFs are rendered via Playwright Chromium in `server/services/print/pdf/engine.ts`.
 - Electron adds print preview windows and direct printing via IPC.

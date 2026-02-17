@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { insertReceiptVoucherSchema, insertReceiptVoucherLineSchema } from "@shared/schema";
+import { insertReceiptVoucherSchema, insertReceiptVoucherLineSchema } from "../db/schema";
 import { numericString } from "./common";
 
 export const receiptLinesSchema = z

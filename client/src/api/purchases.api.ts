@@ -1,6 +1,6 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from "./base";
 import { apiRequest } from "@/lib/queryClient";
-import type { Purchase } from "@shared/schema";
+import type { Purchase } from "@/types/schema";
 
 export type PurchaseWithDetails = Purchase & { items: unknown[]; charges: unknown[] };
 

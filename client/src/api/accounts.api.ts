@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from "./base";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 
 export const accountsApi = {
   list: (params?: { type?: string; active?: boolean }) => {

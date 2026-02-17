@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from "./base";
-import type { Product } from "@shared/schema";
+import type { Product } from "@/types/schema";
 
 export const productsApi = {
   list: () => apiGet<Product[]>("/api/products"),

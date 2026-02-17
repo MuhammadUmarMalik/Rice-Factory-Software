@@ -1,5 +1,5 @@
 import { format } from "date-fns";
-import type { PrintableDocumentPayload, PrintableTableColumn } from "@shared/print";
+import type { PrintableDocumentPayload, PrintableTableColumn } from "../../types/print";
 import type { PrintFormat, PrintOrientation } from "../../services/print/types";
 import { printStyles } from "./styles";
 

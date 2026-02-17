@@ -5,7 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { CheckCircle2, CircleDollarSign, RefreshCw } from "lucide-react";
 
-import type { Account, Employee, Payroll } from "@shared/schema";
+import type { Account, Employee, Payroll } from "@/types/schema";
 import { useLanguage } from "@/contexts/language-context";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";

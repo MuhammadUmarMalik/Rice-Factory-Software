@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { insertAccountSchema } from "@shared/schema";
+import { insertAccountSchema } from "../db/schema";
 import * as accountsService from "../services/accounts.service";
 import { parseRequiredInt } from "../utils/parse";
 

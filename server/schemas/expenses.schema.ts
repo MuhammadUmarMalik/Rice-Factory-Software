@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { insertExpenseEntrySchema } from "@shared/schema";
+import { insertExpenseEntrySchema } from "../db/schema";
 import { numericString } from "./common";
 
 export const expenseEntrySchema = insertExpenseEntrySchema.extend({

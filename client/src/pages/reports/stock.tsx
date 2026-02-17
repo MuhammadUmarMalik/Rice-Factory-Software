@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
-import type { Product } from "@shared/schema";
+import type { Product } from "@/types/schema";
 import { useReportDetail } from "@/components/report-detail-hook";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";

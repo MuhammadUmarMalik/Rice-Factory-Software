@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import fs from "fs";
 import path from "path";
-import * as schema from "@shared/schema";
+import * as schema from "../db/schema";
 
 const appDataDir = process.env.APP_DATA_DIR;
 const defaultDbPath = appDataDir

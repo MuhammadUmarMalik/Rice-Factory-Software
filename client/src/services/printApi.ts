@@ -1,6 +1,6 @@
 import { apiRequest } from "@/lib/queryClient";
 import type { DocKey } from "@/print/docRegistry";
-import type { PrintableDocumentPayload } from "@shared/print";
+import type { PrintableDocumentPayload } from "@/types/print";
 
 export type PrintRequest = {
   docKey: DocKey;

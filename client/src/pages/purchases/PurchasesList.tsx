@@ -14,7 +14,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import type { Purchase, Account } from "@shared/schema";
+import type { Purchase, Account } from "@/types/schema";
 import { format } from "date-fns";
 
 export type PurchaseWithSupplier = Purchase & { supplier?: Account };

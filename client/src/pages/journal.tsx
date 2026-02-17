@@ -34,7 +34,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { Eye, Pencil, CheckCircle, Loader2, Plus, Trash2, X } from "lucide-react";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 import { useLanguage } from "@/contexts/language-context";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";

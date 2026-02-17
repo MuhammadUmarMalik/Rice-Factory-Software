@@ -1,4 +1,4 @@
-import { insertProductSchema } from "@shared/schema";
+import { insertProductSchema } from "../db/schema";
 import { numericString } from "./common";
 
 export const productSchema = insertProductSchema.extend({

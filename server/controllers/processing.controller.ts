@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { insertProcessingSchema } from "@shared/schema";
+import { insertProcessingSchema } from "../db/schema";
 import { numericString } from "../schemas/common";
 import { processingCompleteSchema } from "../schemas/processing.schema";
 import * as processingService from "../services/processing.service";

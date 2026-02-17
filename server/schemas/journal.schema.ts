@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { insertJournalVoucherSchema } from "@shared/schema";
+import { insertJournalVoucherSchema } from "../db/schema";
 import { numericString } from "./common";
 
 export const journalVoucherInputSchema = insertJournalVoucherSchema.extend({

@@ -1,4 +1,4 @@
-import type { Product } from "@shared/schema";
+import type { Product } from "@/types/schema";
 import { createBaseStore, type RequestStatus } from "@/stores/base";
 
 export type ProductDraft = Partial<Product>;

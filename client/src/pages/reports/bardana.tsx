@@ -9,7 +9,7 @@ import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
 import { useReportDateRange } from "@/hooks/useReportDateRange";
 import { apiRequest } from "@/lib/queryClient";
 import { SkeletonBox } from "@/components/ui/skeletons";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 import {
   Select,
   SelectContent,

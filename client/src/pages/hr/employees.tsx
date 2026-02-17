@@ -4,7 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import type { Employee, EmployeeSalaryStructure } from "@shared/schema";
+import type { Employee, EmployeeSalaryStructure } from "@/types/schema";
 
 import { useLanguage } from "@/contexts/language-context";
 import { queryClient, apiRequest } from "@/lib/queryClient";

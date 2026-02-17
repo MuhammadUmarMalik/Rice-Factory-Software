@@ -1,7 +1,7 @@
 import { format } from "date-fns";
 import { storage } from "../../../models/storage";
 import * as daybooksService from "../../daybooks.service";
-import type { PrintableDocumentPayload, PrintableSection, PrintableTableColumn } from "@shared/print";
+import type { PrintableDocumentPayload, PrintableSection, PrintableTableColumn } from "../../../types/print";
 
 type PrintContext = {
   company: PrintableDocumentPayload["company"];
@@ -342,7 +342,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
         const signed = c.mode === "less" ? -Math.abs(amount) : amount;
         return `${chargeLabel(c.type)}${c.mode === "less" ? " (Less / Watta Kaat (Moisture + Quality))" : ""}: ${money(signed)}`;
       }),
-      purchase.amountInWords ? `In words: ${purchase.amountInWords}` : "",
+      (purchase as { amountInWords?: string }).amountInWords ? `In words: ${(purchase as { amountInWords?: string }).amountInWords}` : "",
       purchase.notes ? `Notes: ${purchase.notes}` : "",
     ]
       .filter(Boolean)

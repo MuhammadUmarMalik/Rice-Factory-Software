@@ -26,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 
 const expenseFormSchema = z.object({
   name: z.string().min(1, "Category name is required"),

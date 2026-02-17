@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { insertEmployeeSchema, insertEmployeeSalaryStructureSchema } from "@shared/schema";
+import { insertEmployeeSchema, insertEmployeeSalaryStructureSchema } from "../db/schema";
 import * as employeesService from "../services/employees.service";
 import { getUserId } from "../utils/auth";
 import { parseRequiredInt } from "../utils/parse";

@@ -36,7 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 import { format } from "date-fns";
 
 const lineSchema = z.object({

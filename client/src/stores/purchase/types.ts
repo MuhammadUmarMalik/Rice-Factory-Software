@@ -1,4 +1,4 @@
-import type { Purchase } from "@shared/schema";
+import type { Purchase } from "@/types/schema";
 import type { RequestStatus } from "@/stores/base";
 
 export type PurchaseItemDraft = {

@@ -1,4 +1,4 @@
-import type { PrintableDocumentPayload } from "@shared/print";
+import type { PrintableDocumentPayload } from "../../types/print";
 
 export type PrintFormat = "A4" | "A5" | "Letter" | "Legal" | "Custom";
 export type PrintOrientation = "portrait" | "landscape";

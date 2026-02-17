@@ -6,11 +6,12 @@ import type {
   Purchase,
   InsertPurchase,
   PurchaseItem,
+  PurchaseCharge,
   InsertPurchaseItem,
   InsertPurchaseCharge,
   Sale,
   InsertSale,
-} from "@shared/schema";
+} from "../db/schema";
 
 export type PurchaseItemInput = Omit<
   InsertPurchaseItem,
@@ -23,7 +24,7 @@ export type PurchaseItemInput = Omit<
     >
   >;
 export type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
-export type SaleItemInput = Omit<import("@shared/schema").InsertSaleItem, "id" | "saleId" | "totalPrice">;
+export type SaleItemInput = Omit<import("../db/schema").InsertSaleItem, "id" | "saleId" | "totalPrice">;
 
 export interface IAccountsRepository {
   getAccounts(type?: string, active?: boolean): Promise<Account[]>;

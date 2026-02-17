@@ -1,5 +1,5 @@
 import { apiGet, apiPost, apiPatch, apiDelete } from "./base";
-import type { ExpenseEntry } from "@shared/schema";
+import type { ExpenseEntry } from "@/types/schema";
 
 export const expensesApi = {
   list: () => apiGet<ExpenseEntry[]>("/api/expenses"),
