@@ -110,6 +110,23 @@ export async function getDashboardSummary(
   params: Partial<DashboardRange>,
   scope?: "full",
 ): Promise<DashboardSummaryFull>;
+function emptyCoreData(fromDate: Date, toDate: Date): DashboardSummaryCore {
+  return {
+    filters: { fromDate: fromDate.toISOString(), toDate: toDate.toISOString() },
+    kpis: {
+      totalPurchases: 0,
+      totalSales: 0,
+      stockValue: 0,
+      netProfit: 0,
+      cashBalance: 0,
+      bankBalance: 0,
+      outstandingCustomers: 0,
+      outstandingSuppliers: 0,
+    },
+    trialBalance: { debitTotal: 0, creditTotal: 0, difference: 0, balanced: true },
+  };
+}
+
 export async function getDashboardSummary(
   params: Partial<DashboardRange>,
   scope: DashboardSummaryScope = "full",
@@ -119,11 +136,17 @@ export async function getDashboardSummary(
   const includeCore = scope === "full" || scope === "core";
   const includeDetails = scope === "full" || scope === "details";
 
-  const stockReport = includeCore || includeDetails ? await storage.getStockReport({ fromDate, toDate }) : null;
+  let stockReport: Awaited<ReturnType<typeof storage.getStockReport>> | null = null;
+  try {
+    stockReport = includeCore || includeDetails ? await storage.getStockReport({ fromDate, toDate }) : null;
+  } catch (err) {
+    console.error("[dashboard summary] getStockReport failed:", err instanceof Error ? err.message : err);
+  }
 
   let coreData: DashboardSummaryCore | null = null;
 
   if (includeCore) {
+    try {
     const [profitLoss, trialBalance, purchasesReport, salesReport, accounts, outstandingCustomers, outstandingSuppliers] =
       await Promise.all([
         storage.getProfitLoss(fromDate, toDate),
@@ -167,33 +190,45 @@ export async function getDashboardSummary(
       }
     }
 
+    const pt = purchasesReport?.totals;
+    const st = salesReport?.totals;
+    const tbTotals = trialBalance?.totals;
+    const tbVal = trialBalance?.validation;
+    const ocTotals = outstandingCustomers?.totals;
+    const osTotals = outstandingSuppliers?.totals;
+
     coreData = {
       filters: {
         fromDate: fromDate.toISOString(),
         toDate: toDate.toISOString(),
       },
       kpis: {
-        totalPurchases: parseAmount(purchasesReport.totals.total),
-        totalSales: parseAmount(salesReport.totals.total),
-        stockValue: parseAmount(stockReport?.totals.closingValue),
-        netProfit: parseAmount(profitLoss.netProfit),
+        totalPurchases: parseAmount(pt?.total),
+        totalSales: parseAmount(st?.total),
+        stockValue: parseAmount(stockReport?.totals?.closingValue),
+        netProfit: parseAmount(profitLoss?.netProfit),
         cashBalance,
         bankBalance,
-        outstandingCustomers: parseAmount(outstandingCustomers.totals.outstandingAmount),
-        outstandingSuppliers: parseAmount(outstandingSuppliers.totals.outstandingAmount),
+        outstandingCustomers: parseAmount(ocTotals?.outstandingAmount),
+        outstandingSuppliers: parseAmount(osTotals?.outstandingAmount),
       },
       trialBalance: {
-        debitTotal: parseAmount(trialBalance.totals.debit),
-        creditTotal: parseAmount(trialBalance.totals.credit),
-        difference: parseAmount(trialBalance.validation.difference),
-        balanced: trialBalance.validation.balanced,
+        debitTotal: parseAmount(tbTotals?.debit),
+        creditTotal: parseAmount(tbTotals?.credit),
+        difference: parseAmount(tbVal?.difference),
+        balanced: tbVal?.balanced ?? false,
       },
     };
+  } catch (err) {
+    console.error("[dashboard summary] core data failed:", err instanceof Error ? err.message : err);
+    coreData = emptyCoreData(fromDate, toDate);
+  }
   }
 
   let detailsData: DashboardSummaryDetails | null = null;
 
   if (includeDetails) {
+    try {
     const [products, accounts, ledgerInRange, dayBook] = await Promise.all([
       storage.getProducts(),
       storage.getAccounts(),
@@ -268,9 +303,26 @@ export async function getDashboardSummary(
         rows: dayBook.rows.slice(0, 10),
       },
     };
+    } catch (err) {
+      console.error("[dashboard summary] details failed:", err instanceof Error ? err.message : err);
+      detailsData = {
+        charges: { freight: 0, loading: 0, marketFee: 0, brokerage: 0, bardana: 0, processing: 0 },
+        stock: {
+          paddyQty: 0,
+          riceQty: 0,
+          brokenQty: 0,
+          bardanaIn: 0,
+          bardanaOut: 0,
+          bardanaBalance: 0,
+          lowStock: [],
+          valuation: 0,
+        },
+        dayBook: { date: toDate.toISOString(), rows: [] },
+      };
+    }
   }
 
-  if (scope === "core") return coreData ?? ({} as DashboardSummaryCore);
+  if (scope === "core") return coreData ?? emptyCoreData(fromDate, toDate);
   if (scope === "details") return detailsData ?? ({} as DashboardSummaryDetails);
 
   return { ...(coreData ?? {}), ...(detailsData ?? {}) } as DashboardSummaryFull;
@@ -301,22 +353,35 @@ export async function getDashboardCharts(params: Partial<DashboardRange>) {
 
 export async function getDashboardAlerts(params: Partial<DashboardRange>) {
   const { toDate } = await resolveRange(params);
-  const trialBalance = await storage.getTrialBalance(toDate);
-  const products = await storage.getProducts();
-  const outstandingCustomers = await storage.getOutstandingCustomers(toDate);
-  const outstandingSuppliers = await storage.getOutstandingSuppliers(toDate);
-
   const alerts: Array<{ key: string; severity: "info" | "warning" | "critical"; message: string }> = [];
 
-  if (!trialBalance.validation.balanced) {
+  let trialBalance: Awaited<ReturnType<typeof storage.getTrialBalance>> | null = null;
+  let products: Awaited<ReturnType<typeof storage.getProducts>> = [];
+  let outstandingCustomers: Awaited<ReturnType<typeof storage.getOutstandingCustomers>> | null = null;
+  let outstandingSuppliers: Awaited<ReturnType<typeof storage.getOutstandingSuppliers>> | null = null;
+
+  try {
+    [trialBalance, products, outstandingCustomers, outstandingSuppliers] = await Promise.all([
+      storage.getTrialBalance(toDate),
+      storage.getProducts(),
+      storage.getOutstandingCustomers(toDate),
+      storage.getOutstandingSuppliers(toDate),
+    ]);
+  } catch (err) {
+    console.error("[dashboard alerts] failed to load base data:", err instanceof Error ? err.message : err);
+    return { alerts };
+  }
+
+  const tbValidation = trialBalance?.validation;
+  if (tbValidation && !tbValidation.balanced) {
     alerts.push({
       key: "trial_balance_mismatch",
       severity: "critical",
-      message: `Trial balance mismatch: difference Rs. ${parseAmount(trialBalance.validation.difference).toLocaleString()}`,
+      message: `Trial balance mismatch: difference Rs. ${parseAmount(tbValidation.difference).toLocaleString()}`,
     });
   }
 
-  const negativeStock = products.filter((p) => parseAmount(p.currentStock || "0") < 0);
+  const negativeStock = (products || []).filter((p) => parseAmount(p?.currentStock || "0") < 0);
   if (negativeStock.length > 0) {
     alerts.push({
       key: "negative_stock",
@@ -325,7 +390,7 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
     });
   }
 
-  const overdueCustomers = outstandingCustomers.rows.filter((r) => r.daysOutstanding > 0);
+  const overdueCustomers = (outstandingCustomers?.rows ?? []).filter((r) => (r?.daysOutstanding ?? 0) > 0);
   if (overdueCustomers.length > 0) {
     alerts.push({
       key: "overdue_customers",
@@ -334,7 +399,7 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
     });
   }
 
-  const overdueSuppliers = outstandingSuppliers.rows.filter((r) => r.daysOutstanding > 0);
+  const overdueSuppliers = (outstandingSuppliers?.rows ?? []).filter((r) => (r?.daysOutstanding ?? 0) > 0);
   if (overdueSuppliers.length > 0) {
     alerts.push({
       key: "overdue_suppliers",
@@ -343,7 +408,8 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
     });
   }
 
-  const duplicateCheck = async () => {
+  let duplicateCount = 0;
+  try {
     const [purchases, sales, receipts, journals, expenses] = await Promise.all([
       storage.getPurchases(),
       storage.getSales(),
@@ -351,29 +417,27 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
       storage.getJournalVouchers(),
       storage.getExpenses(),
     ]);
-
-    const duplicates = (items: Array<{ value: string }>) => {
+    const duplicates = (items: Array<{ value?: string | null }>) => {
       const seen = new Set<string>();
-      const dupes = new Set<string>();
+      let count = 0;
       for (const item of items) {
-        if (!item.value) continue;
-        if (seen.has(item.value)) dupes.add(item.value);
-        seen.add(item.value);
+        const v = item?.value?.trim?.();
+        if (!v) continue;
+        if (seen.has(v)) count++;
+        seen.add(v);
       }
-      return dupes.size;
+      return count;
     };
+    duplicateCount =
+      duplicates((purchases || []).map((p) => ({ value: p?.invoiceNumber }))) +
+      duplicates((sales || []).map((s) => ({ value: s?.invoiceNumber }))) +
+      duplicates((receipts || []).map((r) => ({ value: (r as { voucherNumber?: string })?.voucherNumber }))) +
+      duplicates((journals || []).map((j) => ({ value: j?.voucherNo }))) +
+      duplicates((expenses || []).map((e) => ({ value: e?.voucherNo })));
+  } catch (err) {
+    console.error("[dashboard alerts] duplicate check failed:", err instanceof Error ? err.message : err);
+  }
 
-    const count =
-      duplicates(purchases.map((p) => ({ value: p.invoiceNumber }))) +
-      duplicates(sales.map((s) => ({ value: s.invoiceNumber }))) +
-      duplicates(receipts.map((r) => ({ value: r.voucherNumber }))) +
-      duplicates(journals.map((j) => ({ value: j.voucherNo }))) +
-      duplicates(expenses.map((e) => ({ value: e.voucherNo })));
-
-    return count;
-  };
-
-  const duplicateCount = await duplicateCheck();
   if (duplicateCount > 0) {
     alerts.push({
       key: "voucher_numbering",

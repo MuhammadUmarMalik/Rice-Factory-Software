@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useReportDetail } from "@/components/report-detail-hook";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 const DashboardChartsSection = lazy(() =>
   import("@/components/dashboard/DashboardChartsSection").then((mod) => ({
@@ -152,8 +153,11 @@ export default function Dashboard() {
       params.set("scope", "core");
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
-      const res = await fetch(`/api/dashboard/summary?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch dashboard summary");
+      const res = await fetchWithAuth(`/api/dashboard/summary?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.detail || body?.error || "Failed to fetch dashboard summary");
+      }
       return res.json();
     },
     staleTime: 0,
@@ -168,8 +172,11 @@ export default function Dashboard() {
       params.set("scope", "details");
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
-      const res = await fetch(`/api/dashboard/summary?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch dashboard details");
+      const res = await fetchWithAuth(`/api/dashboard/summary?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.detail || body?.error || "Failed to fetch dashboard details");
+      }
       return res.json();
     },
     enabled: detailsSection.active,
@@ -184,8 +191,11 @@ export default function Dashboard() {
       const params = new URLSearchParams();
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
-      const res = await fetch(`/api/dashboard/alerts?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to fetch dashboard alerts");
+      const res = await fetchWithAuth(`/api/dashboard/alerts?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.detail || body?.error || "Failed to fetch dashboard alerts");
+      }
       return res.json();
     },
     staleTime: 0,

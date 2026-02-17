@@ -62,7 +62,11 @@ export async function createSale(req: Request, res: Response) {
       entityType: "sale",
       entityId: sale.id,
     });
-    await Promise.all(parsedItems.map((item: any) => notifyLowStock(item.productId)));
+    try {
+      await Promise.all(parsedItems.map((item: any) => notifyLowStock(item.productId)));
+    } catch (notifyErr) {
+      console.error("Low stock notification failed:", notifyErr);
+    }
     res.status(201).json(sale);
   } catch (error) {
     if (error instanceof z.ZodError) {

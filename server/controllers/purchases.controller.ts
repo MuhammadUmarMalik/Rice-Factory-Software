@@ -127,6 +127,9 @@ export async function updatePurchase(req: Request, res: Response) {
       return res.status(400).json({ error: "Purchase date cannot be in the future" });
     }
     const parsedItems = items ? purchaseItemsSchema.parse(items) : [];
+    if (parsedItems.length === 0) {
+      return res.status(400).json({ error: "At least one item is required" });
+    }
     const parsedCharges = charges ? purchaseChargesSchema.parse(normalizeCharges(charges)) : [];
     const moundBaseKg = (data as any).moundBaseKg == 60 ? 60 : 40;
     const { moundBaseKg: _mb, ...purchaseData } = data as any;

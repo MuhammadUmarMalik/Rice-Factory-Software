@@ -647,6 +647,10 @@ function resolveReceiptLineAmount(line: ReceiptLineInput & { amount?: string | n
 
 function ensureSaleItemUnitColumn() {
   try {
+    const tableExists = sqlite.prepare(
+      `SELECT 1 FROM sqlite_master WHERE type='table' AND name='sale_items'`,
+    ).get();
+    if (!tableExists) return;
     const columns = sqlite.prepare(`PRAGMA table_info("sale_items")`).all() as Array<{ name: string }>;
     const hasUnit = columns.some((col) => col.name === "unit");
     if (!hasUnit) {
@@ -2233,10 +2237,16 @@ export class DatabaseStorage implements IStorage {
         }).run();
 
         const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
-        const currentStock = parseAmount(product?.currentStock || "0");
-        const currentAvg = parseAmount(product?.avgPurchasePrice || "0");
+        if (!product) {
+          throw new Error(`Product not found: id ${item.productId}`);
+        }
+        const currentStock = parseAmount(product.currentStock || "0");
+        const currentAvg = parseAmount(product.avgPurchasePrice || "0");
         const qtyKg = parseAmount(item.netWeightKg); // maintain stock in kg
-        const pricePerKg = parseAmount(item.amount) / Math.max(qtyKg, 1); // effective rate per kg
+        if (qtyKg <= 0) {
+          throw new Error(`Purchase item has invalid quantity (must be positive): product id ${item.productId}`);
+        }
+        const pricePerKg = parseAmount(item.amount) / qtyKg; // effective rate per kg
         const newStock = currentStock + qtyKg;
 
         const totalValue = (currentStock * currentAvg) + (qtyKg * pricePerKg);
@@ -4398,7 +4408,12 @@ export class DatabaseStorage implements IStorage {
           existing.settlementAccountId ||
           (voucherType === "CR" ? this.ensureCashAccountInternal(client).id : this.ensureSystemAccount(client, "Cash in Hand", "asset").id);
 
-        const cleanLines = (lines || []).map((line) => {
+        // Exclude settlement lines - they are auto-generated; including them would double the amount
+        const paymentLinesOnly = (lines || []).filter(
+          (line) => !(line.narration || "").toLowerCase().includes("settlement")
+        );
+
+        const cleanLines = paymentLinesOnly.map((line) => {
           const amt = resolveReceiptLineAmount(line).toString();
           return {
             ...line,

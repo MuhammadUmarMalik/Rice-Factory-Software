@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -135,25 +135,25 @@ export default function ReceiptsPage() {
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
   const { data: receipts = [], isLoading } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const filteredReceipts = useMemo(
-    () => receipts.filter((r) => (listFilter === "ALL" || r.voucherType === listFilter) && r.voucherType === "CR"),
+    () => receipts.filter((r) => listFilter === "ALL" || r.voucherType === listFilter),
     [receipts, listFilter]
   );
 
-  const fetchNextNumber = async (type?: string) => {
+  const fetchNextNumber = useCallback(async (type?: string) => {
     try {
-      const res = await apiRequest("GET", `/api/receipts/next-number?type=${type || form.getValues("voucherType") || "CR"}`);
+      const res = await apiRequest("GET", `/api/receipts/next-number?type=${type ?? voucherType ?? "CR"}`);
       const json = await res.json();
       form.setValue("voucherNumber", json.voucherNumber, { shouldDirty: true });
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [form, voucherType]);
 
   useEffect(() => {
     if (isDialogOpen && !editingId) {
-      fetchNextNumber(form.getValues("voucherType"));
+      fetchNextNumber(voucherType);
     }
-  }, [isDialogOpen, editingId]);
+  }, [isDialogOpen, editingId, voucherType, fetchNextNumber]);
 
   useEffect(() => {
     if (!isDialogOpen) {

@@ -35,7 +35,7 @@ export async function getReceipt(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const voucher = await receiptsService.getReceipt(id);
-    if (!voucher || voucher.voucherType != "CR") return res.status(404).json({ error: "Voucher not found" });
+    if (!voucher || voucher.voucherType !== "CR") return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
   } catch (error) {
     console.error(error);
@@ -48,6 +48,11 @@ export async function createReceipt(req: Request, res: Response) {
     const { lines, ...payload } = req.body;
     const header = receiptHeaderSchema.parse({ ...payload, voucherType: "CR" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
+    const totalDebit = parsedLines.reduce((s, l) => s + Number(l.debit ?? 0), 0);
+    const totalCredit = parsedLines.reduce((s, l) => s + Number(l.credit ?? 0), 0);
+    if (!Number.isFinite(totalDebit) || !Number.isFinite(totalCredit) || Math.abs(totalDebit - totalCredit) > 1e-6) {
+      return res.status(400).json({ error: "Total debits must equal total credits" });
+    }
     const voucher = await receiptsService.createReceipt(header, parsedLines);
     await notifyUsers({
       title: "Payment received",
@@ -74,12 +79,17 @@ export async function updateReceipt(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const current = await receiptsService.getReceipt(id);
-    if (!current || current.voucherType != "CR") {
+    if (!current || current.voucherType !== "CR") {
       return res.status(404).json({ error: "Voucher not found" });
     }
     const { lines, ...payload } = req.body;
     const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "CR" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
+    const totalDebit = parsedLines.reduce((s, l) => s + Number(l.debit ?? 0), 0);
+    const totalCredit = parsedLines.reduce((s, l) => s + Number(l.credit ?? 0), 0);
+    if (!Number.isFinite(totalDebit) || !Number.isFinite(totalCredit) || Math.abs(totalDebit - totalCredit) > 1e-6) {
+      return res.status(400).json({ error: "Total debits must equal total credits" });
+    }
     const voucher = await receiptsService.updateReceipt(id, header, parsedLines);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
@@ -100,7 +110,7 @@ export async function deleteReceipt(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const current = await receiptsService.getReceipt(id);
-    if (!current || current.voucherType != "CR") {
+    if (!current || current.voucherType !== "CR") {
       return res.status(404).json({ error: "Voucher not found" });
     }
     const ok = await receiptsService.deleteReceipt(id);

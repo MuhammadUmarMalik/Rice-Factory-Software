@@ -2,16 +2,20 @@ import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
 
+// Server runs from server/ (dev) or via dist/index.cjs (prod, often with cwd server/). Client build is at root dist/public.
+const distPath = path.resolve(process.cwd(), "dist", "public");
+const distPathFromServer = path.resolve(process.cwd(), "..", "dist", "public");
+const distPathResolved = fs.existsSync(distPath) ? distPath : distPathFromServer;
+
 export function serveStatic(app: Express) {
-  const distPath = path.resolve(__dirname, "public");
-  if (!fs.existsSync(distPath)) {
+  if (!fs.existsSync(distPathResolved)) {
     throw new Error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`,
+      `Could not find the build directory (tried ${distPath}, ${distPathFromServer}), make sure to build the client first`,
     );
   }
 
   app.use(
-    express.static(distPath, {
+    express.static(distPathResolved, {
       etag: true,
       lastModified: true,
       setHeaders: (res, filePath) => {
@@ -29,6 +33,6 @@ export function serveStatic(app: Express) {
   // fall through to index.html if the file doesn't exist
   app.use("*", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");
-    res.sendFile(path.resolve(distPath, "index.html"));
+    res.sendFile(path.resolve(distPathResolved, "index.html"));
   });
 }
