@@ -1,21 +1,23 @@
-import { storage } from "../models/storage";
+import { container } from "../container";
+
+const repo = container.products;
 
 export async function listProducts() {
-  return storage.getActiveProducts();
+  return repo.getActiveProducts();
 }
 
 export async function getProduct(id: number) {
-  return storage.getProduct(id);
+  return repo.getProduct(id);
 }
 
-export async function createProduct(data: any) {
-  return storage.createProduct(data);
+export async function createProduct(data: Parameters<typeof repo.createProduct>[0]) {
+  return repo.createProduct(data);
 }
 
-export async function updateProduct(id: number, data: any) {
-  return storage.updateProduct(id, data);
+export async function updateProduct(id: number, data: Parameters<typeof repo.updateProduct>[1]) {
+  return repo.updateProduct(id, data);
 }
 
 export async function deleteProduct(id: number) {
-  return storage.deleteProduct(id);
+  return repo.deleteProduct(id);
 }

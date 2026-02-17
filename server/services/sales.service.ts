@@ -1,24 +1,34 @@
-import { storage } from "../models/storage";
+import { container } from "../container";
+
+const repo = container.sales;
+const storage = container.storage;
 
 export async function listSales() {
-  return storage.getSales();
+  return repo.getSales();
 }
 
 export async function getSale(id: number) {
-  const sale = await storage.getSale(id);
+  const sale = await repo.getSale(id);
   if (!sale) return undefined;
   const items = await storage.getSaleItems(id);
   return { ...sale, items };
 }
 
-export async function createSale(data: any, items: any[]) {
-  return storage.createSale(data, items);
+export async function createSale(
+  data: Parameters<typeof repo.createSale>[0],
+  items: Parameters<typeof repo.createSale>[1]
+) {
+  return repo.createSale(data, items);
 }
 
-export async function updateSale(id: number, data: any, items: any[]) {
-  return storage.updateSale(id, data, items);
+export async function updateSale(
+  id: number,
+  data: Parameters<typeof repo.updateSale>[1],
+  items: Parameters<typeof repo.updateSale>[2]
+) {
+  return repo.updateSale(id, data, items);
 }
 
 export async function deleteSale(id: number) {
-  return storage.deleteSale(id);
+  return repo.deleteSale(id);
 }
