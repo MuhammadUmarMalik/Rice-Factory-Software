@@ -62,6 +62,22 @@ export async function getOutstandingSuppliers(asOfDate: Date, supplierId?: numbe
   return storage.getOutstandingSuppliers(asOfDate, supplierId);
 }
 
+export async function getBardanaReport(params: {
+  fromDate?: Date;
+  toDate?: Date;
+  supplierId?: number;
+}) {
+  return storage.getBardanaReport(params);
+}
+
+export async function getLessReport(params: {
+  fromDate?: Date;
+  toDate?: Date;
+  supplierId?: number;
+}) {
+  return storage.getLessReport(params);
+}
+
 export async function getReportDetail(type: string, id: number) {
   return storage.getReportDetail(type, id);
 }

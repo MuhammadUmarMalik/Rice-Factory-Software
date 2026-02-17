@@ -37,6 +37,8 @@ const Banks = lazy(() => import("@/pages/accounts/banks"));
 const StockReport = lazy(() => import("@/pages/reports/stock"));
 const PurchaseReport = lazy(() => import("@/pages/reports/purchases"));
 const SalesReport = lazy(() => import("@/pages/reports/sales"));
+const BardanaReport = lazy(() => import("@/pages/reports/bardana"));
+const LessReport = lazy(() => import("@/pages/reports/less"));
 const Ledger = lazy(() => import("@/pages/reports/ledger"));
 const TrialBalance = lazy(() => import("@/pages/reports/trial-balance"));
 const ProfitLoss = lazy(() => import("@/pages/reports/profit-loss"));
@@ -45,6 +47,12 @@ const PeriodPurchases = lazy(() => import("@/pages/reports/period-purchases"));
 const PeriodSales = lazy(() => import("@/pages/reports/period-sales"));
 const GrossProfit = lazy(() => import("@/pages/reports/gross-profit"));
 const DayBook = lazy(() => import("@/pages/reports/day-book"));
+const DayBookSales = lazy(() => import("@/pages/reports/day-book-sales"));
+const DayBookPurchases = lazy(() => import("@/pages/reports/day-book-purchases"));
+const DayBookCash = lazy(() => import("@/pages/reports/day-book-cash"));
+const DayBookSalesReturns = lazy(() => import("@/pages/reports/day-book-sales-returns"));
+const DayBookPurchaseReturns = lazy(() => import("@/pages/reports/day-book-purchase-returns"));
+const DayBookGeneralJournal = lazy(() => import("@/pages/reports/day-book-general-journal"));
 const OutstandingCustomers = lazy(() => import("@/pages/reports/outstanding-customers"));
 const OutstandingSuppliers = lazy(() => import("@/pages/reports/outstanding-suppliers"));
 const IncomeStatement = lazy(() => import("@/pages/reports/income-statement"));
@@ -79,10 +87,18 @@ function Router() {
         <Route path="/reports/stock" component={StockReport} />
         <Route path="/reports/purchases" component={PurchaseReport} />
         <Route path="/reports/sales" component={SalesReport} />
+        <Route path="/reports/bardana" component={BardanaReport} />
+        <Route path="/reports/less" component={LessReport} />
         <Route path="/reports/period-purchases" component={PeriodPurchases} />
         <Route path="/reports/period-sales" component={PeriodSales} />
         <Route path="/reports/gross-profit" component={GrossProfit} />
         <Route path="/reports/day-book" component={DayBook} />
+        <Route path="/reports/day-book/sales" component={DayBookSales} />
+        <Route path="/reports/day-book/purchases" component={DayBookPurchases} />
+        <Route path="/reports/day-book/cash" component={DayBookCash} />
+        <Route path="/reports/day-book/sales-returns" component={DayBookSalesReturns} />
+        <Route path="/reports/day-book/purchase-returns" component={DayBookPurchaseReturns} />
+        <Route path="/reports/day-book/general-journal" component={DayBookGeneralJournal} />
         <Route path="/reports/outstanding-customers" component={OutstandingCustomers} />
         <Route path="/reports/outstanding-suppliers" component={OutstandingSuppliers} />
         <Route path="/reports/income-statement" component={IncomeStatement} />

@@ -7,6 +7,8 @@ export const docKeys = {
   stockReport: "report.stock",
   purchaseReport: "report.purchases",
   salesReport: "report.sales",
+  bardanaReport: "report.bardana",
+  lessReport: "report.less",
   periodPurchases: "report.periodPurchases",
   periodSales: "report.periodSales",
   grossProfit: "report.grossProfit",

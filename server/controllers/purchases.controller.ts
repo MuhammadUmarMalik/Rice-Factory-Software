@@ -154,7 +154,11 @@ export async function deletePurchase(req: Request, res: Response) {
   try {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid purchase id" });
-    const ok = await purchasesService.deletePurchase(id, getUserId(req));
+    const forceRaw = req.query.force;
+    const force = Array.isArray(forceRaw)
+      ? forceRaw.some((value) => ["1", "true", "yes", "on"].includes(String(value).toLowerCase()))
+      : ["1", "true", "yes", "on"].includes(String(forceRaw ?? "").toLowerCase());
+    const ok = await purchasesService.deletePurchase(id, getUserId(req), { force });
     if (!ok) return res.status(404).json({ error: "Purchase not found" });
     res.json({ success: true, message: "Purchase deleted successfully" });
   } catch (error) {

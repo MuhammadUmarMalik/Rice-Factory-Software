@@ -1,7 +1,9 @@
 import { Router } from "express";
 import {
+  bardanaReport,
   dayBook,
   grossProfit,
+  lessReport,
   outstandingCustomers,
   outstandingSuppliers,
   periodPurchases,
@@ -25,6 +27,8 @@ router.get("/api/reports/trial-balance", requireRoles(Roles.finance), reportsCac
 router.get("/api/reports/profit-loss", requireRoles(Roles.finance), reportsCache, profitLoss);
 router.get("/api/reports/purchases", requireRoles(Roles.purchasing), reportsCache, purchaseReport);
 router.get("/api/reports/sales", requireRoles(Roles.sales), reportsCache, salesReport);
+router.get("/api/reports/bardana", requireRoles(Roles.purchasing), reportsCache, bardanaReport);
+router.get("/api/reports/less", requireRoles(Roles.purchasing), reportsCache, lessReport);
 router.get(
   "/api/reports/period-purchases",
   requireRoles(Roles.finance),

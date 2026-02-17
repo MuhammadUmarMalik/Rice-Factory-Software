@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db, sqlite } from "./db";
 import { eq, and, desc, sql, gte, lte, lt, isNull, inArray, or } from "drizzle-orm";
 import {
   computeAgingBuckets,
@@ -138,7 +138,7 @@ export interface IStorage {
   getPurchaseWithDetails(id: number): Promise<(Purchase & { items: PurchaseItem[]; charges: PurchaseCharge[] }) | undefined>;
   createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase>;
   updatePurchase(id: number, purchase: Partial<InsertPurchase>, items: PurchaseItemInput[], charges: PurchaseChargeInput[]): Promise<Purchase | undefined>;
-  deletePurchase(id: number): Promise<boolean>;
+  deletePurchase(id: number, deletedBy?: number, options?: { force?: boolean }): Promise<boolean>;
   getNextPurchaseInvoiceNumber(): Promise<string>;
   getNextPurchaseBillNumber(): Promise<string>;
 
@@ -266,6 +266,30 @@ export interface IStorage {
       balance: string;
     }>;
     totals: { subtotal: string; discount: string; tax: string; otherCharges: string; total: string; received: string; balance: string };
+  }>;
+  getBardanaReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    supplierId?: number;
+  }): Promise<{
+    totals: {
+      totalKg: string;
+      totalBags: string;
+      avgPerBag: string;
+      purchaseCount: number;
+    };
+  }>;
+  getLessReport(filters?: {
+    fromDate?: Date;
+    toDate?: Date;
+    supplierId?: number;
+  }): Promise<{
+    totals: {
+      totalKg: string;
+      totalBags: string;
+      avgPerBag: string;
+      purchaseCount: number;
+    };
   }>;
 
   // New Accounting Reports (derived, no duplicate data)
@@ -481,8 +505,34 @@ export interface IStorage {
   }
 
   function toValidDate(value?: string | number | Date | null): Date {
-    const dt = value instanceof Date ? value : new Date(value ?? Date.now());
-    return Number.isNaN(dt.getTime()) ? new Date() : dt;
+    if (value == null) return new Date();
+
+    if (typeof value === "number") {
+      // Support legacy epoch-second values persisted in SQLite.
+      const normalized = Math.abs(value) < 1_000_000_000_000 ? value * 1000 : value;
+      const dt = new Date(normalized);
+      return Number.isNaN(dt.getTime()) ? new Date() : dt;
+    }
+
+    if (typeof value === "string") {
+      const raw = value.trim();
+      if (/^-?\d+(\.\d+)?$/.test(raw)) {
+        const numeric = Number(raw);
+        if (Number.isFinite(numeric)) {
+          const normalized = Math.abs(numeric) < 1_000_000_000_000 ? numeric * 1000 : numeric;
+          const dt = new Date(normalized);
+          return Number.isNaN(dt.getTime()) ? new Date() : dt;
+        }
+      }
+      const dt = new Date(raw);
+      return Number.isNaN(dt.getTime()) ? new Date() : dt;
+    }
+
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? new Date() : value;
+    }
+
+    return new Date();
   }
 
   function normalizeReceiptVoucherType(value?: string | null): "CR" | "DR" {
@@ -493,12 +543,59 @@ export interface IStorage {
     return "CR";
   }
 
-  function resolveReceiptLineAmount(line: ReceiptLineInput & { amount?: string | number | null }): number {
-    const debitValue = parseAmount(line.debit || "0");
-    const creditValue = parseAmount(line.credit || "0");
-    const amountValue = line.amount != null ? parseAmount(line.amount) : 0;
-    return Math.max(debitValue, creditValue, amountValue);
+function resolveReceiptLineAmount(line: ReceiptLineInput & { amount?: string | number | null }): number {
+  const debitValue = parseAmount(line.debit || "0");
+  const creditValue = parseAmount(line.credit || "0");
+  const amountValue = line.amount != null ? parseAmount(line.amount) : 0;
+  return Math.max(debitValue, creditValue, amountValue);
+}
+
+function ensureSaleItemUnitColumn() {
+  try {
+    const columns = sqlite.prepare(`PRAGMA table_info("sale_items")`).all() as Array<{ name: string }>;
+    const hasUnit = columns.some((col) => col.name === "unit");
+    if (!hasUnit) {
+      sqlite.prepare(`ALTER TABLE "sale_items" ADD COLUMN "unit" TEXT NOT NULL DEFAULT 'kg'`).run();
+    }
+  } catch (error) {
+    console.error("Failed to ensure sale_items.unit column", error);
   }
+}
+
+ensureSaleItemUnitColumn();
+
+function collectSaleIdsFromReceiptLines(lines: Array<{ referenceType?: string | null; referenceId?: number | null }>) {
+  return Array.from(
+    new Set(
+      lines
+        .filter((line) => line.referenceType === "sale" && line.referenceId != null)
+        .map((line) => Number(line.referenceId)),
+    ),
+  );
+}
+
+function recomputeSalePaidAmounts(tx: DbClient, saleIds: number[]) {
+  if (!saleIds.length) return;
+  for (const saleId of saleIds) {
+    const [row] = tx
+      .select({
+        paid: sql<string>`COALESCE(SUM(CAST(${receiptVoucherLines.credit} AS REAL)), 0)`,
+      })
+      .from(receiptVoucherLines)
+      .leftJoin(receiptVouchers, eq(receiptVoucherLines.voucherId, receiptVouchers.id))
+      .where(
+        and(
+          eq(receiptVoucherLines.referenceType, "sale"),
+          eq(receiptVoucherLines.referenceId, saleId),
+          eq(receiptVouchers.voucherType, "CR"),
+          isNull(receiptVouchers.deletedAt),
+        ),
+      )
+      .all();
+    const paidAmount = parseAmount(row?.paid || "0").toString();
+    tx.update(sales).set({ paidAmount }).where(eq(sales.id, saleId)).run();
+  }
+}
 
 function endOfDay(d: Date): Date {
   const dt = new Date(d);
@@ -1720,6 +1817,42 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  private async getPurchaseDeductionTotals(
+    field: "bardanaKatKg" | "lessKg",
+    filters?: { fromDate?: Date; toDate?: Date; supplierId?: number },
+  ) {
+    const conditions = [isNull(purchases.deletedAt), isNull(purchaseItems.deletedAt)];
+    if (filters?.fromDate) conditions.push(gte(purchases.purchaseDate, filters.fromDate));
+    if (filters?.toDate) conditions.push(lte(purchases.purchaseDate, endOfDay(filters.toDate)));
+    if (filters?.supplierId) conditions.push(eq(purchases.supplierId, filters.supplierId));
+
+    const fieldRef = field === "bardanaKatKg" ? purchaseItems.bardanaKatKg : purchaseItems.lessKg;
+    const [row] = db
+      .select({
+        totalKg: sql<string>`COALESCE(SUM(CAST(${fieldRef} AS REAL)), 0)`,
+        totalBags: sql<string>`COALESCE(SUM(CAST(${purchaseItems.bags} AS REAL)), 0)`,
+        purchaseCount: sql<string>`COALESCE(COUNT(DISTINCT ${purchases.id}), 0)`,
+      })
+      .from(purchaseItems)
+      .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      .where(and(...conditions))
+      .all();
+
+    const totalKg = parseAmount(row?.totalKg || "0");
+    const totalBags = parseAmount(row?.totalBags || "0");
+    const avgPerBag = totalBags > 0 ? totalKg / totalBags : 0;
+    const purchaseCount = Number(row?.purchaseCount || 0);
+
+    return {
+      totals: {
+        totalKg: totalKg.toString(),
+        totalBags: totalBags.toString(),
+        avgPerBag: avgPerBag.toString(),
+        purchaseCount,
+      },
+    };
+  }
+
   private assertFiscalPeriodOpen(client: DbClient, postingDate: Date, context: string) {
     this.ensureFiscalCalendarInitialized(client);
 
@@ -2455,19 +2588,36 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async deletePurchase(id: number, deletedBy?: number): Promise<boolean> {
+  async deletePurchase(id: number, deletedBy?: number, options?: { force?: boolean }): Promise<boolean> {
     const existing = await this.getPurchaseWithDetails(id);
     if (!existing) return false;
     if (existing.deletedAt) return false;
-    const paidAmount = parseAmount(existing.paidAmount || "0");
+    const forceDelete = options?.force === true;
+    const parsedPaidAmount = Number.parseFloat(String(existing.paidAmount ?? "0"));
+    const paidAmount = Number.isFinite(parsedPaidAmount) ? parsedPaidAmount : 0;
     if (paidAmount > 0) {
       throw new Error("Cannot delete a purchase that has recorded payments");
     }
+    const stockEpsilon = 0.0001;
 
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
-      const postingDate = existing.purchaseDate ? new Date(existing.purchaseDate as any) : new Date();
+      const postingDate = toValidDate(existing.purchaseDate as any);
       this.assertPostingAllowed(client, postingDate, "purchase");
+
+      // Purchase delete must rollback stock. If stock has already been consumed,
+      // block deletion with a domain-specific message rather than a generic error.
+      for (const item of existing.items.filter((i) => !i.deletedAt)) {
+        const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+        const currentStock = parseAmount(product?.currentStock || "0");
+        const rollbackQty = parseAmount(item.netWeightKg || "0");
+        if (currentStock + stockEpsilon < rollbackQty) {
+          if (forceDelete) continue;
+          throw new Error(
+            `Cannot delete purchase because stock has been consumed for product ${product?.name || item.productId}. Available: ${currentStock}, required to rollback: ${rollbackQty}.`,
+          );
+        }
+      }
 
       // Remove prior ledger entries instead of posting reversals.
       const priorEntries = tx
@@ -2483,7 +2633,15 @@ export class DatabaseStorage implements IStorage {
 
       // Rollback stock impact
       for (const item of existing.items.filter((i) => !i.deletedAt)) {
-        this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
+        if (forceDelete) {
+          const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+          const currentStock = parseAmount(product?.currentStock || "0");
+          const rollbackQty = parseAmount(item.netWeightKg || "0");
+          const adjustedStock = Math.max(currentStock - rollbackQty, 0);
+          tx.update(products).set({ currentStock: adjustedStock.toString() }).where(eq(products.id, item.productId)).run();
+        } else {
+          this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
+        }
       }
 
       // Soft delete related rows
@@ -4909,6 +5067,14 @@ export class DatabaseStorage implements IStorage {
         balance: totals.balance.toString(),
       },
     };
+  }
+
+  async getBardanaReport(filters?: { fromDate?: Date; toDate?: Date; supplierId?: number }) {
+    return this.getPurchaseDeductionTotals("bardanaKatKg", filters);
+  }
+
+  async getLessReport(filters?: { fromDate?: Date; toDate?: Date; supplierId?: number }) {
+    return this.getPurchaseDeductionTotals("lessKg", filters);
   }
 
   async getSalesReport(filters?: {

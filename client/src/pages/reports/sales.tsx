@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Download, TrendingUp, Truck, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -100,15 +100,23 @@ export default function SalesReportPage() {
   }, [error]);
 
   const rows = data?.rows || [];
-  const totals = data?.totals || {
-    subtotal: "0",
-    discount: "0",
-    tax: "0",
-    otherCharges: "0",
-    total: "0",
-    received: "0",
-    balance: "0",
-  };
+  const totals = useMemo(
+    () =>
+      rows.reduce(
+        (acc, r) => {
+          acc.subtotal += parseFloat(r.subtotal || "0");
+          acc.discount += parseFloat(r.discount || "0");
+          acc.tax += parseFloat(r.tax || "0");
+          acc.otherCharges += parseFloat(r.otherCharges || "0");
+          acc.total += parseFloat(r.total || "0");
+          acc.received += parseFloat(r.received || "0");
+          acc.balance += parseFloat(r.balance || "0");
+          return acc;
+        },
+        { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, received: 0, balance: 0 },
+      ),
+    [rows],
+  );
 
   const columns: Column<SalesReportRow>[] = [
     {
@@ -311,7 +319,7 @@ export default function SalesReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-primary ${isRTL ? "text-right" : ""}`}>
-              Rs. {parseFloat(totals.total || "0").toLocaleString()}
+              Rs. {totals.total.toLocaleString()}
             </div>
             <p className="text-xs text-muted-foreground mt-1">{rows.length} transactions</p>
           </CardContent>
@@ -324,7 +332,7 @@ export default function SalesReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
-              Rs. {parseFloat(totals.received || "0").toLocaleString()}
+              Rs. {totals.received.toLocaleString()}
             </div>
           </CardContent>
         </Card>
@@ -336,7 +344,7 @@ export default function SalesReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-destructive ${isRTL ? "text-right" : ""}`}>
-              Rs. {parseFloat(totals.balance || "0").toLocaleString()}
+              Rs. {totals.balance.toLocaleString()}
             </div>
           </CardContent>
         </Card>

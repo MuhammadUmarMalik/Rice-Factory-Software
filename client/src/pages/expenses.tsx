@@ -25,6 +25,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { Label } from "@/components/ui/label";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -38,11 +39,20 @@ import { Textarea } from "@/components/ui/textarea";
 import type { Account, ExpenseEntry } from "@shared/schema";
 
 const expenseFormSchema = z.object({
-  expenseName: z.string().trim().min(1, "Expense name is required"),
+  expenseAccountId: z.string().min(1, "Select expense category"),
+  newExpenseName: z.string().trim().optional(),
   payFromAccountId: z.string().min(1, "Select paying account"),
   amount: z.string().min(1, "Amount is required"),
   expenseDate: z.string().optional(),
   description: z.string().optional(),
+}).superRefine((value, ctx) => {
+  if (value.expenseAccountId === "__new__" && !value.newExpenseName?.trim()) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["newExpenseName"],
+      message: "Expense category name is required",
+    });
+  }
 });
 
 type ExpenseFormData = z.infer<typeof expenseFormSchema>;
@@ -53,12 +63,16 @@ export default function ExpensesPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ExpenseEntry | null>(null);
   const [viewingExpense, setViewingExpense] = useState<ExpenseEntry | null>(null);
+  const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [bulkCategoryInput, setBulkCategoryInput] = useState("");
   const getTodayInput = () => new Date().toISOString().slice(0, 10);
 
   const form = useForm<ExpenseFormData>({
     resolver: zodResolver(expenseFormSchema),
     defaultValues: {
-      expenseName: "",
+      expenseAccountId: "",
+      newExpenseName: "",
       payFromAccountId: "",
       amount: "",
       expenseDate: getTodayInput(),
@@ -96,8 +110,9 @@ export default function ExpensesPage() {
     return date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : getTodayInput();
   };
 
-  const resolveExpenseAccountId = async (name: string) => {
-    const normalized = name.trim();
+  const ensureExpenseCategoryId = async (selection: string, customName?: string) => {
+    if (selection !== "__new__") return parseInt(selection, 10);
+    const normalized = (customName || "").trim();
     const existing = expenseAccounts.find((acc) => acc.name.trim().toLowerCase() === normalized.toLowerCase());
     if (existing) return existing.id;
     const accountRes = await apiRequest("POST", "/api/accounts", { name: normalized, type: "expense" });
@@ -107,7 +122,8 @@ export default function ExpensesPage() {
 
   const resetForm = () => {
     form.reset({
-      expenseName: "",
+      expenseAccountId: "",
+      newExpenseName: "",
       payFromAccountId: "",
       amount: "",
       expenseDate: getTodayInput(),
@@ -117,7 +133,7 @@ export default function ExpensesPage() {
 
   const createMutation = useMutation({
     mutationFn: async (data: ExpenseFormData) => {
-      const expenseAccountId = await resolveExpenseAccountId(data.expenseName);
+      const expenseAccountId = await ensureExpenseCategoryId(data.expenseAccountId, data.newExpenseName);
 
       return apiRequest("POST", "/api/expenses", {
         expenseAccountId,
@@ -144,7 +160,7 @@ export default function ExpensesPage() {
 
   const updateMutation = useMutation({
     mutationFn: async (data: ExpenseFormData & { id: number }) => {
-      const expenseAccountId = await resolveExpenseAccountId(data.expenseName);
+      const expenseAccountId = await ensureExpenseCategoryId(data.expenseAccountId, data.newExpenseName);
       return apiRequest("PATCH", `/api/expenses/${data.id}`, {
         expenseAccountId,
         payFromAccountId: parseInt(data.payFromAccountId, 10),
@@ -291,9 +307,9 @@ export default function ExpensesPage() {
 
   const handleEdit = (expense: ExpenseEntry) => {
     setEditingExpense(expense);
-    const expenseName = expenseAccounts.find((acc) => acc.id === expense.expenseAccountId)?.name || "";
     form.reset({
-      expenseName,
+      expenseAccountId: expense.expenseAccountId ? String(expense.expenseAccountId) : "",
+      newExpenseName: "",
       payFromAccountId: expense.payFromAccountId ? String(expense.payFromAccountId) : "",
       amount: expense.amount || "",
       expenseDate: toDateInputValue(expense.expenseDate),
@@ -311,6 +327,58 @@ export default function ExpensesPage() {
   };
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  const categoryOptions = useMemo(
+    () => [...expenseAccounts].sort((a, b) => a.name.localeCompare(b.name)),
+    [expenseAccounts],
+  );
+
+  const createExpenseCategory = async (name: string) => {
+    const normalized = name.trim();
+    if (!normalized) return null;
+    const existing = expenseAccounts.find((acc) => acc.name.trim().toLowerCase() === normalized.toLowerCase());
+    if (existing) return existing;
+    const res = await apiRequest("POST", "/api/accounts", { name: normalized, type: "expense" });
+    return (await res.json()) as Account;
+  };
+
+  const handleCreateSingleCategory = async () => {
+    try {
+      const created = await createExpenseCategory(newCategoryName);
+      if (!created) {
+        toast({ title: "Category name is required", variant: "destructive" });
+        return;
+      }
+      setNewCategoryName("");
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      form.setValue("expenseAccountId", String(created.id), { shouldValidate: true });
+      toast({ title: "Expense category created" });
+    } catch (error: any) {
+      toast({ title: "Failed to create category", description: String(error?.message || error), variant: "destructive" });
+    }
+  };
+
+  const handleCreateBulkCategories = async () => {
+    try {
+      const names = bulkCategoryInput
+        .split(/[\n,]+/)
+        .map((name) => name.trim())
+        .filter(Boolean);
+      if (!names.length) {
+        toast({ title: "Enter one or more category names", variant: "destructive" });
+        return;
+      }
+      for (const name of names) {
+        await createExpenseCategory(name);
+      }
+      setBulkCategoryInput("");
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      toast({ title: `${names.length} category(s) processed` });
+    } catch (error: any) {
+      toast({ title: "Failed to create categories", description: String(error?.message || error), variant: "destructive" });
+    }
+  };
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
@@ -372,17 +440,50 @@ export default function ExpensesPage() {
 
               <FormField
                 control={form.control}
-                name="expenseName"
+                name="expenseAccountId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Expense</FormLabel>
-                    <FormControl>
-                      <Input {...field} />
-                    </FormControl>
+                    <div className="flex items-center justify-between gap-2">
+                      <FormLabel>Expense Category</FormLabel>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setIsCategoryDialogOpen(true)}>
+                        Manage Categories
+                      </Button>
+                    </div>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select expense category" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {categoryOptions.map((acc) => (
+                          <SelectItem key={acc.id} value={String(acc.id)}>
+                            {acc.name}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="__new__">+ Create new category</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
               />
+
+              {form.watch("expenseAccountId") === "__new__" && (
+                <FormField
+                  control={form.control}
+                  name="newExpenseName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>New Category Name</FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder="e.g. Office Supplies" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               <FormField
                 control={form.control}
@@ -487,6 +588,57 @@ export default function ExpensesPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCategoryDialogOpen} onOpenChange={setIsCategoryDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>Expense Categories</DialogTitle>
+            <DialogDescription className={isRTL ? "text-right font-urdu" : ""}>
+              Create one category or add multiple categories at once.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Create single category</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  placeholder="Enter category name"
+                />
+                <Button type="button" onClick={handleCreateSingleCategory}>Create</Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Bulk add categories</Label>
+              <Textarea
+                rows={4}
+                value={bulkCategoryInput}
+                onChange={(e) => setBulkCategoryInput(e.target.value)}
+                placeholder="Fuel, Repair, Utilities&#10;or one per line"
+              />
+              <Button type="button" variant="outline" onClick={handleCreateBulkCategories}>
+                Add Multiple Categories
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Existing categories</Label>
+              <div className="max-h-36 overflow-auto rounded-md border p-2 text-sm">
+                {categoryOptions.length === 0 ? (
+                  <div className="text-muted-foreground">No categories yet.</div>
+                ) : (
+                  categoryOptions.map((acc) => (
+                    <div key={acc.id} className="py-1">{acc.name}</div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
