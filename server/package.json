@@ -32,7 +32,8 @@
     "playwright": "^1.49.0",
     "ws": "^8.18.0",
     "zod": "^3.24.2",
-    "zod-validation-error": "^3.4.0"
+    "zod-validation-error": "^3.4.0",
+    "@sentry/node": "^9.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

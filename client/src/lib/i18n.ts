@@ -73,6 +73,8 @@ export const translations = {
     loadingCharges: "Loading Charges",
     weighingCharges: "Weighing Charges",
     otherCharges: "Other Charges",
+    rentCharges: "Rent",
+    discountAmount: "Discount",
     gatePass: "Gate Pass",
     
     // Reports
@@ -232,6 +234,8 @@ export const translations = {
     loadingCharges: "لوڈنگ چارجز",
     weighingCharges: "وزن چارجز",
     otherCharges: "دیگر چارجز",
+    rentCharges: "کرایہ",
+    discountAmount: "رعایت",
     gatePass: "گیٹ پاس",
 
     // Reports

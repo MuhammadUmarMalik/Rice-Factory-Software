@@ -1,4 +1,5 @@
 import { storage } from "../models/storage";
+import * as cashService from "./cash-in-hand.service";
 
 function buildJournalEntries(body: any) {
   return [
@@ -35,7 +36,15 @@ export async function getJournalVoucher(id: number) {
 
 export async function createJournalVoucher(data: any) {
   const { debitAccountId, debitAmount, creditAccountId, creditAmount, ...header } = data;
-  return storage.createJournalVoucher(header, buildJournalEntries(data));
+  const voucher = await storage.createJournalVoucher(header, buildJournalEntries(data));
+  if (voucher.status === "approved") {
+    try {
+      await cashService.syncCashFromJournalVoucher(voucher.id);
+    } catch (err) {
+      console.error("Cash sync from JV failed:", err);
+    }
+  }
+  return voucher;
 }
 
 export async function updateJournalVoucher(id: number, data: any) {
@@ -44,7 +53,15 @@ export async function updateJournalVoucher(id: number, data: any) {
 }
 
 export async function approveJournalVoucher(id: number, approverId?: number) {
-  return storage.approveJournalVoucher(id, approverId);
+  const voucher = await storage.approveJournalVoucher(id, approverId);
+  if (voucher) {
+    try {
+      await cashService.syncCashFromJournalVoucher(id);
+    } catch (err) {
+      console.error("Cash sync from JV failed:", err);
+    }
+  }
+  return voucher;
 }
 
 export async function deleteJournalVoucher(id: number) {

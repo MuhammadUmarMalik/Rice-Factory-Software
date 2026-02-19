@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react";
+import { Link } from "wouter";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SkeletonBox, SkeletonText } from "@/components/ui/skeletons";
@@ -123,6 +124,13 @@ function renderDetailContent(detail: ReportDetail) {
             {d.customer?.name && (
               <p className="text-sm text-muted-foreground">Customer: {d.customer.name}</p>
             )}
+            {(d.sale as { cashReceiptVoucherNo?: string })?.cashReceiptVoucherNo && (
+              <p className="text-sm">
+                <Link href="/cash" className="text-primary hover:underline">
+                  Cash receipt: {(d.sale as { cashReceiptVoucherNo: string }).cashReceiptVoucherNo}
+                </Link>
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             <SummaryCard label="Net Amount" value={formatMoney(d.sale?.totalAmount)} highlight />
@@ -133,6 +141,7 @@ function renderDetailContent(detail: ReportDetail) {
           { label: "Loading", amount: d.sale?.loadingCharges },
           { label: "Weighing", amount: d.sale?.weighingCharges },
           { label: "Other", amount: d.sale?.otherCharges },
+          { label: "Rent", amount: d.sale?.rentCharges },
         ].filter((c) => Number(c.amount || 0) !== 0).length > 0 && (
           <div className="rounded-md border">
             <Table>
@@ -148,6 +157,7 @@ function renderDetailContent(detail: ReportDetail) {
                   { label: "Loading", amount: d.sale?.loadingCharges },
                   { label: "Weighing", amount: d.sale?.weighingCharges },
                   { label: "Other", amount: d.sale?.otherCharges },
+                  { label: "Rent", amount: d.sale?.rentCharges },
                 ]
                   .filter((c) => Number(c.amount || 0) !== 0)
                   .map((c, idx) => (
@@ -217,6 +227,20 @@ function renderDetailContent(detail: ReportDetail) {
             )}
             {d.supplier?.name && (
               <p className="text-sm text-muted-foreground">Supplier: {d.supplier.name}</p>
+            )}
+            {(d.purchase as { cashPaymentVoucherNo?: string })?.cashPaymentVoucherNo && (
+              <p className="text-sm">
+                <Link href="/cash" className="text-primary hover:underline">
+                  Cash payment: {(d.purchase as { cashPaymentVoucherNo: string }).cashPaymentVoucherNo}
+                </Link>
+              </p>
+            )}
+            {((d.purchase as { paymentMode?: string })?.paymentMode === "bank" || (d.purchase as { paymentMode?: string })?.paymentMode === "credit") && (
+              <p className="text-xs text-muted-foreground">
+                Payment via bank/third party: record using{" "}
+                <Link href="/journal" className="text-primary hover:underline">Journal Voucher</Link>
+                {" "}(Debit Supplier, Credit Bank/Account). Ledger will show correct balance.
+              </p>
             )}
           </div>
           <div className="flex gap-2">
@@ -498,8 +522,8 @@ export function ReportDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <div className="flex items-center justify-between gap-4">
             <DialogTitle>Details</DialogTitle>
             {printConfig && (
@@ -517,9 +541,11 @@ export function ReportDetailDialog({
             <SkeletonText lines={3} />
           </div>
         ) : (
-          <ScrollArea className="max-h-[70vh] pr-2">
-            {renderDetailContent(detail)}
-          </ScrollArea>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <ScrollArea className="h-full w-full pr-2">
+              {renderDetailContent(detail)}
+            </ScrollArea>
+          </div>
         )}
       </DialogContent>
     </Dialog>

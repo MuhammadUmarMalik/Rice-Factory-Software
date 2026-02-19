@@ -1,4 +1,5 @@
 import { storage } from "../models/storage";
+import * as cashService from "./cash-in-hand.service";
 
 export async function getStockReport(params: {
   fromDate?: Date;
@@ -79,5 +80,20 @@ export async function getLessReport(params: {
 }
 
 export async function getReportDetail(type: string, id: number) {
-  return storage.getReportDetail(type, id);
+  const detail = await storage.getReportDetail(type, id);
+  if (type.toLowerCase() === "sale" && detail?.sale) {
+    const cashReceiptId = (detail.sale as { cashReceiptId?: number }).cashReceiptId;
+    if (cashReceiptId) {
+      (detail.sale as { cashReceiptVoucherNo?: string }).cashReceiptVoucherNo =
+        await cashService.getCashReceiptVoucherNo(cashReceiptId);
+    }
+  }
+  if (type.toLowerCase() === "purchase" && detail?.purchase) {
+    const cashPaymentId = (detail.purchase as { cashPaymentId?: number }).cashPaymentId;
+    if (cashPaymentId) {
+      (detail.purchase as { cashPaymentVoucherNo?: string }).cashPaymentVoucherNo =
+        await cashService.getCashPaymentVoucherNo(cashPaymentId);
+    }
+  }
+  return detail;
 }

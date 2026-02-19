@@ -34,7 +34,7 @@ export async function getPayment(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const voucher = await paymentsService.getPayment(id);
-    if (!voucher || voucher.voucherType != "DR") return res.status(404).json({ error: "Voucher not found" });
+    if (!voucher || voucher.voucherType !== "CP") return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
   } catch (error) {
     console.error(error);
@@ -45,7 +45,7 @@ export async function getPayment(req: Request, res: Response) {
 export async function createPayment(req: Request, res: Response) {
   try {
     const { lines, ...payload } = req.body;
-    const header = receiptHeaderSchema.parse({ ...payload, voucherType: "DR" });
+    const header = receiptHeaderSchema.parse({ ...payload, voucherType: "CP" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
     const voucher = await paymentsService.createPayment(header, parsedLines);
     await notifyUsers({
@@ -73,11 +73,11 @@ export async function updatePayment(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const current = await paymentsService.getPayment(id);
-    if (!current || current.voucherType != "DR") {
+    if (!current || current.voucherType !== "CP") {
       return res.status(404).json({ error: "Voucher not found" });
     }
     const { lines, ...payload } = req.body;
-    const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "DR" });
+    const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "CP" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
     const voucher = await paymentsService.updatePayment(id, header, parsedLines);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
@@ -99,7 +99,7 @@ export async function deletePayment(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const current = await paymentsService.getPayment(id);
-    if (!current || current.voucherType != "DR") {
+    if (!current || current.voucherType !== "CP") {
       return res.status(404).json({ error: "Voucher not found" });
     }
     const ok = await paymentsService.deletePayment(id);

@@ -1,0 +1,657 @@
+/**
+ * Cash in Hand module - service layer
+ * Handles receipts, payments, journal vouchers, balance calculation, and auto-linking with Sales/Purchases
+ */
+import { db, sqlite } from "../models/db";
+import {
+  cashAccounts,
+  cashReceipts,
+  cashPayments,
+  cashJournalVouchers,
+  cashJournalItems,
+  journalVouchers,
+  journalVoucherEntries,
+  accounts,
+  sales,
+  purchases,
+} from "../db/schema";
+import { eq, and, gte, lte, desc, inArray } from "drizzle-orm";
+import type { InsertCashReceipt, InsertCashPayment, CashReceipt, CashPayment } from "../db/schema";
+
+const parseNum = (v: string | number | null | undefined): number => {
+  if (v == null || v === "") return 0;
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  return Number.isFinite(n) ? n : 0;
+};
+
+function getNextVoucherNo(prefix: string, table: typeof cashReceipts | typeof cashPayments | typeof cashJournalVouchers): string {
+  const year = new Date().getFullYear();
+  const rows = db.select({ id: table.id })
+    .from(table)
+    .orderBy(desc(table.id))
+    .limit(1)
+    .all();
+  const lastId = rows[0]?.id ?? 0;
+  const next = lastId + 1;
+  return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
+}
+
+async function ensureCashAccount(cashAccountId = 1) {
+  const [acc] = db.select().from(cashAccounts).where(eq(cashAccounts.id, cashAccountId)).all();
+  if (!acc) {
+    const [inserted] = db.insert(cashAccounts).values({
+      id: cashAccountId,
+      accountName: "Main Cash",
+      openingBalance: "0",
+    }).returning().all();
+    return inserted!;
+  }
+  return acc;
+}
+
+export async function getBalance(cashAccountId = 1, asOfDate?: string): Promise<{
+  openingBalance: number;
+  totalReceipts: number;
+  totalPayments: number;
+  currentBalance: number;
+}> {
+  await ensureCashAccount(cashAccountId);
+  const [acc] = db.select().from(cashAccounts).where(eq(cashAccounts.id, cashAccountId)).all();
+  const opening = parseNum(acc?.openingBalance ?? "0");
+
+
+  const receiptRows = db.select({ amount: cashReceipts.amount })
+    .from(cashReceipts)
+    .where(asOfDate
+      ? and(
+          eq(cashReceipts.cashAccountId, cashAccountId),
+          lte(cashReceipts.receiptDate, new Date(asOfDate + "T23:59:59").getTime())
+        )
+      : eq(cashReceipts.cashAccountId, cashAccountId))
+    .all();
+
+  const paymentRows = db.select({ amount: cashPayments.amount })
+    .from(cashPayments)
+    .where(asOfDate
+      ? and(
+          eq(cashPayments.cashAccountId, cashAccountId),
+          lte(cashPayments.paymentDate, new Date(asOfDate + "T23:59:59").getTime())
+        )
+      : eq(cashPayments.cashAccountId, cashAccountId))
+    .all();
+
+  let totalReceipts = 0;
+  let totalPayments = 0;
+  for (const r of receiptRows) totalReceipts += parseNum(r.amount);
+  for (const p of paymentRows) totalPayments += parseNum(p.amount);
+
+  const currentBalance = opening + totalReceipts - totalPayments;
+  return { openingBalance: opening, totalReceipts, totalPayments, currentBalance };
+}
+
+export async function getReceipts(filters?: {
+  from?: string;
+  to?: string;
+  cashAccountId?: number;
+}): Promise<(CashReceipt & { saleRef?: string; invoiceRef?: string })[]> {
+  let q = db.select().from(cashReceipts).orderBy(desc(cashReceipts.receiptDate));
+  const conditions = [];
+  if (filters?.cashAccountId) conditions.push(eq(cashReceipts.cashAccountId, filters.cashAccountId));
+  if (filters?.from) conditions.push(gte(cashReceipts.receiptDate, new Date(filters.from).getTime()));
+  if (filters?.to) conditions.push(lte(cashReceipts.receiptDate, new Date(filters.to + "T23:59:59").getTime()));
+  if (conditions.length > 0) {
+    q = db.select().from(cashReceipts).where(and(...conditions)).orderBy(desc(cashReceipts.receiptDate));
+  }
+  const rows = q.all();
+  const result = rows as (CashReceipt & { saleRef?: string; invoiceRef?: string })[];
+  for (const r of result) {
+    if (r.referenceType === "sale" && r.referenceId) {
+      const [s] = db.select({ invoiceNumber: sales.invoiceNumber }).from(sales).where(eq(sales.id, r.referenceId)).all();
+      if (s) r.invoiceRef = s.invoiceNumber;
+    }
+  }
+  return result;
+}
+
+export async function getReceiptById(id: number): Promise<CashReceipt | null> {
+  const [r] = db.select().from(cashReceipts).where(eq(cashReceipts.id, id)).all();
+  return r ?? null;
+}
+
+export async function createReceipt(data: Omit<InsertCashReceipt, "voucherNo" | "createdAt"> & { voucherNo?: string }): Promise<CashReceipt> {
+  const voucherNo = data.voucherNo ?? getNextVoucherNo("CR", cashReceipts);
+  const amount = parseNum(data.amount);
+  if (amount <= 0) throw new Error("Amount must be greater than 0");
+  await ensureCashAccount(data.cashAccountId ?? 1);
+  const [inserted] = db.insert(cashReceipts).values({
+    voucherNo,
+    receiptDate: typeof data.receiptDate === "string" ? new Date(data.receiptDate).getTime() : (data.receiptDate as number),
+    receivedFrom: data.receivedFrom,
+    amount: String(amount),
+    description: data.description ?? null,
+    paymentMode: data.paymentMode ?? "cash",
+    referenceType: data.referenceType ?? null,
+    referenceId: data.referenceId ?? null,
+    cashAccountId: data.cashAccountId ?? 1,
+  }).returning().all();
+  return inserted!;
+}
+
+export async function updateReceipt(id: number, data: Partial<Omit<InsertCashReceipt, "voucherNo" | "createdAt">>): Promise<CashReceipt | null> {
+  const [existing] = db.select().from(cashReceipts).where(eq(cashReceipts.id, id)).all();
+  if (!existing) return null;
+  if (existing.referenceType === "sale" && existing.referenceId) {
+    throw new Error(`This receipt is linked to Sale #${existing.referenceId}. Delete the sale instead.`);
+  }
+  const amount = data.amount != null ? parseNum(data.amount) : parseNum(existing.amount);
+  if (amount <= 0) throw new Error("Amount must be greater than 0");
+  const [updated] = db.update(cashReceipts).set({
+    ...(data.receiptDate != null && { receiptDate: typeof data.receiptDate === "string" ? new Date(data.receiptDate).getTime() : data.receiptDate }),
+    ...(data.receivedFrom != null && { receivedFrom: data.receivedFrom }),
+    ...(data.amount != null && { amount: String(amount) }),
+    ...(data.description !== undefined && { description: data.description }),
+  }).where(eq(cashReceipts.id, id)).returning().all();
+  return updated ?? null;
+}
+
+export async function deleteReceipt(id: number): Promise<{ ok: boolean; error?: string }> {
+  const [r] = db.select().from(cashReceipts).where(eq(cashReceipts.id, id)).all();
+  if (!r) return { ok: false, error: "Receipt not found" };
+  if (r.referenceType === "sale" && r.referenceId) {
+    return { ok: false, error: `This entry is linked to Sale #${r.referenceId}, delete the sale instead.` };
+  }
+  db.delete(cashReceipts).where(eq(cashReceipts.id, id)).run();
+  return { ok: true };
+}
+
+export async function getPayments(filters?: {
+  from?: string;
+  to?: string;
+  cashAccountId?: number;
+}): Promise<(CashPayment & { purchaseRef?: string; invoiceRef?: string })[]> {
+  const conditions = [];
+  if (filters?.cashAccountId) conditions.push(eq(cashPayments.cashAccountId, filters.cashAccountId));
+  if (filters?.from) conditions.push(gte(cashPayments.paymentDate, new Date(filters.from).getTime()));
+  if (filters?.to) conditions.push(lte(cashPayments.paymentDate, new Date(filters.to + "T23:59:59").getTime()));
+  const q = conditions.length > 0
+    ? db.select().from(cashPayments).where(and(...conditions)).orderBy(desc(cashPayments.paymentDate))
+    : db.select().from(cashPayments).orderBy(desc(cashPayments.paymentDate));
+  const rows = q.all();
+  const result = rows as (CashPayment & { purchaseRef?: string; invoiceRef?: string })[];
+  for (const r of result) {
+    if (r.referenceType === "purchase" && r.referenceId) {
+      const [p] = db.select({ invoiceNumber: purchases.invoiceNumber }).from(purchases).where(eq(purchases.id, r.referenceId)).all();
+      if (p) r.invoiceRef = p.invoiceNumber;
+    }
+  }
+  return result;
+}
+
+export async function getPaymentById(id: number): Promise<CashPayment | null> {
+  const [p] = db.select().from(cashPayments).where(eq(cashPayments.id, id)).all();
+  return p ?? null;
+}
+
+export async function createPayment(data: Omit<InsertCashPayment, "voucherNo" | "createdAt"> & { voucherNo?: string }): Promise<CashPayment> {
+  const voucherNo = data.voucherNo ?? getNextVoucherNo("CP", cashPayments);
+  const amount = parseNum(data.amount);
+  if (amount <= 0) throw new Error("Amount must be greater than 0");
+  await ensureCashAccount(data.cashAccountId ?? 1);
+  const [inserted] = db.insert(cashPayments).values({
+    voucherNo,
+    paymentDate: typeof data.paymentDate === "string" ? new Date(data.paymentDate).getTime() : (data.paymentDate as number),
+    paidTo: data.paidTo,
+    amount: String(amount),
+    description: data.description ?? null,
+    paymentMode: data.paymentMode ?? "cash",
+    referenceType: data.referenceType ?? null,
+    referenceId: data.referenceId ?? null,
+    cashAccountId: data.cashAccountId ?? 1,
+  }).returning().all();
+  return inserted!;
+}
+
+export async function updatePayment(id: number, data: Partial<Omit<InsertCashPayment, "voucherNo" | "createdAt">>): Promise<CashPayment | null> {
+  const [existing] = db.select().from(cashPayments).where(eq(cashPayments.id, id)).all();
+  if (!existing) return null;
+  if (existing.referenceType === "purchase" && existing.referenceId) {
+    throw new Error(`This payment is linked to Purchase #${existing.referenceId}. Delete the purchase instead.`);
+  }
+  const amount = data.amount != null ? parseNum(data.amount) : parseNum(existing.amount);
+  if (amount <= 0) throw new Error("Amount must be greater than 0");
+  const [updated] = db.update(cashPayments).set({
+    ...(data.paymentDate != null && { paymentDate: typeof data.paymentDate === "string" ? new Date(data.paymentDate).getTime() : data.paymentDate }),
+    ...(data.paidTo != null && { paidTo: data.paidTo }),
+    ...(data.amount != null && { amount: String(amount) }),
+    ...(data.description !== undefined && { description: data.description }),
+  }).where(eq(cashPayments.id, id)).returning().all();
+  return updated ?? null;
+}
+
+export async function deletePayment(id: number): Promise<{ ok: boolean; error?: string }> {
+  const [p] = db.select().from(cashPayments).where(eq(cashPayments.id, id)).all();
+  if (!p) return { ok: false, error: "Payment not found" };
+  if (p.referenceType === "purchase" && p.referenceId) {
+    return { ok: false, error: `This entry is linked to Purchase #${p.referenceId}, delete the purchase instead.` };
+  }
+  db.delete(cashPayments).where(eq(cashPayments.id, id)).run();
+  return { ok: true };
+}
+
+export type LedgerRow = {
+  date: number;
+  voucherNo: string;
+  type: "receipt" | "payment" | "opening";
+  description: string;
+  reference: string;
+  referenceType?: string | null;
+  referenceId?: number | null;
+  debit: number;
+  credit: number;
+  balance: number;
+};
+
+export async function getLedger(filters?: { from?: string; to?: string; cashAccountId?: number }): Promise<LedgerRow[]> {
+  const cashAccountId = filters?.cashAccountId ?? 1;
+  await ensureCashAccount(cashAccountId);
+  const balance = await getBalance(cashAccountId);
+  const rows: LedgerRow[] = [];
+  let runningBalance = balance.openingBalance;
+
+  const receipts = await getReceipts(filters);
+  const payments = await getPayments(filters);
+
+  const entries: { date: number; type: "receipt" | "payment"; voucherNo: string; desc: string; ref: string; refType?: string; refId?: number; debit: number; credit: number }[] = [];
+  for (const r of receipts) {
+    entries.push({
+      date: typeof r.receiptDate === "number" ? r.receiptDate : new Date(r.receiptDate).getTime(),
+      type: "receipt",
+      voucherNo: r.voucherNo,
+      desc: r.description || `Received from ${r.receivedFrom}`,
+      ref: r.referenceType === "sale" && r.referenceId ? `Sale #${r.referenceId}` : (r.referenceType || ""),
+      refType: r.referenceType ?? undefined,
+      refId: r.referenceId ?? undefined,
+      debit: parseNum(r.amount),
+      credit: 0,
+    });
+  }
+  for (const p of payments) {
+    entries.push({
+      date: typeof p.paymentDate === "number" ? p.paymentDate : new Date(p.paymentDate).getTime(),
+      type: "payment",
+      voucherNo: p.voucherNo,
+      desc: p.description || `Paid to ${p.paidTo}`,
+      ref: p.referenceType === "purchase" && p.referenceId ? `Purchase #${p.referenceId}` : (p.referenceType || ""),
+      refType: p.referenceType ?? undefined,
+      refId: p.referenceId ?? undefined,
+      debit: 0,
+      credit: parseNum(p.amount),
+    });
+  }
+  entries.sort((a, b) => a.date - b.date);
+
+  rows.push({
+    date: 0,
+    voucherNo: "",
+    type: "opening",
+    description: "Opening Balance",
+    reference: "",
+    debit: 0,
+    credit: 0,
+    balance: runningBalance,
+  });
+
+  for (const e of entries) {
+    runningBalance += e.debit - e.credit;
+    rows.push({
+      date: e.date,
+      voucherNo: e.voucherNo,
+      type: e.type,
+      description: e.desc,
+      reference: e.ref,
+      referenceType: e.refType ?? null,
+      referenceId: e.refId ?? null,
+      debit: e.debit,
+      credit: e.credit,
+      balance: runningBalance,
+    });
+  }
+  return rows;
+}
+
+export async function getTodaySummary(cashAccountId = 1): Promise<{
+  openingBalance: number;
+  todayReceipts: number;
+  todayPayments: number;
+  closingBalance: number;
+}> {
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  const balance = await getBalance(cashAccountId, yesterdayStr);
+  const receiptRows = db.select({ amount: cashReceipts.amount }).from(cashReceipts)
+    .where(and(
+      eq(cashReceipts.cashAccountId, cashAccountId),
+      gte(cashReceipts.receiptDate, new Date(today).getTime()),
+      lte(cashReceipts.receiptDate, new Date(today + "T23:59:59").getTime())
+    )).all();
+  const paymentRows = db.select({ amount: cashPayments.amount }).from(cashPayments)
+    .where(and(
+      eq(cashPayments.cashAccountId, cashAccountId),
+      gte(cashPayments.paymentDate, new Date(today).getTime()),
+      lte(cashPayments.paymentDate, new Date(today + "T23:59:59").getTime())
+    )).all();
+  let todayReceipts = 0;
+  let todayPayments = 0;
+  for (const r of receiptRows) todayReceipts += parseNum(r.amount);
+  for (const p of paymentRows) todayPayments += parseNum(p.amount);
+  const closingBalance = balance.openingBalance + balance.totalReceipts - balance.totalPayments + todayReceipts - todayPayments;
+  return {
+    openingBalance: balance.openingBalance,
+    todayReceipts,
+    todayPayments,
+    closingBalance,
+  };
+}
+
+// Journal Vouchers (Cash module)
+export type CashJournalItemInput = { accountHead: string; debitAmount: string; creditAmount: string; narration?: string };
+
+export async function getJournalVouchers(): Promise<typeof cashJournalVouchers.$inferSelect[]> {
+  return db.select().from(cashJournalVouchers).orderBy(desc(cashJournalVouchers.voucherDate)).all();
+}
+
+export async function getJournalVoucherById(id: number): Promise<{
+  voucher: typeof cashJournalVouchers.$inferSelect;
+  items: typeof cashJournalItems.$inferSelect[];
+} | null> {
+  const [v] = db.select().from(cashJournalVouchers).where(eq(cashJournalVouchers.id, id)).all();
+  if (!v) return null;
+  const items = db.select().from(cashJournalItems).where(eq(cashJournalItems.journalId, id)).all();
+  return { voucher: v, items };
+}
+
+export async function createJournalVoucher(data: {
+  voucherDate: string | number;
+  narration?: string;
+  items: CashJournalItemInput[];
+}): Promise<{ id: number; voucherNo: string }> {
+  let totalDebit = 0;
+  let totalCredit = 0;
+  for (const it of data.items) {
+    totalDebit += parseNum(it.debitAmount);
+    totalCredit += parseNum(it.creditAmount);
+  }
+  if (Math.abs(totalDebit - totalCredit) > 0.001) {
+    throw new Error("Total debit must equal total credit");
+  }
+  const voucherNo = getNextVoucherNo("JV", cashJournalVouchers);
+  const [v] = db.insert(cashJournalVouchers).values({
+    voucherNo,
+    voucherDate: typeof data.voucherDate === "string" ? new Date(data.voucherDate).getTime() : data.voucherDate,
+    narration: data.narration ?? null,
+    totalDebit: String(totalDebit),
+    totalCredit: String(totalCredit),
+  }).returning().all();
+  if (!v) throw new Error("Failed to create journal voucher");
+  for (const it of data.items) {
+    db.insert(cashJournalItems).values({
+      journalId: v.id,
+      accountHead: it.accountHead,
+      debitAmount: it.debitAmount || "0",
+      creditAmount: it.creditAmount || "0",
+      narration: it.narration ?? null,
+    }).run();
+  }
+  // Auto-create cash receipt/payment if Cash is in account heads
+  const cashAccountId = 1;
+  for (const it of data.items) {
+    const head = (it.accountHead || "").toLowerCase();
+    if (head === "cash" || head === "main cash") {
+      const debit = parseNum(it.debitAmount);
+      const credit = parseNum(it.creditAmount);
+      if (debit > 0) {
+        await createReceipt({
+          receiptDate: typeof data.voucherDate === "string" ? data.voucherDate : new Date(data.voucherDate).toISOString().slice(0, 10),
+          receivedFrom: data.narration || "Journal Entry",
+          amount: String(debit),
+          description: `JV ${voucherNo}`,
+          referenceType: "journal",
+          referenceId: v.id,
+          cashAccountId,
+        });
+      }
+      if (credit > 0) {
+        await createPayment({
+          paymentDate: typeof data.voucherDate === "string" ? data.voucherDate : new Date(data.voucherDate).toISOString().slice(0, 10),
+          paidTo: data.narration || "Journal Entry",
+          amount: String(credit),
+          description: `JV ${voucherNo}`,
+          referenceType: "journal",
+          referenceId: v.id,
+          cashAccountId,
+        });
+      }
+      break;
+    }
+  }
+  return { id: v.id, voucherNo };
+}
+
+/**
+ * Interlink: When existing journal voucher (journalVouchers) affects Cash account,
+ * create cash_receipt or cash_payment so Cash module balance stays in sync.
+ * Call this after JV is approved/posted.
+ */
+export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
+  const [voucher] = db.select().from(journalVouchers).where(eq(journalVouchers.id, jvId)).all();
+  if (!voucher) return;
+  const entries = db.select().from(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, jvId)).all();
+  const [cashAccount] = db.select().from(accounts)
+    .where(and(eq(accounts.name, "Cash in Hand"), eq(accounts.isSystemAccount, true))).all();
+  if (!cashAccount) return;
+  const receiptDate = typeof voucher.voucherDate === "number"
+    ? new Date(voucher.voucherDate).toISOString().slice(0, 10)
+    : new Date(voucher.voucherDate).toISOString().slice(0, 10);
+  const narration = voucher.narration || `JV ${voucher.voucherNo}`;
+  for (const e of entries) {
+    if (e.accountId !== cashAccount.id) continue;
+    const amt = parseNum(e.amount);
+    if (amt <= 0) continue;
+    if (e.entryType === "DEBIT") {
+      await createReceipt({
+        receiptDate,
+        receivedFrom: narration,
+        amount: String(amt),
+        description: `JV ${voucher.voucherNo}`,
+        referenceType: "journal",
+        referenceId: jvId,
+        cashAccountId: 1,
+      });
+    } else if (e.entryType === "CREDIT") {
+      await createPayment({
+        paymentDate: receiptDate,
+        paidTo: narration,
+        amount: String(amt),
+        description: `JV ${voucher.voucherNo}`,
+        referenceType: "journal",
+        referenceId: jvId,
+        cashAccountId: 1,
+      });
+    }
+  }
+}
+
+export async function updateCashAccountOpeningBalance(cashAccountId: number, openingBalance: number): Promise<void> {
+  await ensureCashAccount(cashAccountId);
+  db.update(cashAccounts).set({ openingBalance: String(openingBalance) }).where(eq(cashAccounts.id, cashAccountId)).run();
+}
+
+/** Update sale paid amount and balance due (so Sales list shows correct paid) */
+function syncSalePaidAmount(saleId: number, paidAmount: number) {
+  const [row] = db.select({ totalAmount: sales.totalAmount }).from(sales).where(eq(sales.id, saleId)).all();
+  if (!row) return;
+  const total = parseNum(row.totalAmount);
+  const paid = Math.min(Math.max(0, paidAmount), total);
+  const balanceDue = Math.max(total - paid, 0);
+  db.update(sales).set({
+    paidAmount: String(paid),
+    balanceDue: String(balanceDue),
+  }).where(eq(sales.id, saleId)).run();
+}
+
+/** Auto-link: create cash receipt for a sale and link back */
+export async function createReceiptForSale(params: {
+  saleId: number;
+  paidAmount: number;
+  receivedFrom: string;
+  receiptDate: string | number;
+  invoiceNumber: string;
+}): Promise<number> {
+  if (params.paidAmount <= 0) return 0;
+  const receipt = await createReceipt({
+    receiptDate: typeof params.receiptDate === "string" ? params.receiptDate : new Date(params.receiptDate).toISOString().slice(0, 10),
+    receivedFrom: params.receivedFrom,
+    amount: String(params.paidAmount),
+    description: `Sale ${params.invoiceNumber}`,
+    referenceType: "sale",
+    referenceId: params.saleId,
+    cashAccountId: 1,
+  });
+  sqlite.prepare("UPDATE sales SET cash_receipt_id = ? WHERE id = ?").run(receipt.id, params.saleId);
+  syncSalePaidAmount(params.saleId, params.paidAmount);
+  return receipt.id;
+}
+
+/** Auto-link: update or create cash receipt when sale is updated (payment mode cash) */
+export async function updateOrCreateReceiptForSale(params: {
+  saleId: number;
+  paidAmount: number;
+  receivedFrom: string;
+  receiptDate: string | number;
+  invoiceNumber: string;
+  existingCashReceiptId?: number | null;
+}): Promise<number | null> {
+  if (params.paidAmount <= 0) return null;
+  const receiptDateStr = typeof params.receiptDate === "string" ? params.receiptDate : new Date(params.receiptDate).toISOString().slice(0, 10);
+  const amountStr = String(params.paidAmount);
+  const description = `Sale ${params.invoiceNumber}`;
+
+  if (params.existingCashReceiptId) {
+    const ts = new Date(receiptDateStr).getTime();
+    db.update(cashReceipts).set({
+      receiptDate: ts,
+      receivedFrom: params.receivedFrom,
+      amount: amountStr,
+      description,
+    }).where(eq(cashReceipts.id, params.existingCashReceiptId)).run();
+    syncSalePaidAmount(params.saleId, params.paidAmount);
+    return params.existingCashReceiptId;
+  }
+  const receipt = await createReceipt({
+    receiptDate: receiptDateStr,
+    receivedFrom: params.receivedFrom,
+    amount: amountStr,
+    description,
+    referenceType: "sale",
+    referenceId: params.saleId,
+    cashAccountId: 1,
+  });
+  sqlite.prepare("UPDATE sales SET cash_receipt_id = ? WHERE id = ?").run(receipt.id, params.saleId);
+  syncSalePaidAmount(params.saleId, params.paidAmount);
+  return receipt.id;
+}
+
+/** Get cash receipt voucher no by id (for sale display) */
+export async function getCashReceiptVoucherNo(cashReceiptId: number): Promise<string | null> {
+  const [r] = db.select({ voucherNo: cashReceipts.voucherNo }).from(cashReceipts).where(eq(cashReceipts.id, cashReceiptId)).all();
+  return r?.voucherNo ?? null;
+}
+
+/** Get multiple cash receipt voucher numbers (for list enrichment) */
+export function getCashReceiptVoucherNos(cashReceiptIds: number[]): Map<number, string> {
+  const uniq = [...new Set(cashReceiptIds)].filter(Boolean);
+  if (uniq.length === 0) return new Map();
+  const rows = db.select({ id: cashReceipts.id, voucherNo: cashReceipts.voucherNo })
+    .from(cashReceipts)
+    .where(inArray(cashReceipts.id, uniq))
+    .all();
+  return new Map(rows.map((r) => [r.id, r.voucherNo]));
+}
+
+/** Auto-link: create cash payment for a purchase and link back */
+export async function createPaymentForPurchase(params: {
+  purchaseId: number;
+  paidAmount: number;
+  paidTo: string;
+  paymentDate: string | number;
+  invoiceNumber: string;
+}): Promise<number> {
+  if (params.paidAmount <= 0) return 0;
+  const payment = await createPayment({
+    paymentDate: typeof params.paymentDate === "string" ? params.paymentDate : new Date(params.paymentDate).toISOString().slice(0, 10),
+    paidTo: params.paidTo,
+    amount: String(params.paidAmount),
+    description: `Purchase ${params.invoiceNumber}`,
+    referenceType: "purchase",
+    referenceId: params.purchaseId,
+    cashAccountId: 1,
+  });
+  sqlite.prepare("UPDATE purchases SET cash_payment_id = ? WHERE id = ?").run(payment.id, params.purchaseId);
+  return payment.id;
+}
+
+/** Auto-link: update or create cash payment when purchase is updated (payment mode cash) */
+export async function updateOrCreatePaymentForPurchase(params: {
+  purchaseId: number;
+  paidAmount: number;
+  paidTo: string;
+  paymentDate: string | number;
+  invoiceNumber: string;
+  existingCashPaymentId?: number | null;
+}): Promise<number | null> {
+  if (params.paidAmount <= 0) return null;
+  const paymentDateStr = typeof params.paymentDate === "string" ? params.paymentDate : new Date(params.paymentDate).toISOString().slice(0, 10);
+  const amountStr = String(params.paidAmount);
+  const description = `Purchase ${params.invoiceNumber}`;
+
+  if (params.existingCashPaymentId) {
+    const ts = new Date(paymentDateStr).getTime();
+    db.update(cashPayments).set({
+      paymentDate: ts,
+      paidTo: params.paidTo,
+      amount: amountStr,
+      description,
+    }).where(eq(cashPayments.id, params.existingCashPaymentId)).run();
+    return params.existingCashPaymentId;
+  }
+  const payment = await createPayment({
+    paymentDate: paymentDateStr,
+    paidTo: params.paidTo,
+    amount: amountStr,
+    description,
+    referenceType: "purchase",
+    referenceId: params.purchaseId,
+    cashAccountId: 1,
+  });
+  sqlite.prepare("UPDATE purchases SET cash_payment_id = ? WHERE id = ?").run(payment.id, params.purchaseId);
+  return payment.id;
+}
+
+/** Get cash payment voucher no by id (for purchase display) */
+export async function getCashPaymentVoucherNo(cashPaymentId: number): Promise<string | null> {
+  const [p] = db.select({ voucherNo: cashPayments.voucherNo }).from(cashPayments).where(eq(cashPayments.id, cashPaymentId)).all();
+  return p?.voucherNo ?? null;
+}
+
+/** Get multiple cash payment voucher numbers (for list enrichment) */
+export function getCashPaymentVoucherNos(cashPaymentIds: number[]): Map<number, string> {
+  const uniq = [...new Set(cashPaymentIds)].filter(Boolean);
+  if (uniq.length === 0) return new Map();
+  const rows = db.select({ id: cashPayments.id, voucherNo: cashPayments.voucherNo })
+    .from(cashPayments)
+    .where(inArray(cashPayments.id, uniq))
+    .all();
+  return new Map(rows.map((r) => [r.id, r.voucherNo]));
+}

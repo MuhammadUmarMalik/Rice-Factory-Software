@@ -65,6 +65,7 @@ const Journal = lazy(() => import("@/pages/journal"));
 const EmployeesPage = lazy(() => import("@/pages/hr/employees"));
 const PayrollPage = lazy(() => import("@/pages/hr/payroll"));
 const ExpensesPage = lazy(() => import("@/pages/expenses"));
+const CashDashboard = lazy(() => import("@/pages/Cash/CashDashboard"));
 
 function Router() {
   return (
@@ -76,6 +77,7 @@ function Router() {
         <Route path="/receipts" component={Receipts} />
         <Route path="/payments" component={PaymentsPage} />
         <Route path="/expenses" component={ExpensesPage} />
+        <Route path="/cash" component={CashDashboard} />
         <Route path="/journal" component={Journal} />
         <Route path="/processing" component={Processing} />
         <Route path="/sales" component={Sales} />

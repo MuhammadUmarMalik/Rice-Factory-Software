@@ -1844,7 +1844,7 @@ export class DatabaseStorage implements IStorage {
     return this.ensureSystemAccount(client, label, "expense");
   }
 
-  private ensureSalesChargeAccount(client: DbClient, label: "LOADING" | "WEIGHING" | "OTHER"): Account {
+  private ensureSalesChargeAccount(client: DbClient, label: "LOADING" | "WEIGHING" | "OTHER" | "RENT"): Account {
     const name = (() => {
       switch (label) {
         case "LOADING":
@@ -1852,6 +1852,9 @@ export class DatabaseStorage implements IStorage {
         case "WEIGHING":
           return "Sales - Weighing Charges";
         case "OTHER":
+          return "Sales - Other Charges";
+        case "RENT":
+          return "Sales - Rent Charges";
         default:
           return "Sales - Other Charges";
       }
@@ -2483,7 +2486,7 @@ export class DatabaseStorage implements IStorage {
       const lineSubtotal = subtotal + brokerCommission;
       const taxAmount = parseAmount((purchase as any).taxAmount ?? existing.taxAmount ?? 0);
       const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
-      const paidAmount = parseAmount(existing.paidAmount ?? 0);
+      const paidAmount = parseAmount((purchase as any).paidAmount ?? existing.paidAmount ?? 0);
       const balanceDue = grandAmount - paidAmount;
       const updatedPurchase = tx.update(purchases).set({
         ...purchase,
@@ -2875,9 +2878,11 @@ export class DatabaseStorage implements IStorage {
       const loadingCharge = parseAmount(sale.loadingCharges || "0");
       const weighingCharge = parseAmount(sale.weighingCharges || "0");
       const otherCharge = parseAmount(sale.otherCharges || "0");
-      const charges = loadingCharge + weighingCharge + otherCharge;
+      const rentCharge = parseAmount((sale as any).rentCharges || "0");
+      const discountAmount = parseAmount((sale as any).discountAmount || "0");
+      const charges = loadingCharge + weighingCharge + otherCharge + rentCharge;
       const taxAmount = parseAmount((sale as any).taxAmount || 0);
-      const totalAmount = subtotal + charges + taxAmount;
+      const totalAmount = Math.max(0, subtotal + charges - discountAmount + taxAmount);
 
       const newSale = tx.insert(sales).values({
         ...sale,
@@ -2903,7 +2908,7 @@ export class DatabaseStorage implements IStorage {
       const saleBaseLabel = `SALE ${invoiceNumber}`;
       const pushLine = (line: Omit<InsertLedgerEntry, "balance">) => ledgerLines.push(line);
 
-      const baseRevenue = Math.max(subtotal, 0);
+      const baseRevenue = Math.max(subtotal - discountAmount, 0);
       if (baseRevenue > 0) {
         const amount = baseRevenue.toString();
         pushLine({
@@ -2928,12 +2933,13 @@ export class DatabaseStorage implements IStorage {
         { label: "LOADING", amount: loadingCharge },
         { label: "WEIGHING", amount: weighingCharge },
         { label: "OTHER", amount: otherCharge },
+        { label: "RENT", amount: rentCharge },
       ];
       for (const line of chargeLines) {
         if (line.amount === 0) continue;
         const entryType = line.amount > 0 ? "credit" : "debit";
         const amount = Math.abs(line.amount).toString();
-        const chargeAccount = this.ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER");
+        const chargeAccount = this.ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER" | "RENT");
         pushLine({
           accountId: chargeAccount.id,
           transactionType: entryType,
@@ -3079,9 +3085,11 @@ export class DatabaseStorage implements IStorage {
         const loadingCharge = parseAmount(sale.loadingCharges ?? existing.loadingCharges ?? "0");
         const weighingCharge = parseAmount(sale.weighingCharges ?? existing.weighingCharges ?? "0");
         const otherCharge = parseAmount(sale.otherCharges ?? existing.otherCharges ?? "0");
-        const charges = loadingCharge + weighingCharge + otherCharge;
+        const rentCharge = parseAmount((sale as any).rentCharges ?? (existing as any).rentCharges ?? "0");
+        const discountAmount = parseAmount((sale as any).discountAmount ?? (existing as any).discountAmount ?? "0");
+        const charges = loadingCharge + weighingCharge + otherCharge + rentCharge;
         const taxAmount = parseAmount((sale as any).taxAmount ?? existing.taxAmount ?? 0);
-        const totalAmount = subtotal + charges + taxAmount;
+        const totalAmount = Math.max(0, subtotal + charges - discountAmount + taxAmount);
         const paidAmount = parseAmount(sale.paidAmount ?? existing.paidAmount ?? 0);
 
         const updatedSale = tx.update(sales).set({
@@ -3110,7 +3118,7 @@ export class DatabaseStorage implements IStorage {
         const saleBaseLabel = `SALE ${existing.invoiceNumber}`;
         const pushLine = (line: Omit<InsertLedgerEntry, "balance">) => ledgerLines.push(line);
 
-        const baseRevenue = Math.max(subtotal, 0);
+        const baseRevenue = Math.max(subtotal - discountAmount, 0);
         if (baseRevenue > 0) {
           const amount = baseRevenue.toString();
           pushLine({
@@ -3135,13 +3143,14 @@ export class DatabaseStorage implements IStorage {
           { label: "LOADING", amount: loadingCharge },
           { label: "WEIGHING", amount: weighingCharge },
           { label: "OTHER", amount: otherCharge },
+          { label: "RENT", amount: rentCharge },
         ];
         for (const line of chargeLines) {
           if (line.amount === 0) continue;
           const entryType = line.amount > 0 ? "credit" : "debit";
           const amount = Math.abs(line.amount).toString();
           pushLine({
-            accountId: this.ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER").id,
+            accountId: this.ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER" | "RENT").id,
             transactionType: entryType,
             amount,
             description: line.label,
@@ -3313,6 +3322,7 @@ export class DatabaseStorage implements IStorage {
         { key: "loading", label: "LOADING" },
         { key: "weighing", label: "WEIGHING" },
         { key: "other", label: "OTHER" },
+        { key: "rent", label: "RENT" },
       ];
 
       const detailLabels = new Set([
@@ -3321,6 +3331,7 @@ export class DatabaseStorage implements IStorage {
         "LOADING",
         "WEIGHING",
         "OTHER",
+        "RENT",
         "WEIGHT ADD",
         "FREIGHT",
         "LOADING/UNLOADING",
@@ -3416,7 +3427,7 @@ export class DatabaseStorage implements IStorage {
       );
       const saleMetaById = new Map<
         number,
-        { invoiceNumber?: string | null; saleDate?: Date | null; taxAmount?: string | null; loadingCharges?: string | null; weighingCharges?: string | null; otherCharges?: string | null }
+        { invoiceNumber?: string | null; saleDate?: Date | null; taxAmount?: string | null; loadingCharges?: string | null; weighingCharges?: string | null; otherCharges?: string | null; rentCharges?: string | null; discountAmount?: string | null }
       >(
         saleIds.length
           ? db
@@ -3428,6 +3439,8 @@ export class DatabaseStorage implements IStorage {
                 loadingCharges: sales.loadingCharges,
                 weighingCharges: sales.weighingCharges,
                 otherCharges: sales.otherCharges,
+                rentCharges: sales.rentCharges,
+                discountAmount: sales.discountAmount,
               })
               .from(sales)
               .where(inArray(sales.id, saleIds))
@@ -3569,6 +3582,7 @@ export class DatabaseStorage implements IStorage {
             { label: saleChargeLabels[0].label, amount: parseAmount(meta?.loadingCharges || "0") },
             { label: saleChargeLabels[1].label, amount: parseAmount(meta?.weighingCharges || "0") },
             { label: saleChargeLabels[2].label, amount: parseAmount(meta?.otherCharges || "0") },
+            { label: saleChargeLabels[3].label, amount: parseAmount(meta?.rentCharges || "0") },
           ];
           for (const charge of saleCharges) {
             if (charge.amount === 0) continue;
@@ -4386,6 +4400,46 @@ export class DatabaseStorage implements IStorage {
         }
       }
 
+      // CP/BP: when a line is linked to a purchase, update that purchase's paid amount
+      if (voucherType === "CP" || voucherType === "BP") {
+        for (const line of cleanLines) {
+          const purchaseId = (line as { purchaseId?: number | null }).purchaseId;
+          if (!purchaseId) continue;
+          const amount = parseAmount(line.debit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(purchases).where(eq(purchases.id, purchaseId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.min(currentPaid + amount, totalAmount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(purchases).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(purchases.id, purchaseId)).run();
+        }
+      }
+
+      // CR/BR: when a line is linked to a sale, update that sale's paid amount
+      if (voucherType === "CR" || voucherType === "BR") {
+        for (const line of cleanLines) {
+          const saleId = (line as { saleId?: number | null }).saleId;
+          if (!saleId) continue;
+          const amount = parseAmount(line.credit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(sales).where(eq(sales.id, saleId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.min(currentPaid + amount, totalAmount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(sales).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(sales.id, saleId)).run();
+        }
+      }
+
       return voucher;
     });
   }
@@ -4393,10 +4447,51 @@ export class DatabaseStorage implements IStorage {
   async updateReceiptVoucher(id: number, data: Partial<InsertReceiptVoucher>, lines: ReceiptLineInput[]): Promise<ReceiptVoucher | undefined> {
     const existing = await this.getReceiptVoucher(id);
     if (!existing) return undefined;
+    const voucherTypeExisting = normalizeReceiptVoucherType(existing.voucherType);
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
       const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : existing.voucherDate ? new Date(existing.voucherDate as any) : new Date();
       this.assertPostingAllowed(client, postingDate, "receipt/payment voucher");
+
+      // Reverse previous purchase paid-amount allocations for CP/BP
+      if (voucherTypeExisting === "CP" || voucherTypeExisting === "BP") {
+        for (const line of existing.lines || []) {
+          const purchaseId = line.purchaseId;
+          if (!purchaseId) continue;
+          const amount = parseAmount(line.debit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(purchases).where(eq(purchases.id, purchaseId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.max(0, currentPaid - amount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(purchases).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(purchases.id, purchaseId)).run();
+        }
+      }
+
+      // Reverse previous sale paid-amount allocations for CR/BR
+      if (voucherTypeExisting === "CR" || voucherTypeExisting === "BR") {
+        for (const line of existing.lines || []) {
+          const saleId = line.saleId;
+          if (!saleId) continue;
+          const amount = parseAmount(line.credit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(sales).where(eq(sales.id, saleId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.max(0, currentPaid - amount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(sales).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(sales.id, saleId)).run();
+        }
+      }
 
       // Reverse previous ledger impacts by recalculating balances from remaining entries (simpler approach: adjust via new postings only)
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
@@ -4473,6 +4568,46 @@ export class DatabaseStorage implements IStorage {
         }
       }
 
+      // CP/BP: when a line is linked to a purchase, update that purchase's paid amount
+      if (voucherType === "CP" || voucherType === "BP") {
+        for (const line of cleanLines) {
+          const purchaseId = (line as { purchaseId?: number | null }).purchaseId;
+          if (!purchaseId) continue;
+          const amount = parseAmount(line.debit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(purchases).where(eq(purchases.id, purchaseId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.min(currentPaid + amount, totalAmount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(purchases).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(purchases.id, purchaseId)).run();
+        }
+      }
+
+      // CR/BR: when a line is linked to a sale, update that sale's paid amount
+      if (voucherType === "CR" || voucherType === "BR") {
+        for (const line of cleanLines) {
+          const saleId = (line as { saleId?: number | null }).saleId;
+          if (!saleId) continue;
+          const amount = parseAmount(line.credit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(sales).where(eq(sales.id, saleId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.min(currentPaid + amount, totalAmount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(sales).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(sales.id, saleId)).run();
+        }
+      }
+
       return updated;
     });
   }
@@ -4480,22 +4615,61 @@ export class DatabaseStorage implements IStorage {
   async deleteReceiptVoucher(id: number): Promise<boolean> {
     const existing = await this.getReceiptVoucher(id);
     if (!existing) return false;
-      return db.transaction((tx) => {
-        const client = tx as unknown as DbClient;
-        const priorEntries = tx
-          .select()
-          .from(ledgerEntries)
-          .where(buildLedgerReferenceWhere("receipt_voucher", id) as any)
-          .all();
-        const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
-        tx.delete(ledgerEntries)
-          .where(buildLedgerReferenceWhere("receipt_voucher", id) as any)
-          .run();
-        this.recomputeAccountBalances(client, affectedAccountIds);
-        tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
-        tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
-        return true;
-      });
+    const voucherType = normalizeReceiptVoucherType(existing.voucherType);
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      // Reverse purchase paid-amount allocations for CP/BP
+      if (voucherType === "CP" || voucherType === "BP") {
+        for (const line of existing.lines || []) {
+          const purchaseId = line.purchaseId;
+          if (!purchaseId) continue;
+          const amount = parseAmount(line.debit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(purchases).where(eq(purchases.id, purchaseId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.max(0, currentPaid - amount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(purchases).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(purchases.id, purchaseId)).run();
+        }
+      }
+      // Reverse sale paid-amount allocations for CR/BR
+      if (voucherType === "CR" || voucherType === "BR") {
+        for (const line of existing.lines || []) {
+          const saleId = line.saleId;
+          if (!saleId) continue;
+          const amount = parseAmount(line.credit || "0");
+          if (amount <= 0) continue;
+          const [row] = tx.select().from(sales).where(eq(sales.id, saleId)).all();
+          if (!row) continue;
+          const totalAmount = parseAmount(row.totalAmount || "0");
+          const currentPaid = parseAmount(row.paidAmount || "0");
+          const newPaid = Math.max(0, currentPaid - amount);
+          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          tx.update(sales).set({
+            paidAmount: newPaid.toString(),
+            balanceDue: balanceDue.toString(),
+          }).where(eq(sales.id, saleId)).run();
+        }
+      }
+      const priorEntries = tx
+        .select()
+        .from(ledgerEntries)
+        .where(buildLedgerReferenceWhere("receipt_voucher", id) as any)
+        .all();
+      const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(ledgerEntries)
+        .where(buildLedgerReferenceWhere("receipt_voucher", id) as any)
+        .run();
+      this.recomputeAccountBalances(client, affectedAccountIds);
+      tx.update(receiptVouchers).set({ deletedAt: new Date() }).where(eq(receiptVouchers.id, id)).run();
+      tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
+      return true;
+    });
   }
 
   // Journal Vouchers
@@ -5161,6 +5335,8 @@ export class DatabaseStorage implements IStorage {
         loading: sales.loadingCharges,
         weighing: sales.weighingCharges,
         other: sales.otherCharges,
+        rent: sales.rentCharges,
+        discountAmount: sales.discountAmount,
         total: sales.totalAmount,
         received: sales.paidAmount,
       })
@@ -5173,7 +5349,7 @@ export class DatabaseStorage implements IStorage {
         const total = parseAmount(r.total || "0");
         const received = parseAmount(r.received || "0");
         const balance = Math.max(total - received, 0);
-        const otherCharges = parseAmount(r.loading || "0") + parseAmount(r.weighing || "0") + parseAmount(r.other || "0");
+        const otherCharges = parseAmount(r.loading || "0") + parseAmount(r.weighing || "0") + parseAmount(r.other || "0") + parseAmount((r as { rent?: string }).rent || "0");
         return {
           id: r.id,
           invoiceNumber: r.invoiceNumber,
@@ -5181,7 +5357,7 @@ export class DatabaseStorage implements IStorage {
           customerId: r.customerId,
           customerName: r.customerName || "",
           subtotal: parseAmount(r.subtotal || "0").toString(),
-          discount: "0",
+          discount: parseAmount((r as { discountAmount?: string }).discountAmount || "0").toString(),
           tax: parseAmount(r.tax || "0").toString(),
           otherCharges: otherCharges.toString(),
           total: total.toString(),
@@ -6339,6 +6515,7 @@ export class DatabaseStorage implements IStorage {
           { label: "Loading", amount: parseAmount(sale.loadingCharges || "0") },
           { label: "Weighing", amount: parseAmount(sale.weighingCharges || "0") },
           { label: "Other", amount: parseAmount(sale.otherCharges || "0") },
+          { label: "Rent", amount: parseAmount((sale as { rentCharges?: string }).rentCharges || "0") },
         ]
           .filter((line) => line.amount !== 0)
           .map((line) => `${line.label}${line.amount < 0 ? " (less)" : ""} ${formatQty(Math.abs(line.amount))}`);

@@ -3,6 +3,7 @@ import type { Server } from "http";
 import authRoutes from "./auth.routes";
 import accountsRoutes from "./accounts.routes";
 import cashRoutes from "./cash.routes";
+import cashInHandRoutes from "./cash-in-hand.routes";
 import dashboardRoutes from "./dashboard.routes";
 import employeesRoutes from "./employees.routes";
 import expensesRoutes from "./expenses.routes";
@@ -51,6 +52,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use(salesRoutes);
   app.use(ledgerRoutes);
   app.use(cashRoutes);
+  app.use(cashInHandRoutes);
   app.use(reportsRoutes);
   app.use(financialRoutes);
   app.use(periodLocksRoutes);

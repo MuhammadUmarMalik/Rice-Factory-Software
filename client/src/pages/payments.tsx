@@ -47,10 +47,11 @@ const lineSchema = z.object({
 });
 
 const paymentFormSchema = z.object({
-  voucherType: z.literal("DR").default("DR"),
+  voucherType: z.literal("CP").default("CP"),
   voucherNumber: z.string().optional(),
   voucherDate: z.string().default(new Date().toISOString().slice(0, 10)),
   narration: z.string().optional(),
+  linkToPurchaseId: z.string().optional(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
 });
 
@@ -118,10 +119,11 @@ export default function PaymentsPage() {
   const consumedEditId = useRef<number | null>(null);
 
   const buildDefaults = (): PaymentFormData => ({
-    voucherType: "DR",
+    voucherType: "CP",
     voucherDate: new Date().toISOString().slice(0, 10),
     voucherNumber: "",
     narration: "",
+    linkToPurchaseId: "",
     lines: [{ accountId: "", narration: "", amount: "0" }],
   });
 
@@ -134,9 +136,14 @@ export default function PaymentsPage() {
   const lines = useWatch({ control: form.control, name: "lines" }) || [];
 
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
+  const { data: purchasesList = [] } = useQuery<Array<{ id: number; invoiceNumber: string; totalAmount: string; paidAmount: string; balanceDue: string; supplierId: number }>>({ queryKey: ["/api/purchases"] });
+  const purchasesWithBalance = useMemo(
+    () => purchasesList.filter((p) => parseFloat(p.balanceDue || "0") > 0),
+    [purchasesList]
+  );
   const { data: payments = [], isLoading } = useQuery<Payment[]>({ queryKey: ["/api/payments"] });
   const filteredPayments = useMemo(
-    () => payments.filter((p) => p.voucherType === "DR"),
+    () => payments.filter((p) => p.voucherType === "CP"),
     [payments]
   );
 
@@ -181,18 +188,22 @@ export default function PaymentsPage() {
     };
   }, [isDialogOpen]);
 
-  const normalizeLines = (data: PaymentFormData) =>
-    (data.lines || [])
+  const normalizeLines = (data: PaymentFormData) => {
+    const linkId = (data as PaymentFormData & { linkToPurchaseId?: string }).linkToPurchaseId;
+    const purchaseId = linkId && /^\d+$/.test(linkId) ? parseInt(linkId, 10) : undefined;
+    return (data.lines || [])
       .filter((l) => l.accountId && parseFloat(l.amount || "0") > 0)
-      .map((l) => {
+      .map((l, i) => {
         const amt = l.amount || "0";
         return {
           accountId: parseInt(l.accountId ?? "0"),
           narration: l.narration,
           debit: amt,
           credit: "0",
+          ...(i === 0 && purchaseId ? { purchaseId } : {}),
         };
       });
+  };
 
   const createMutation = useMutation({
     mutationFn: (data: PaymentFormData) => apiRequest("POST", "/api/payments", {
@@ -203,6 +214,7 @@ export default function PaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -223,6 +235,7 @@ export default function PaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -239,6 +252,7 @@ export default function PaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       toast({ title: "Deleted" });
     },
   });
@@ -255,11 +269,13 @@ export default function PaymentsPage() {
     const paymentLines = (voucher.lines || []).filter(
       (l: { narration?: string }) => !(l.narration || "").toLowerCase().includes("settlement")
     );
+    const firstLinePurchaseId = (paymentLines[0] as { purchaseId?: number })?.purchaseId;
     form.reset({
-      voucherType: "DR",
+      voucherType: "CP",
       voucherNumber: voucher.voucherNumber,
       voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
       narration: voucher.narration || "",
+      linkToPurchaseId: firstLinePurchaseId ? String(firstLinePurchaseId) : "",
       lines: paymentLines.map((l: { accountId: number; narration?: string; debit?: string; credit?: string }) => ({
         accountId: l.accountId.toString(),
         narration: l.narration || "",
@@ -319,7 +335,7 @@ export default function PaymentsPage() {
 
     const payload: PaymentFormData = {
       ...data,
-      voucherType: "DR",
+      voucherType: "CP",
       lines: activeLines.map((l) => ({
         ...l,
         accountId: l.accountId as string,
@@ -452,7 +468,7 @@ export default function PaymentsPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">{t("voucherType")}</p>
-                  <p className="font-medium">DR</p>
+                  <p className="font-medium">CP</p>
                 </div>
               </div>
               <div>
@@ -526,7 +542,7 @@ export default function PaymentsPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("voucherType")}</FormLabel>
-                        <Input readOnly value="DR" />
+                        <Input readOnly value="CP" />
                         <input type="hidden" {...field} />
                       </FormItem>
                     )}
@@ -541,6 +557,31 @@ export default function PaymentsPage() {
                       <FormControl>
                         <Textarea rows={2} placeholder="Add details" {...field} />
                       </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="linkToPurchaseId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Link to Purchase (optional)</FormLabel>
+                      <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="None – payment will not update a purchase" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {purchasesWithBalance.map((p) => (
+                            <SelectItem key={p.id} value={String(p.id)}>
+                              {p.invoiceNumber} – {accounts.find((a) => a.id === p.supplierId)?.name || "Supplier"} (Due: Rs. {parseFloat(p.balanceDue || "0").toLocaleString()})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">If selected, this payment will update the purchase&apos;s paid amount automatically.</p>
                     </FormItem>
                   )}
                 />

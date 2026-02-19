@@ -198,6 +198,12 @@ export default function LedgerPage() {
     }
   }, [scope]);
 
+  useEffect(() => {
+    if (scope === "cash" && accountChoices.length === 1 && !selectedAccountId) {
+      setSelectedAccountId(String(accountChoices[0].id));
+    }
+  }, [scope, accountChoices, selectedAccountId]);
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4">
