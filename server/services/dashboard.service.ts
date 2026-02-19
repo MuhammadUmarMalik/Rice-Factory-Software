@@ -1,4 +1,4 @@
-import { format } from "date-fns";
+import { format, startOfMonth } from "date-fns";
 import { storage } from "../models/storage";
 
 type DashboardRange = { fromDate: Date; toDate: Date };
@@ -335,7 +335,10 @@ export async function getDashboardSummary(
 }
 
 export async function getDashboardCharts(params: Partial<DashboardRange>) {
-  const { fromDate, toDate } = await resolveRange(params);
+  const resolved = await resolveRange(params);
+  const now = new Date();
+  const fromDate = resolved.fromDate ?? startOfMonth(now);
+  const toDate = resolved.toDate ?? endOfDay(now);
   const [purchasePeriods, salesPeriods, stockReport] = await Promise.all([
     storage.getPeriodPurchases(fromDate, toDate, undefined, "month"),
     storage.getPeriodSales(fromDate, toDate, undefined, "month"),

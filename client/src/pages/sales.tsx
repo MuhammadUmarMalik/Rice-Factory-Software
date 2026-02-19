@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Eye, Truck, FileText, Pencil, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,7 @@ import {
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { Link, useLocation } from "wouter";
 import type { Sale, Account, Product } from "@/types/schema";
 import { format } from "date-fns";
 
@@ -94,7 +95,10 @@ const saleFormSchema = z.object({
   loadingCharges: z.string().default("0"),
   weighingCharges: z.string().default("0"),
   otherCharges: z.string().default("0"),
+  rentCharges: z.string().default("0"),
+  discountAmount: z.string().default("0"),
   paidAmount: z.string().default("0"),
+  paymentMode: z.enum(["cash", "credit", "bank"]).default("cash"),
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
@@ -113,6 +117,20 @@ export default function SalesPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const todayString = formatDateInput(new Date());
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
+  const openedFromUrl = useRef(false);
+  useEffect(() => {
+    if (openedFromUrl.current) return;
+    const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+    const openId = params.get("open");
+    if (openId) {
+      const id = parseInt(openId, 10);
+      if (!isNaN(id)) {
+        openedFromUrl.current = true;
+        openDetail({ type: "sale", id });
+        window.history.replaceState({}, "", "/sales");
+      }
+    }
+  }, [openDetail]);
   const unitOptions = [
     { value: "kg", label: "Kilogram (kg)" },
     { value: "mound", label: "Mound (40 kg)" },
@@ -130,7 +148,10 @@ export default function SalesPage() {
       loadingCharges: "0",
       weighingCharges: "0",
       otherCharges: "0",
+      rentCharges: "0",
+      discountAmount: "0",
       paidAmount: "0",
+      paymentMode: "cash",
       notes: "",
       items: [{ productId: "", quantity: "", unit: "", pricePerUnit: "" }],
     },
@@ -189,6 +210,9 @@ export default function SalesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
       setIsDialogOpen(false);
       form.reset();
       setEditingId(null);
@@ -278,7 +302,10 @@ export default function SalesPage() {
       loadingCharges: "0",
       weighingCharges: "0",
       otherCharges: "0",
+      rentCharges: "0",
+      discountAmount: "0",
       paidAmount: "0",
+      paymentMode: "cash",
       notes: "",
       items: [{ productId: "", quantity: "", unit: "", pricePerUnit: "" }],
     });
@@ -297,7 +324,10 @@ export default function SalesPage() {
         loadingCharges: sale.loadingCharges || "0",
         weighingCharges: sale.weighingCharges || "0",
         otherCharges: sale.otherCharges || "0",
+        rentCharges: sale.rentCharges || "0",
+        discountAmount: sale.discountAmount || "0",
         paidAmount: sale.paidAmount || "0",
+        paymentMode: (sale.paymentMode as "cash" | "credit" | "bank") || "cash",
         notes: sale.notes || "",
         items: (sale.items || []).map((item: any) => {
           const productId = item.productId?.toString() || "";
@@ -325,15 +355,18 @@ export default function SalesPage() {
   const watchLoading = form.watch("loadingCharges");
   const watchWeighing = form.watch("weighingCharges");
   const watchOther = form.watch("otherCharges");
-  
+  const watchRent = form.watch("rentCharges");
+  const watchDiscount = form.watch("discountAmount");
+
   const subtotal = watchItems.reduce((sum, item) => {
     const qty = parseFloat(item.quantity) || 0;
     const price = parseFloat(item.pricePerUnit) || 0;
     return sum + (qty * price);
   }, 0);
-  
-  const totalCharges = (parseFloat(watchLoading) || 0) + (parseFloat(watchWeighing) || 0) + (parseFloat(watchOther) || 0);
-  const totalAmount = subtotal + totalCharges;
+
+  const totalCharges = (parseFloat(watchLoading) || 0) + (parseFloat(watchWeighing) || 0) + (parseFloat(watchOther) || 0) + (parseFloat(watchRent) || 0);
+  const discount = parseFloat(watchDiscount) || 0;
+  const totalAmount = Math.max(0, subtotal + totalCharges - discount);
 
   const columns: Column<Sale & { customer?: Account }>[] = [
     {
@@ -413,12 +446,20 @@ export default function SalesPage() {
         const total = parseFloat(item.totalAmount || "0");
         const paid = parseFloat(item.paidAmount || "0");
         const isPaid = paid >= total;
+        const cashReceiptVoucherNo = (item as Sale & { cashReceiptVoucherNo?: string | null }).cashReceiptVoucherNo;
         return (
-          <div className={`flex items-center gap-2 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
-            <span className="font-mono text-sm">Rs. {paid.toLocaleString()}</span>
-            <Badge variant={isPaid ? "default" : "secondary"} className="text-xs">
-              {isPaid ? (language === "ur" ? "مکمل" : "Paid") : (language === "ur" ? "باقی" : "Due")}
-            </Badge>
+          <div className={`flex flex-col gap-1 items-end ${isRTL ? "flex-row-reverse" : ""}`}>
+            <div className={`flex items-center gap-2 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
+              <span className="font-mono text-sm">Rs. {paid.toLocaleString()}</span>
+              <Badge variant={isPaid ? "default" : "secondary"} className="text-xs">
+                {isPaid ? (language === "ur" ? "مکمل" : "Paid") : (language === "ur" ? "باقی" : "Due")}
+              </Badge>
+            </div>
+            {cashReceiptVoucherNo && (
+              <Link href="/cash" className="text-xs text-primary hover:underline">
+                {language === "ur" ? "کیش رسید" : "Cash receipt"}: {cashReceiptVoucherNo}
+              </Link>
+            )}
           </div>
         );
       },
@@ -684,7 +725,7 @@ export default function SalesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <FormField
                   control={form.control}
                   name="loadingCharges"
@@ -724,7 +765,34 @@ export default function SalesPage() {
                     </FormItem>
                   )}
                 />
+                <FormField
+                  control={form.control}
+                  name="rentCharges"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("rentCharges")}</FormLabel>
+                      <FormControl>
+                        <Input {...field} type="number" step="0.01" data-testid="input-rent" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
+
+              <FormField
+                control={form.control}
+                name="discountAmount"
+                render={({ field }) => (
+                  <FormItem className="max-w-xs">
+                    <FormLabel>{t("discountAmount")}</FormLabel>
+                    <FormControl>
+                      <Input {...field} type="number" step="0.01" min="0" data-testid="input-discount" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <Card className="bg-muted/30">
                 <CardContent className="pt-4">
@@ -737,6 +805,12 @@ export default function SalesPage() {
                       <span className="text-muted-foreground">{language === "ur" ? "اضافی چارجز" : "Additional Charges"}</span>
                       <span className="font-mono">Rs. {totalCharges.toLocaleString()}</span>
                     </div>
+                    {discount > 0 && (
+                      <div className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                        <span className="text-muted-foreground">{t("discountAmount")}</span>
+                        <span className="font-mono text-red-600">- Rs. {discount.toLocaleString()}</span>
+                      </div>
+                    )}
                     <div className={`flex justify-between text-lg font-semibold pt-2 border-t ${isRTL ? "flex-row-reverse" : ""}`}>
                       <span>{t("total")}</span>
                       <span className="font-mono text-primary">Rs. {totalAmount.toLocaleString()}</span>
@@ -759,6 +833,30 @@ export default function SalesPage() {
                     </FormItem>
                   )}
                 />
+                <FormField
+                  control={form.control}
+                  name="paymentMode"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Payment Mode</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Payment mode" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="cash">Cash</SelectItem>
+                          <SelectItem value="credit">Credit</SelectItem>
+                          <SelectItem value="bank">Bank Transfer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="notes"

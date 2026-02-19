@@ -110,6 +110,8 @@ const purchaseFormSchema = z.object({
   vehicleNumber: z.string().optional(),
   brokerId: z.string().optional(),
   brokerCommissionPercent: z.string().default("0"),
+  paidAmount: z.string().default("0"),
+  paymentMode: z.enum(["cash", "credit", "bank"]).default("cash"),
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
@@ -196,6 +198,8 @@ export default function PurchasesPage() {
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
+      paidAmount: "0",
+      paymentMode: "cash",
       notes: "",
       items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
       charges: defaultCharges,
@@ -289,7 +293,8 @@ export default function PurchasesPage() {
     supplierId: parseInt(data.supplierId),
     purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
     brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
-    paidAmount: "0",
+    paidAmount: data.paidAmount || "0",
+    paymentMode: data.paymentMode || "cash",
     moundBaseKg: moundBaseKg.toString(),
     items: data.items.map((item, idx) => ({
       productId: parseInt(item.productId),
@@ -357,6 +362,8 @@ export default function PurchasesPage() {
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
+      paidAmount: "0",
+      paymentMode: "cash",
       notes: "",
       items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
       charges: defaultCharges,
@@ -409,6 +416,8 @@ export default function PurchasesPage() {
       vehicleNumber: purchase.vehicleNumber || "",
       brokerId: purchase.brokerId ? String(purchase.brokerId) : "none",
       brokerCommissionPercent: purchase.brokerCommissionPercent || "0",
+      paidAmount: (purchase as any).paidAmount ?? "0",
+      paymentMode: ((purchase as any).paymentMode as "cash" | "credit" | "bank") ?? "cash",
       notes: purchase.notes || "",
       items: normalizedItems,
       charges: normalizedCharges,
@@ -458,14 +467,33 @@ export default function PurchasesPage() {
     }
   };
 
+  const consumedOpenId = useRef<number | null>(null);
   useEffect(() => {
-    const params = new URLSearchParams(location.split("?")[1] || "");
+    const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
     const editParam = params.get("editId");
-    if (!editParam) return;
-    const id = Number(editParam);
-    if (!Number.isFinite(id) || consumedEditId.current === id) return;
-    consumedEditId.current = id;
-    handleEditById(id);
+    if (editParam) {
+      const id = Number(editParam);
+      if (Number.isFinite(id) && consumedEditId.current !== id) {
+        consumedEditId.current = id;
+        handleEditById(id);
+      }
+      return;
+    }
+    const openParam = params.get("open");
+    if (openParam) {
+      const id = Number(openParam);
+      if (Number.isFinite(id) && consumedOpenId.current !== id) {
+        consumedOpenId.current = id;
+        loadPurchaseDetail(id).then((detail) => {
+          setMode("view");
+          setCurrentPurchase(detail as any);
+          setCurrentPurchaseId(id);
+          populateFormFromPurchase(detail);
+          openDialog("purchaseForm");
+          window.history.replaceState({}, "", "/purchases");
+        }).catch(() => {});
+      }
+    }
   }, [location]);
   const handleCloseDialog = () => {
     closeDialog("purchaseForm");
@@ -772,6 +800,41 @@ export default function PurchasesPage() {
                       <FormControl>
                         <Input {...field} type="number" step="0.01" data-testid="input-commission" />
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="paidAmount"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("paidAmount")}</FormLabel>
+                      <FormControl>
+                        <Input {...field} type="number" step="0.01" data-testid="input-paid" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="paymentMode"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Payment Mode</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Payment mode" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="cash">Cash</SelectItem>
+                          <SelectItem value="credit">Credit</SelectItem>
+                          <SelectItem value="bank">Bank Transfer</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}

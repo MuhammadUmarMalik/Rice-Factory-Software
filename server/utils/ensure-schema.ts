@@ -36,6 +36,59 @@ function ensureAccountsColumns(): void {
   }
 }
 
+function ensureSalesColumns(): void {
+  try {
+    const rows = sqlite.prepare("PRAGMA table_info(sales)").all() as Array<{ name: string }>;
+    const names = rows.map((r) => r.name);
+    if (!names.includes("payment_mode")) {
+      sqlite.prepare("ALTER TABLE sales ADD COLUMN payment_mode TEXT DEFAULT 'cash'").run();
+    }
+    if (!names.includes("cash_receipt_id")) {
+      sqlite.prepare("ALTER TABLE sales ADD COLUMN cash_receipt_id INTEGER").run();
+    }
+    if (!names.includes("rent_charges")) {
+      sqlite.prepare("ALTER TABLE sales ADD COLUMN rent_charges TEXT DEFAULT '0'").run();
+    }
+    if (!names.includes("discount_amount")) {
+      sqlite.prepare("ALTER TABLE sales ADD COLUMN discount_amount TEXT DEFAULT '0'").run();
+    }
+  } catch {
+    // table may not exist yet
+  }
+}
+
+function ensurePurchasesColumns(): void {
+  try {
+    const rows = sqlite.prepare("PRAGMA table_info(purchases)").all() as Array<{ name: string }>;
+    const names = rows.map((r) => r.name);
+    if (!names.includes("payment_mode")) {
+      sqlite.prepare("ALTER TABLE purchases ADD COLUMN payment_mode TEXT DEFAULT 'cash'").run();
+    }
+    if (!names.includes("cash_payment_id")) {
+      sqlite.prepare("ALTER TABLE purchases ADD COLUMN cash_payment_id INTEGER").run();
+    }
+  } catch {
+    // table may not exist yet
+  }
+}
+
+function hasCashAccountsTable(): boolean {
+  try {
+    const row = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='cash_accounts'").get();
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
+
+function ensureCashAccounts(): void {
+  if (!hasCashAccountsTable()) return;
+  const row = sqlite.prepare("SELECT id FROM cash_accounts WHERE id = 1").get();
+  if (!row) {
+    sqlite.prepare("INSERT INTO cash_accounts (id, account_name, opening_balance) VALUES (1, 'Main Cash', 0)").run();
+  }
+}
+
 /**
  * Ensures the SQLite database has the application schema (e.g. users table).
  * If the schema is missing, runs `drizzle-kit push` so dev and Electron work without a manual db:push.
@@ -67,4 +120,7 @@ export function ensureSchema(): void {
   }
 
   ensureAccountsColumns();
+  ensureSalesColumns();
+  ensurePurchasesColumns();
+  ensureCashAccounts();
 }

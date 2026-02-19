@@ -98,9 +98,11 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     { label: "Loading", value: sale.loadingCharges },
     { label: "Weighing", value: sale.weighingCharges },
     { label: "Other", value: sale.otherCharges },
+    { label: "Rent", value: (sale as { rentCharges?: string | null }).rentCharges },
   ];
   const chargeSummary = charges.filter((c) => Number(c.value || 0) !== 0);
   const chargesTotal = chargeSummary.reduce((sum, c) => sum + parseFloat(String(c.value || "0")), 0);
+  const discountAmount = parseFloat(String((sale as { discountAmount?: string | null }).discountAmount || "0"));
   const unitSet = new Set(items.map((it) => resolveUnit(it)).filter(Boolean));
   const totalQtyLabel = (() => {
     if (unitSet.size === 1) {
@@ -152,6 +154,8 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     ...(Number(sale.loadingCharges || 0) !== 0 ? [summaryCard("Loading", money(sale.loadingCharges))] : []),
     ...(Number(sale.weighingCharges || 0) !== 0 ? [summaryCard("Weighing", money(sale.weighingCharges))] : []),
     ...(Number(sale.otherCharges || 0) !== 0 ? [summaryCard("Other Charges", money(sale.otherCharges))] : []),
+    ...(Number((sale as { rentCharges?: string | null }).rentCharges || 0) !== 0 ? [summaryCard("Rent", money((sale as { rentCharges?: string | null }).rentCharges))] : []),
+    ...(discountAmount !== 0 ? [summaryCard("Discount", `- ${money(discountAmount)}`)] : []),
     ...(taxAmount !== 0 ? [summaryCard("Tax", money(taxAmount))] : []),
     ...(chargesTotal !== 0 ? [summaryCard("Charges Total", money(chargesTotal), true)] : []),
     summaryCard("Total", money(sale.totalAmount), true),

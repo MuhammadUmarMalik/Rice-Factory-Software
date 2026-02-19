@@ -340,6 +340,8 @@ export const purchases = sqliteTable("purchases", {
   paidAmount: text("paid_amount").notNull().default("0"),
   notes: text("notes"),
   purchaseDate: integer("purchase_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  paymentMode: text("payment_mode").default("cash"),
+  cashPaymentId: integer("cash_payment_id"),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
   deletedAt: integer("deleted_at", { mode: "timestamp" }),
@@ -453,6 +455,8 @@ export const sales = sqliteTable("sales", {
   loadingCharges: text("loading_charges").default("0"),
   weighingCharges: text("weighing_charges").default("0"),
   otherCharges: text("other_charges").default("0"),
+  rentCharges: text("rent_charges").default("0"),
+  discountAmount: text("discount_amount").default("0"),
   taxTypeId: integer("tax_type_id").references(() => taxTypes.id),
   taxAmount: text("tax_amount").notNull().default("0"),
   subtotal: text("subtotal").notNull().default("0"),
@@ -462,6 +466,8 @@ export const sales = sqliteTable("sales", {
   notes: text("notes"),
   gatePassNumber: text("gate_pass_number"),
   saleDate: integer("sale_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  paymentMode: text("payment_mode").default("cash"),
+  cashReceiptId: integer("cash_receipt_id"),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
@@ -880,6 +886,86 @@ export const insertExpenseEntrySchema = createInsertSchema(expenseEntries).omit(
 });
 export type InsertExpenseEntry = z.infer<typeof insertExpenseEntrySchema>;
 export type ExpenseEntry = typeof expenseEntries.$inferSelect;
+
+// Cash in Hand module tables
+export const cashAccounts = sqliteTable("cash_accounts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountName: text("account_name").notNull().default("Main Cash"),
+  openingBalance: text("opening_balance").notNull().default("0"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const cashReceipts = sqliteTable("cash_receipts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherNo: text("voucher_no").notNull().unique(),
+  receiptDate: integer("receipt_date", { mode: "timestamp" }).notNull(),
+  receivedFrom: text("received_from").notNull(),
+  amount: text("amount").notNull(),
+  description: text("description"),
+  paymentMode: text("payment_mode").default("cash"),
+  referenceType: text("reference_type"),
+  referenceId: integer("reference_id"),
+  cashAccountId: integer("cash_account_id").notNull().default(1).references(() => cashAccounts.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const cashPayments = sqliteTable("cash_payments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherNo: text("voucher_no").notNull().unique(),
+  paymentDate: integer("payment_date", { mode: "timestamp" }).notNull(),
+  paidTo: text("paid_to").notNull(),
+  amount: text("amount").notNull(),
+  description: text("description"),
+  paymentMode: text("payment_mode").default("cash"),
+  referenceType: text("reference_type"),
+  referenceId: integer("reference_id"),
+  cashAccountId: integer("cash_account_id").notNull().default(1).references(() => cashAccounts.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const cashJournalVouchers = sqliteTable("cash_journal_vouchers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherNo: text("voucher_no").notNull().unique(),
+  voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(now),
+  narration: text("narration"),
+  totalDebit: text("total_debit").notNull().default("0"),
+  totalCredit: text("total_credit").notNull().default("0"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const cashJournalItems = sqliteTable("cash_journal_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  journalId: integer("journal_id").notNull().references(() => cashJournalVouchers.id, { onDelete: "cascade" }),
+  accountHead: text("account_head").notNull(),
+  debitAmount: text("debit_amount").notNull().default("0"),
+  creditAmount: text("credit_amount").notNull().default("0"),
+  narration: text("narration"),
+});
+
+export const insertCashAccountSchema = createInsertSchema(cashAccounts).omit({ id: true, createdAt: true });
+export type InsertCashAccount = z.infer<typeof insertCashAccountSchema>;
+export type CashAccount = typeof cashAccounts.$inferSelect;
+
+export const insertCashReceiptSchema = createInsertSchema(cashReceipts).omit({ id: true, createdAt: true });
+export type InsertCashReceipt = z.infer<typeof insertCashReceiptSchema>;
+export type CashReceipt = typeof cashReceipts.$inferSelect;
+
+export const insertCashPaymentSchema = createInsertSchema(cashPayments).omit({ id: true, createdAt: true });
+export type InsertCashPayment = z.infer<typeof insertCashPaymentSchema>;
+export type CashPayment = typeof cashPayments.$inferSelect;
+
+export const insertCashJournalVoucherSchema = createInsertSchema(cashJournalVouchers).omit({
+  id: true,
+  totalDebit: true,
+  totalCredit: true,
+  createdAt: true,
+});
+export type InsertCashJournalVoucher = z.infer<typeof insertCashJournalVoucherSchema>;
+export type CashJournalVoucher = typeof cashJournalVouchers.$inferSelect;
+
+export const insertCashJournalItemSchema = createInsertSchema(cashJournalItems).omit({ id: true });
+export type InsertCashJournalItem = z.infer<typeof insertCashJournalItemSchema>;
+export type CashJournalItem = typeof cashJournalItems.$inferSelect;
 
 // Specialized Daybooks
 export const salesDaybook = sqliteTable("sales_daybook", {

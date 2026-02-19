@@ -59,6 +59,9 @@ export type Purchase = {
   buyerAmount: string;
   balanceDue: string;
   paidAmount: string;
+  paymentMode?: string | null;
+  cashPaymentId?: number | null;
+  cashPaymentVoucherNo?: string | null;
   notes: string | null;
   purchaseDate: Date | string;
   createdBy: number | null;
@@ -77,6 +80,8 @@ export type Sale = {
   loadingCharges: string | null;
   weighingCharges: string | null;
   otherCharges: string | null;
+  rentCharges: string | null;
+  discountAmount: string | null;
   taxTypeId: number | null;
   taxAmount: string;
   subtotal: string;
@@ -86,6 +91,9 @@ export type Sale = {
   notes: string | null;
   gatePassNumber: string | null;
   saleDate: Date | string;
+  paymentMode?: string | null;
+  cashReceiptId?: number | null;
+  cashReceiptVoucherNo?: string | null;
   createdBy: number | null;
   createdAt: Date | string;
 };

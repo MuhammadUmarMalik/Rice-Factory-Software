@@ -34,6 +34,9 @@ export function useCreatePurchase() {
       qc.invalidateQueries({ queryKey: apiKeys.purchases });
       qc.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
       qc.invalidateQueries({ queryKey: apiKeys.products });
+      qc.invalidateQueries({ queryKey: ["/api/cash/summary"] });
+      qc.invalidateQueries({ queryKey: ["/api/cash/payments"] });
+      qc.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
     },
   });
 }
@@ -47,6 +50,9 @@ export function useUpdatePurchase() {
       qc.invalidateQueries({ queryKey: apiKeys.purchases });
       qc.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
       qc.invalidateQueries({ queryKey: apiKeys.products });
+      qc.invalidateQueries({ queryKey: ["/api/cash/summary"] });
+      qc.invalidateQueries({ queryKey: ["/api/cash/payments"] });
+      qc.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
     },
   });
 }

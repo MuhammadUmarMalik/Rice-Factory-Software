@@ -9,7 +9,7 @@ export async function listPayments() {
 
   const detailed = await Promise.all(
     vouchers
-      .filter((v) => v.voucherType === "DR")
+      .filter((v) => v.voucherType === "CP")
       .map(async (v) => {
         const withLines = await storage.getReceiptVoucher(v.id);
         const lines = withLines?.lines || [];
@@ -22,7 +22,7 @@ export async function listPayments() {
 }
 
 export async function getNextPaymentNumber() {
-  return storage.getNextReceiptVoucherNumber("DR");
+  return storage.getNextReceiptVoucherNumber("CP");
 }
 
 export async function getPayment(id: number) {

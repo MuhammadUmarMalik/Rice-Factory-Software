@@ -1,3 +1,5 @@
+import "./config/sentry";
+import { captureException, isSentryEnabled, logger } from "./config/sentry";
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import createMemoryStore from "memorystore";
@@ -119,6 +121,7 @@ export function log(message: string, source = "express") {
   });
 
   console.log(`${formattedTime} [${source}] ${message}`);
+  if (isSentryEnabled()) logger.info(message, { source });
 }
 
 app.use((req, res, next) => {
@@ -160,6 +163,7 @@ app.use((req, res, next) => {
     const message = err.message || "Internal Server Error";
 
     console.error(err);
+    if (status >= 500) captureException(err);
     if (isProduction && status >= 500) {
       return res.status(status).json({ message: "Internal Server Error" });
     }

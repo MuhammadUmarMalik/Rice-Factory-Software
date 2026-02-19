@@ -12,6 +12,8 @@ export const receiptLinesSchema = z
         amount: numericString.optional(),
         narration: z.string().optional(),
         accountId: z.number().int().positive(),
+        purchaseId: z.number().int().positive().optional(),
+        saleId: z.number().int().positive().optional(),
       })
   )
   .min(1);

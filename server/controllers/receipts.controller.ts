@@ -48,11 +48,7 @@ export async function createReceipt(req: Request, res: Response) {
     const { lines, ...payload } = req.body;
     const header = receiptHeaderSchema.parse({ ...payload, voucherType: "CR" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
-    const totalDebit = parsedLines.reduce((s, l) => s + Number(l.debit ?? 0), 0);
-    const totalCredit = parsedLines.reduce((s, l) => s + Number(l.credit ?? 0), 0);
-    if (!Number.isFinite(totalDebit) || !Number.isFinite(totalCredit) || Math.abs(totalDebit - totalCredit) > 1e-6) {
-      return res.status(400).json({ error: "Total debits must equal total credits" });
-    }
+    // Balance is enforced in storage (settlement line is added server-side for CR)
     const voucher = await receiptsService.createReceipt(header, parsedLines);
     await notifyUsers({
       title: "Payment received",
@@ -85,11 +81,7 @@ export async function updateReceipt(req: Request, res: Response) {
     const { lines, ...payload } = req.body;
     const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "CR" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
-    const totalDebit = parsedLines.reduce((s, l) => s + Number(l.debit ?? 0), 0);
-    const totalCredit = parsedLines.reduce((s, l) => s + Number(l.credit ?? 0), 0);
-    if (!Number.isFinite(totalDebit) || !Number.isFinite(totalCredit) || Math.abs(totalDebit - totalCredit) > 1e-6) {
-      return res.status(400).json({ error: "Total debits must equal total credits" });
-    }
+    // Balance is enforced in storage (settlement line is added server-side for CR)
     const voucher = await receiptsService.updateReceipt(id, header, parsedLines);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);

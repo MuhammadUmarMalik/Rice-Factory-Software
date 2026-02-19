@@ -14,6 +14,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Link } from "wouter";
 import type { Purchase, Account } from "@/types/schema";
 import { format } from "date-fns";
 
@@ -94,6 +95,25 @@ export function PurchasesList({
           Rs. {parseFloat(item.totalAmount || "0").toLocaleString()}
         </span>
       ),
+    },
+    {
+      key: "paidAmount",
+      title: "Paid",
+      align: "right",
+      render: (item) => {
+        const paid = parseFloat(item.paidAmount || "0");
+        const cashVoucherNo = item.cashPaymentVoucherNo;
+        return (
+          <div className="flex flex-col gap-1 items-end">
+            <span className="font-mono text-sm">Rs. {paid.toLocaleString()}</span>
+            {cashVoucherNo && (
+              <Link href="/cash" className="text-xs text-primary hover:underline">
+                Cash payment: {cashVoucherNo}
+              </Link>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: "actions",
