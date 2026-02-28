@@ -1,5 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkeletonBox } from "@/components/ui/skeletons";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 
 type DashboardInsightsSectionProps = {
   charges?: {
@@ -32,12 +34,57 @@ export function DashboardInsightsSection({
   money,
   loading,
 }: DashboardInsightsSectionProps) {
+  const chargeRows = [
+    {
+      key: "freight",
+      label: "Freight",
+      value: charges?.freight,
+      tooltip:
+        "From purchase charges with type 'freight'.",
+    },
+    {
+      key: "loading",
+      label: "Loading/Unloading",
+      value: charges?.loading,
+      tooltip:
+        "From purchase charges 'loading_filling/weight' and sale-side loading/weighing charges.",
+    },
+    {
+      key: "marketFee",
+      label: "Market Fee",
+      value: charges?.marketFee,
+      tooltip:
+        "From purchase charges with type 'market_fee'.",
+    },
+    {
+      key: "brokerage",
+      label: "Brokerage / Commission",
+      value: charges?.brokerage,
+      tooltip:
+        "From purchase brokerage/commission charges and broker commission amount fields.",
+    },
+    {
+      key: "bardana",
+      label: "Bardana",
+      value: charges?.bardana,
+      tooltip:
+        "From purchase charges with type 'bardana'.",
+    },
+    {
+      key: "processing",
+      label: "Processing Cost",
+      value: charges?.processing,
+      tooltip:
+        "From purchase accountant/clerk charges plus sale-side rent charges.",
+    },
+  ] as const;
+
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader className={isRTL ? "text-right" : ""}>
           <CardTitle className="text-base font-semibold">Charges Impact</CardTitle>
-          <p className="text-sm text-muted-foreground">Ledger-based totals</p>
+          <p className="text-sm text-muted-foreground">Transaction-based totals</p>
         </CardHeader>
         <CardContent className="space-y-2">
           {loading ? (
@@ -47,32 +94,30 @@ export function DashboardInsightsSection({
               ))}
             </div>
           ) : (
-            <>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <span>Freight</span>
-                <span className="font-mono">{money(charges?.freight)}</span>
-              </div>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <span>Loading/Unloading</span>
-                <span className="font-mono">{money(charges?.loading)}</span>
-              </div>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <span>Market Fee</span>
-                <span className="font-mono">{money(charges?.marketFee)}</span>
-              </div>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <span>Brokerage / Commission</span>
-                <span className="font-mono">{money(charges?.brokerage)}</span>
-              </div>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <span>Bardana</span>
-                <span className="font-mono">{money(charges?.bardana)}</span>
-              </div>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <span>Processing Cost</span>
-                <span className="font-mono">{money(charges?.processing)}</span>
-              </div>
-            </>
+            <TooltipProvider>
+              {chargeRows.map((row) => (
+                <div key={row.key} className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className={`inline-flex items-center gap-1.5 ${isRTL ? "flex-row-reverse" : ""}`}>
+                    {row.label}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          aria-label={`About ${row.label}`}
+                        >
+                          <Info className="h-3.5 w-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side={isRTL ? "left" : "right"} className="max-w-xs">
+                        <p>{row.tooltip}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </span>
+                  <span className="font-mono">{money(row.value)}</span>
+                </div>
+              ))}
+            </TooltipProvider>
           )}
         </CardContent>
       </Card>

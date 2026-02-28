@@ -568,6 +568,7 @@ export default function Dashboard() {
               money={money}
               pendingLabel={t("pending")}
               inProgressLabel={t("inProgress")}
+              completedLabel={t("completed")}
               onOpenDetail={openDetail}
             />
           </Suspense>

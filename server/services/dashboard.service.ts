@@ -90,29 +90,66 @@ function classifyProduct(name: string) {
   return "rice";
 }
 
-function chargeBucket(name: string) {
-  const value = name.toLowerCase();
-  if (value.includes("freight")) return "freight";
-  if (value.includes("loading") || value.includes("unloading") || value.includes("filling")) return "loading";
-  if (value.includes("market fee") || value.includes("market")) return "marketFee";
-  if (value.includes("brokerage") || value.includes("commission")) return "brokerage";
-  if (value.includes("bardana")) return "bardana";
-  if (value.includes("processing") || value.includes("hulling")) return "processing";
-  return null;
+function normalizePurchaseChargeType(value: string | null | undefined) {
+  const raw = (value || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw === "accountant clerk" || raw === "accountant/clerk" || raw === "accountant / clerk") {
+    return "accountant_clerk";
+  }
+
+  const normalized = raw.replace(/[^a-z0-9]+/g, "_");
+  if (normalized.includes("phone") && normalized.includes("anal")) return "phone_analysis";
+  if (normalized.startsWith("comm") || normalized.includes("commi")) return "commission";
+  if (normalized.startsWith("mitha")) return "mitha_sukri";
+  if (normalized.startsWith("load") || normalized.startsWith("unload") || normalized.includes("filling")) {
+    return "loading_filling";
+  }
+  if (normalized.startsWith("market")) return "market_fee";
+  if (normalized.startsWith("broker")) return "brokerage";
+  if (normalized.startsWith("broken")) return "broken_allowance";
+  if (normalized.startsWith("bard")) return "bardana";
+  if (normalized.startsWith("freight")) return "freight";
+  if (normalized.startsWith("weight") || normalized.includes("weigh")) return "weight";
+  if (normalized.startsWith("other")) return "other";
+  if (normalized.startsWith("accountant")) return "accountant_clerk";
+  return normalized;
 }
 
-export async function getDashboardSummary(
-  params: Partial<DashboardRange>,
-  scope: "core",
-): Promise<DashboardSummaryCore>;
-export async function getDashboardSummary(
-  params: Partial<DashboardRange>,
-  scope: "details",
-): Promise<DashboardSummaryDetails>;
-export async function getDashboardSummary(
-  params: Partial<DashboardRange>,
-  scope?: "full",
-): Promise<DashboardSummaryFull>;
+function normalizeDateValue(value: Date | string | number | null | undefined) {
+  if (value == null) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    // Legacy rows may store Unix seconds; modern code may pass milliseconds.
+    const ms = value < 1e12 ? value * 1000 : value;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    const ms = n < 1e12 ? n * 1000 : n;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function inDateRange(value: Date | string | number | null | undefined, fromDate?: Date, toDate?: Date) {
+  if (!fromDate && !toDate) return true;
+  const d = normalizeDateValue(value);
+  if (!d) return false;
+  if (fromDate && d < fromDate) return false;
+  if (toDate && d > toDate) return false;
+  return true;
+}
+
 function emptyCoreData(fromDate: Date, toDate: Date): DashboardSummaryCore {
   return {
     filters: { fromDate: fromDate.toISOString(), toDate: toDate.toISOString() },
@@ -129,6 +166,23 @@ function emptyCoreData(fromDate: Date, toDate: Date): DashboardSummaryCore {
     trialBalance: { debitTotal: 0, creditTotal: 0, difference: 0, balanced: true },
   };
 }
+
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope: "core",
+): Promise<DashboardSummaryCore>;
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope: "details",
+): Promise<DashboardSummaryDetails>;
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope?: "full",
+): Promise<DashboardSummaryFull>;
+export async function getDashboardSummary(
+  params: Partial<DashboardRange>,
+  scope: DashboardSummaryScope,
+): Promise<DashboardSummaryCore | DashboardSummaryDetails | DashboardSummaryFull>;
 
 export async function getDashboardSummary(
   params: Partial<DashboardRange>,
@@ -240,14 +294,28 @@ export async function getDashboardSummary(
 
   if (includeDetails) {
     try {
-    const [products, accounts, ledgerInRange, dayBook] = await Promise.all([
+    const [products, purchases, sales] = await Promise.all([
       storage.getProducts(),
-      storage.getAccounts(),
-      storage.getLedgerEntries(undefined, undefined, fromDate ?? undefined, toDate ?? undefined),
-      storage.getDayBook(toDate ?? new Date()),
+      storage.getPurchases(),
+      storage.getSales(),
     ]);
 
-    const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
+    let dayBookDate = toDate ?? new Date();
+    let dayBook = await storage.getDayBook(dayBookDate);
+
+    // If dashboard is unfiltered and today's day book is empty, fall back to the latest ledger date.
+    if (!hasDateFilter && (dayBook.rows?.length ?? 0) === 0) {
+      const allLedger = await storage.getLedgerEntries();
+      const latestEntry = allLedger.at(-1);
+      if (latestEntry?.entryDate) {
+        const latestDate = new Date(latestEntry.entryDate as unknown as string | number | Date);
+        if (!Number.isNaN(latestDate.getTime())) {
+          dayBookDate = latestDate;
+          dayBook = await storage.getDayBook(dayBookDate);
+        }
+      }
+    }
+
     const charges = {
       freight: 0,
       loading: 0,
@@ -256,12 +324,44 @@ export async function getDashboardSummary(
       bardana: 0,
       processing: 0,
     };
-    for (const entry of ledgerInRange) {
-      if (entry.transactionType !== "debit") continue;
-      const name = accountNameById.get(entry.accountId) || "";
-      const bucket = chargeBucket(name);
-      if (!bucket) continue;
-      charges[bucket] += parseAmount(entry.amount);
+
+    const filteredPurchases = purchases.filter((p) =>
+      inDateRange((p.purchaseDate as any) ?? (p.createdAt as any), fromDate, toDate),
+    );
+    const filteredSales = sales.filter((s) =>
+      inDateRange((s.saleDate as any) ?? (s.createdAt as any), fromDate, toDate),
+    );
+
+    // Pull purchase charge lines and aggregate by charge type.
+    const purchaseChargeLists = await Promise.all(
+      filteredPurchases.map(async (p) => ({
+        purchase: p,
+        charges: await storage.getPurchaseCharges(p.id),
+      })),
+    );
+
+    for (const { purchase, charges: lines } of purchaseChargeLists) {
+      for (const charge of lines) {
+        const amount = parseAmount(charge.amount);
+        if (amount <= 0) continue;
+        const type = normalizePurchaseChargeType(charge.type);
+
+        if (type === "freight") charges.freight += amount;
+        if (type === "loading_filling" || type === "weight") charges.loading += amount;
+        if (type === "market_fee") charges.marketFee += amount;
+        if (type === "brokerage" || type === "commission") charges.brokerage += amount;
+        if (type === "bardana") charges.bardana += amount;
+        if (type === "accountant_clerk") charges.processing += amount;
+      }
+
+      // Broker commission also exists as a normalized top-level purchase field.
+      charges.brokerage += parseAmount(purchase.brokerCommissionAmount);
+    }
+
+    // Sales-side charge fields.
+    for (const sale of filteredSales) {
+      charges.loading += parseAmount(sale.loadingCharges) + parseAmount(sale.weighingCharges);
+      charges.processing += parseAmount(sale.rentCharges);
     }
 
     const stockTotals = {
@@ -310,7 +410,7 @@ export async function getDashboardSummary(
         valuation: parseAmount(stockReport?.totals?.closingValue),
       },
       dayBook: {
-        date: (toDate ?? new Date()).toISOString(),
+        date: dayBookDate.toISOString(),
         rows: dayBook.rows
           .filter((r) => parseAmount(r.receipt) > 0 || parseAmount(r.payment) > 0)
           .slice(0, 10),
