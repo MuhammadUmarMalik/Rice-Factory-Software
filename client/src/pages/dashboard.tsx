@@ -159,8 +159,10 @@ export default function Dashboard() {
       return res.json();
     },
     staleTime: 0,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   const { data: details, isLoading: detailsLoading } = useQuery<DashboardSummaryDetails>({
@@ -179,8 +181,10 @@ export default function Dashboard() {
     },
     enabled: detailsSection.active,
     staleTime: 0,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   const { data: alertsData, isLoading: alertsLoading } = useQuery<DashboardAlerts>({
@@ -197,8 +201,10 @@ export default function Dashboard() {
       return res.json();
     },
     staleTime: 0,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   const money = useCallback(

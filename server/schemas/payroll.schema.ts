@@ -9,3 +9,9 @@ export const payrollPaymentSchema = z.object({
   paymentAccountId: z.number().int().positive().optional(),
   paymentDate: z.string().optional(),
 });
+
+export const payrollUpdateSchema = z.object({
+  basicSalary: z.coerce.number().min(0).optional(),
+  allowances: z.coerce.number().min(0).optional(),
+  deductions: z.coerce.number().min(0).optional(),
+});

@@ -29,6 +29,7 @@ import {
   type JournalVoucherEntry, type InsertJournalVoucherEntry,
   cashTransactions,
   type CashTransaction, type InsertCashTransaction,
+  cashAccounts, cashReceipts, cashPayments,
   periodLocks,
   type PeriodLock, type InsertPeriodLock,
   fiscalYears, fiscalPeriods, fiscalOpeningBalances,
@@ -420,7 +421,7 @@ export interface IStorage {
     liabilities: { payables: string; expensesPayable: string; total: string };
     equity: { capital: string; retainedEarnings: string; total: string };
     totals: { assets: string; liabilitiesAndEquity: string };
-    validation: { balanced: boolean; difference: string };
+    validation: { balanced: boolean; difference: string; reasons: string[] };
   }>;
   getCapitalStatement(startDate: Date, endDate: Date): Promise<{
     openingCapital: string;
@@ -480,7 +481,14 @@ export interface IStorage {
   getEffectiveSalaryStructure(employeeId: number, asOf: Date): Promise<EmployeeSalaryStructure | undefined>;
 
   // Payroll
+  getPayrollById(payrollId: number): Promise<Payroll | undefined>;
   getPayrolls(filters?: { month?: string; status?: string; employeeId?: number }): Promise<Payroll[]>;
+  updatePayroll(
+    payrollId: number,
+    payload: { basicSalary?: number; allowances?: number; deductions?: number },
+    performedBy?: { userId?: number; role?: string },
+  ): Promise<Payroll | undefined>;
+  deletePayroll(payrollId: number, performedBy?: { userId?: number; role?: string }): Promise<boolean>;
   generateMonthlyPayroll(month: string, performedBy?: { userId?: number; role?: string }): Promise<{ created: number; skipped: number }>;
   approvePayroll(payrollId: number, performedBy?: { userId?: number; role?: string }, postingDate?: Date): Promise<Payroll | undefined>;
   paySalary(
@@ -502,6 +510,13 @@ export interface IStorage {
       throw new Error("Invalid numeric value");
     }
     return num;
+  }
+
+  function formatMoney(value: string | number | null | undefined): string {
+    return parseAmount(value).toLocaleString("en-PK", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
   }
 
   function toValidDate(value?: string | number | Date | null): Date {
@@ -806,6 +821,147 @@ function toWords(n: number): string {
 }
 
 export class DatabaseStorage implements IStorage {
+  private autoMarkPayrollApprovedForEmployee(
+    client: DbClient,
+    opts: {
+      employeeAccountId: number;
+      amount: number;
+      postingDate: Date;
+      journalVoucherId?: number | null;
+      source: string;
+      actorUserId?: number;
+      actorRole?: string;
+    },
+  ) {
+    if (!Number.isFinite(opts.amount) || opts.amount <= 0) return;
+
+    const [emp] = client
+      .select({ id: employees.id, employeeCode: employees.employeeCode })
+      .from(employees)
+      .where(eq(employees.accountId, opts.employeeAccountId))
+      .limit(1)
+      .all();
+    if (!emp) return;
+
+    const generatedRows = client
+      .select()
+      .from(payrolls)
+      .where(and(eq(payrolls.employeeId, emp.id), eq(payrolls.status, "generated")))
+      .orderBy(payrolls.payrollMonth, payrolls.id)
+      .all();
+    if (!generatedRows.length) return;
+
+    const postingMonth = opts.postingDate.toISOString().slice(0, 7);
+    const amount = opts.amount;
+    const sameMonthExact = generatedRows.find(
+      (p) => p.payrollMonth === postingMonth && Math.abs(parseAmount(p.netSalary || "0") - amount) < 0.0001,
+    );
+    const exactAnyMonth = generatedRows.find((p) => Math.abs(parseAmount(p.netSalary || "0") - amount) < 0.0001);
+    const target = sameMonthExact ?? exactAnyMonth;
+    if (!target) return;
+
+    client
+      .update(payrolls)
+      .set({
+        status: "approved",
+        approvedBy: opts.actorUserId,
+        approvedByRole: opts.actorRole,
+        approvedAt: opts.postingDate,
+        journalVoucherId: opts.journalVoucherId ?? target.journalVoucherId ?? null,
+        updatedAt: new Date(),
+      } as any)
+      .where(eq(payrolls.id, target.id))
+      .run();
+
+    client
+      .insert(payrollAuditLogs)
+      .values({
+        payrollId: target.id,
+        action: "approved",
+        performedBy: opts.actorUserId,
+        performedByRole: opts.actorRole,
+        detailsJson: JSON.stringify({
+          autoMatched: true,
+          source: opts.source,
+          amount: amount.toString(),
+          postingDate: opts.postingDate.toISOString(),
+          journalVoucherId: opts.journalVoucherId ?? null,
+        }),
+      } as any)
+      .run();
+  }
+
+  private autoMarkPayrollPaidForEmployee(
+    client: DbClient,
+    opts: {
+      employeeAccountId: number;
+      amount: number;
+      paymentDate: Date;
+      method: "Cash" | "Bank";
+      paymentJournalVoucherId?: number | null;
+      source: string;
+      actorUserId?: number;
+      actorRole?: string;
+    },
+  ) {
+    if (!Number.isFinite(opts.amount) || opts.amount <= 0) return;
+
+    const [emp] = client
+      .select({ id: employees.id, employeeCode: employees.employeeCode })
+      .from(employees)
+      .where(eq(employees.accountId, opts.employeeAccountId))
+      .limit(1)
+      .all();
+    if (!emp) return;
+
+    const approvedRows = client
+      .select()
+      .from(payrolls)
+      .where(and(eq(payrolls.employeeId, emp.id), eq(payrolls.status, "approved")))
+      .orderBy(payrolls.payrollMonth, payrolls.id)
+      .all();
+    if (!approvedRows.length) return;
+
+    const paymentMonth = opts.paymentDate.toISOString().slice(0, 7);
+    const amount = opts.amount;
+    const sameMonthExact = approvedRows.find(
+      (p) => p.payrollMonth === paymentMonth && Math.abs(parseAmount(p.netSalary || "0") - amount) < 0.0001,
+    );
+    const exactAnyMonth = approvedRows.find((p) => Math.abs(parseAmount(p.netSalary || "0") - amount) < 0.0001);
+    const target = sameMonthExact ?? exactAnyMonth;
+    if (!target) return;
+
+    client
+      .update(payrolls)
+      .set({
+        status: "paid",
+        paymentMethod: opts.method,
+        paidAt: opts.paymentDate,
+        paymentJournalVoucherId: opts.paymentJournalVoucherId ?? target.paymentJournalVoucherId ?? null,
+        updatedAt: new Date(),
+      } as any)
+      .where(eq(payrolls.id, target.id))
+      .run();
+
+    client
+      .insert(payrollAuditLogs)
+      .values({
+        payrollId: target.id,
+        action: "paid",
+        performedBy: opts.actorUserId,
+        performedByRole: opts.actorRole,
+        detailsJson: JSON.stringify({
+          autoMatched: true,
+          source: opts.source,
+          amount: amount.toString(),
+          method: opts.method,
+          paymentDate: opts.paymentDate.toISOString(),
+          paymentJournalVoucherId: opts.paymentJournalVoucherId ?? null,
+        }),
+      } as any)
+      .run();
+  }
+
   // Users
   async getUser(id: number): Promise<User | undefined> {
     const [user] = db.select().from(users).where(eq(users.id, id)).all();
@@ -1166,6 +1322,9 @@ export class DatabaseStorage implements IStorage {
         .where(eq(ledgerEntries.expenseEntryId, id))
         .all();
       const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(cashTransactions)
+        .where(eq(cashTransactions.expenseEntryId, id))
+        .run();
       tx.delete(ledgerEntries)
         .where(eq(ledgerEntries.expenseEntryId, id))
         .run();
@@ -1216,6 +1375,9 @@ export class DatabaseStorage implements IStorage {
         .where(eq(ledgerEntries.expenseEntryId, id))
         .all();
       const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(cashTransactions)
+        .where(eq(cashTransactions.expenseEntryId, id))
+        .run();
       tx.delete(ledgerEntries)
         .where(eq(ledgerEntries.expenseEntryId, id))
         .run();
@@ -1227,12 +1389,45 @@ export class DatabaseStorage implements IStorage {
 
   // Employees
   async getEmployees(): Promise<Employee[]> {
-    return db.select().from(employees).orderBy(employees.name).all();
+    const rows = db.select().from(employees).orderBy(employees.name).all();
+    const salaryRows = db
+      .select({
+        employeeId: employeeSalaryStructures.employeeId,
+        basicSalary: employeeSalaryStructures.basicSalary,
+        effectiveFrom: employeeSalaryStructures.effectiveFrom,
+        id: employeeSalaryStructures.id,
+      })
+      .from(employeeSalaryStructures)
+      .orderBy(desc(employeeSalaryStructures.effectiveFrom), desc(employeeSalaryStructures.id))
+      .all();
+
+    const latestByEmployee = new Map<number, string>();
+    for (const s of salaryRows) {
+      if (!latestByEmployee.has(s.employeeId)) {
+        latestByEmployee.set(s.employeeId, s.basicSalary || "0");
+      }
+    }
+
+    return rows.map((row) => ({
+      ...row,
+      basicSalary: latestByEmployee.get(row.id) || "0",
+    })) as any;
   }
 
   async getEmployee(id: number): Promise<Employee | undefined> {
     const [row] = db.select().from(employees).where(eq(employees.id, id)).all();
-    return row;
+    if (!row) return undefined;
+    const [latest] = db
+      .select({ basicSalary: employeeSalaryStructures.basicSalary })
+      .from(employeeSalaryStructures)
+      .where(eq(employeeSalaryStructures.employeeId, id))
+      .orderBy(desc(employeeSalaryStructures.effectiveFrom), desc(employeeSalaryStructures.id))
+      .limit(1)
+      .all();
+    return {
+      ...row,
+      basicSalary: latest?.basicSalary || "0",
+    } as any;
   }
 
   private generateEmployeeCodeInternal(client: DbClient): string {
@@ -1382,15 +1577,163 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Payroll
+  async getPayrollById(payrollId: number): Promise<Payroll | undefined> {
+    const [row] = db.select().from(payrolls).where(eq(payrolls.id, payrollId)).limit(1).all();
+    return row;
+  }
+
   async getPayrolls(filters?: { month?: string; status?: string; employeeId?: number }): Promise<Payroll[]> {
     const where: any[] = [];
     if (filters?.month) where.push(eq(payrolls.payrollMonth, filters.month));
     if (filters?.status) where.push(eq(payrolls.status, filters.status as any));
     if (filters?.employeeId) where.push(eq(payrolls.employeeId, filters.employeeId));
 
-    return where.length
+    const rows = where.length
       ? db.select().from(payrolls).where(and(...(where as any))).orderBy(desc(payrolls.id)).all()
       : db.select().from(payrolls).orderBy(desc(payrolls.id)).all();
+
+    // Repair stale generated rows that are stuck at zero net.
+    // Use effective structure for payroll month; if missing, fallback to latest known structure.
+    for (const row of rows) {
+      if (row.status !== "generated") continue;
+      const currentNet = parseAmount((row as any).netSalary || "0");
+      if (currentNet > 0) continue;
+
+      const { year, month } = parsePayrollMonth(row.payrollMonth);
+      const monthEnd = endOfMonth(new Date(year, month - 1, 1));
+
+      const [effectiveStructure] = db
+        .select()
+        .from(employeeSalaryStructures)
+        .where(and(eq(employeeSalaryStructures.employeeId, row.employeeId), lte(employeeSalaryStructures.effectiveFrom, monthEnd)))
+        .orderBy(desc(employeeSalaryStructures.effectiveFrom), desc(employeeSalaryStructures.id))
+        .limit(1)
+        .all();
+      const [latestStructure] = effectiveStructure
+        ? [effectiveStructure]
+        : db
+          .select()
+          .from(employeeSalaryStructures)
+          .where(eq(employeeSalaryStructures.employeeId, row.employeeId))
+          .orderBy(desc(employeeSalaryStructures.effectiveFrom), desc(employeeSalaryStructures.id))
+          .limit(1)
+          .all();
+      if (!latestStructure) continue;
+
+      const basic = parseAmount(latestStructure.basicSalary || "0");
+      const allowances = parseAmount(latestStructure.allowances || "0");
+      const deductions = parseAmount(latestStructure.deductions || "0");
+      const net = Math.max(basic + allowances - deductions, 0);
+      if (net <= 0) continue;
+
+      db.update(payrolls).set({
+        basicSalary: basic.toString(),
+        allowances: allowances.toString(),
+        deductions: deductions.toString(),
+        netSalary: net.toString(),
+        updatedAt: new Date(),
+      } as any).where(eq(payrolls.id, row.id)).run();
+
+      (row as any).basicSalary = basic.toString();
+      (row as any).allowances = allowances.toString();
+      (row as any).deductions = deductions.toString();
+      (row as any).netSalary = net.toString();
+    }
+
+    return rows;
+  }
+
+  async updatePayroll(
+    payrollId: number,
+    payload: { basicSalary?: number; allowances?: number; deductions?: number },
+    performedBy?: { userId?: number; role?: string },
+  ): Promise<Payroll | undefined> {
+    const existing = await this.getPayrollById(payrollId);
+    if (!existing) return undefined;
+    if (existing.status === "paid") {
+      throw new Error("Paid payroll cannot be edited");
+    }
+    // If approved, remove accrual JV first so payroll is rolled back to generated state.
+    if (existing.status === "approved" && existing.journalVoucherId) {
+      await this.deleteJournalVoucher(existing.journalVoucherId);
+    }
+
+    return db.transaction((tx) => {
+      const [current] = tx.select().from(payrolls).where(eq(payrolls.id, payrollId)).limit(1).all();
+      if (!current) return undefined;
+      if (current.status !== "generated") {
+        throw new Error("Only generated or approved-unpaid payroll can be edited");
+      }
+
+      const basicSalary = payload.basicSalary !== undefined ? parseAmount(payload.basicSalary) : parseAmount(current.basicSalary || "0");
+      const allowances = payload.allowances !== undefined ? parseAmount(payload.allowances) : parseAmount(current.allowances || "0");
+      const deductions = payload.deductions !== undefined ? parseAmount(payload.deductions) : parseAmount(current.deductions || "0");
+      const netSalary = basicSalary + allowances - deductions;
+      if (netSalary < 0) throw new Error("Net salary cannot be negative");
+
+      const updated = tx
+        .update(payrolls)
+        .set({
+          basicSalary: basicSalary.toString(),
+          allowances: allowances.toString(),
+          deductions: deductions.toString(),
+          netSalary: netSalary.toString(),
+          updatedAt: new Date(),
+        } as any)
+        .where(eq(payrolls.id, payrollId))
+        .returning()
+        .get();
+
+      tx.insert(payrollAuditLogs).values({
+        payrollId,
+        action: "updated",
+        performedBy: performedBy?.userId,
+        performedByRole: performedBy?.role,
+        detailsJson: JSON.stringify({
+          source: "payroll:manual_edit",
+          before: {
+            basicSalary: current.basicSalary,
+            allowances: current.allowances,
+            deductions: current.deductions,
+            netSalary: current.netSalary,
+          },
+          after: {
+            basicSalary: basicSalary.toString(),
+            allowances: allowances.toString(),
+            deductions: deductions.toString(),
+            netSalary: netSalary.toString(),
+          },
+        }),
+      } as any).run();
+
+      return updated as any;
+    });
+  }
+
+  async deletePayroll(payrollId: number, performedBy?: { userId?: number; role?: string }): Promise<boolean> {
+    const existing = await this.getPayrollById(payrollId);
+    if (!existing) return false;
+
+    // Remove payment JV first, then accrual JV. This keeps payroll rollback logic consistent.
+    if (existing.paymentJournalVoucherId) {
+      await this.deleteJournalVoucher(existing.paymentJournalVoucherId);
+    }
+    if (existing.journalVoucherId) {
+      await this.deleteJournalVoucher(existing.journalVoucherId);
+    }
+
+    const result = await db.delete(payrolls).where(eq(payrolls.id, payrollId)).run();
+    if (result.changes > 0) {
+      await db.insert(auditLogs).values({
+        entity: "payroll",
+        entityId: payrollId,
+        action: "delete",
+        performedBy: performedBy?.userId,
+        performedByRole: performedBy?.role,
+        source: "api",
+      } as any).run();
+    }
+    return result.changes > 0;
   }
 
   async generateMonthlyPayroll(month: string, performedBy?: { userId?: number; role?: string }) {
@@ -1400,19 +1743,19 @@ export class DatabaseStorage implements IStorage {
     return db.transaction((tx) => {
       const activeEmployees = tx.select().from(employees).where(eq(employees.status, "active" as any)).all();
       let created = 0;
+      let updated = 0;
       let skipped = 0;
+      let skippedNoStructure = 0;
+      let skippedZeroNet = 0;
+      let cleanedStaleGenerated = 0;
 
       for (const emp of activeEmployees) {
         const [existing] = tx
-          .select({ id: payrolls.id })
+          .select()
           .from(payrolls)
           .where(and(eq(payrolls.payrollMonth, month), eq(payrolls.employeeId, emp.id)))
           .limit(1)
           .all();
-        if (existing) {
-          skipped += 1;
-          continue;
-        }
 
         const [structure] = tx
           .select()
@@ -1421,11 +1764,58 @@ export class DatabaseStorage implements IStorage {
           .orderBy(desc(employeeSalaryStructures.effectiveFrom))
           .limit(1)
           .all();
+        if (!structure) {
+          skippedNoStructure += 1;
+          continue;
+        }
 
         const basic = parseAmount(structure?.basicSalary ?? "0");
         const allowances = parseAmount(structure?.allowances ?? "0");
         const deductions = parseAmount(structure?.deductions ?? "0");
         const net = Math.max(basic + allowances - deductions, 0);
+
+        if (existing) {
+          // Approved/paid rows should never be altered by re-generate.
+          if (existing.status !== "generated") {
+            skipped += 1;
+            continue;
+          }
+
+          if (!structure || net <= 0) {
+            tx.delete(payrolls).where(eq(payrolls.id, existing.id)).run();
+            cleanedStaleGenerated += 1;
+            if (!structure) skippedNoStructure += 1;
+            else skippedZeroNet += 1;
+            continue;
+          }
+
+          tx.update(payrolls).set({
+            basicSalary: basic.toString(),
+            allowances: allowances.toString(),
+            deductions: deductions.toString(),
+            netSalary: net.toString(),
+            updatedAt: new Date(),
+          } as any).where(eq(payrolls.id, existing.id)).run();
+
+          tx.insert(payrollAuditLogs).values({
+            payrollId: existing.id,
+            action: "updated",
+            performedBy: performedBy?.userId,
+            performedByRole: performedBy?.role,
+            detailsJson: JSON.stringify({ month, employeeId: emp.id, reason: "regenerated" }),
+          } as any).run();
+          updated += 1;
+          continue;
+        }
+
+        if (!structure) {
+          skippedNoStructure += 1;
+          continue;
+        }
+        if (net <= 0) {
+          skippedZeroNet += 1;
+          continue;
+        }
 
         const payroll = tx.insert(payrolls).values({
           payrollMonth: month,
@@ -1451,7 +1841,7 @@ export class DatabaseStorage implements IStorage {
         created += 1;
       }
 
-      return { created, skipped };
+      return { created, updated, skipped, skippedNoStructure, skippedZeroNet, cleanedStaleGenerated };
     });
   }
 
@@ -1472,7 +1862,9 @@ export class DatabaseStorage implements IStorage {
       this.assertPostingAllowed(client, voucherDate, "payroll approval");
 
       const month = payroll.payrollMonth;
-      const amount = parseAmount(payroll.netSalary || "0").toString();
+      const netAmount = parseAmount(payroll.netSalary || "0");
+      if (netAmount <= 0) throw new Error("Payroll net salary must be greater than 0 before approval");
+      const amount = netAmount.toString();
       const narration = `Payroll ${month} - ${emp.employeeCode} ${emp.name}`;
 
       const createdVoucher = (() => {
@@ -1547,7 +1939,9 @@ export class DatabaseStorage implements IStorage {
       if (!emp) throw new Error("Employee not found");
       if (!emp.accountId) throw new Error("Employee payable account is not configured");
 
-      const amount = parseAmount(payroll.netSalary || "0").toString();
+      const netAmount = parseAmount(payroll.netSalary || "0");
+      if (netAmount <= 0) throw new Error("Payroll net salary must be greater than 0 before payment");
+      const amount = netAmount.toString();
       const paymentDate = payment.paymentDate ?? new Date();
       this.assertPostingAllowed(client, paymentDate, "payroll payment");
 
@@ -1597,6 +1991,37 @@ export class DatabaseStorage implements IStorage {
 
       this.postJournalToLedger(client, v as any, normalized);
 
+      let cashPaymentInfo: { id: number; voucherNo: string } | null = null;
+      if (payment.method === "Cash") {
+        const [cashModuleAccount] = tx.select().from(cashAccounts).where(eq(cashAccounts.id, 1)).limit(1).all();
+        if (!cashModuleAccount) {
+          tx.insert(cashAccounts).values({
+            id: 1,
+            accountName: "Main Cash",
+            openingBalance: "0",
+            createdAt: new Date(),
+          } as any).run();
+        }
+
+        const [lastCashPayment] = tx.select({ id: cashPayments.id }).from(cashPayments).orderBy(desc(cashPayments.id)).limit(1).all();
+        const year = paymentDate.getFullYear();
+        const nextNo = (lastCashPayment?.id ?? 0) + 1;
+        const cashVoucherNo = `CP-${year}-${String(nextNo).padStart(4, "0")}`;
+        const cashPayment = tx.insert(cashPayments).values({
+          voucherNo: cashVoucherNo,
+          paymentDate,
+          paidTo: `${emp.employeeCode} ${emp.name}`,
+          amount,
+          description: `Salary Payment ${payroll.payrollMonth} (JV ${v.voucherNo})`,
+          paymentMode: "cash",
+          referenceType: "payroll",
+          referenceId: payroll.id,
+          cashAccountId: 1,
+          createdAt: new Date(),
+        } as any).returning().get() as any;
+        cashPaymentInfo = cashPayment ? { id: cashPayment.id, voucherNo: cashPayment.voucherNo } : null;
+      }
+
       const updated = tx.update(payrolls).set({
         paymentMethod: payment.method,
         paymentAccountId: payment.method === "Bank" ? payment.paymentAccountId : null,
@@ -1611,7 +2036,13 @@ export class DatabaseStorage implements IStorage {
         action: "paid",
         performedBy: performedBy?.userId,
         performedByRole: performedBy?.role,
-        detailsJson: JSON.stringify({ paymentJournalVoucherId: v.id, method: payment.method, paymentDate: paymentDate.toISOString() }),
+        detailsJson: JSON.stringify({
+          paymentJournalVoucherId: v.id,
+          method: payment.method,
+          paymentDate: paymentDate.toISOString(),
+          cashPaymentId: cashPaymentInfo?.id ?? null,
+          cashPaymentVoucherNo: cashPaymentInfo?.voucherNo ?? null,
+        }),
       } as any).run();
 
       return updated as any;
@@ -3273,21 +3704,26 @@ export class DatabaseStorage implements IStorage {
     }
 
     const normalSide = normalSideForAccountType(account?.type);
-    const resolveOpeningBalance = () => {
+    const resolveOpeningBalance = async () => {
       let opening = parseAmount(account.openingBalance || "0");
       if (startDate) {
         const movementWhere = [eq(ledgerEntries.accountId, accountId), lt(ledgerEntries.entryDate, startDate)];
         if (referenceType) movementWhere.push(buildLedgerReferenceWhere(referenceType, null) as any);
-        const [movementRow] = db
-          .select({
-            total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = ${
-              normalSide === "DEBIT" ? sql`'debit'` : sql`'credit'`
-            } THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
-          })
+        const rawMovements = db
+          .select()
           .from(ledgerEntries)
-          .where(and(...movementWhere as any))
-          .all();
-        opening += parseAmount(movementRow?.total || "0");
+          .where(and(...(movementWhere as any)))
+          .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
+          .all() as LedgerEntry[];
+        const movements = await this.filterExistingSourceLedgerEntries(rawMovements);
+        const delta = movements.reduce((sum, row) => {
+          const amount = parseAmount(row.amount);
+          if (normalSide === "DEBIT") {
+            return sum + (row.transactionType === "debit" ? amount : -amount);
+          }
+          return sum + (row.transactionType === "credit" ? amount : -amount);
+        }, 0);
+        opening += delta;
       }
       return opening;
     };
@@ -3627,7 +4063,7 @@ export class DatabaseStorage implements IStorage {
     })();
     const openingBalance = entriesBase[0]?.openingBalance
       ? parseAmount(entriesBase[0].openingBalance)
-      : resolveOpeningBalance();
+      : await resolveOpeningBalance();
 
     const narrationFilterRaw = (narration || "").trim().toLowerCase();
     const narrationTokens = narrationFilterRaw
@@ -4191,9 +4627,10 @@ export class DatabaseStorage implements IStorage {
     if (startDate) whereClauses.push(gte(ledgerEntries.entryDate, startDate));
     if (endDate) whereClauses.push(lte(ledgerEntries.entryDate, endOfDay(endDate)));
 
-      const rowsBase = whereClauses.length
+      const rowsRaw = whereClauses.length
         ? db.select().from(ledgerEntries).where(and(...whereClauses as any)).orderBy(ledgerEntries.entryDate, ledgerEntries.id).all()
         : db.select().from(ledgerEntries).orderBy(ledgerEntries.entryDate, ledgerEntries.id).all();
+      const rowsBase = await this.filterExistingSourceLedgerEntries(rowsRaw as LedgerEntry[]);
 
     if (!accountId) {
       return rowsBase;
@@ -4207,14 +4644,21 @@ export class DatabaseStorage implements IStorage {
       const movementWhere = [eq(ledgerEntries.accountId, accountId), lt(ledgerEntries.entryDate, startDate)];
       if (referenceType) movementWhere.push(buildLedgerReferenceWhere(referenceType, null) as any);
 
-      const [movementRow] = db
-        .select({
-          total: sql<string>`COALESCE(SUM(CASE WHEN ${ledgerEntries.transactionType} = ${normalSide === "DEBIT" ? sql`'debit'` : sql`'credit'`} THEN CAST(${ledgerEntries.amount} AS REAL) ELSE -CAST(${ledgerEntries.amount} AS REAL) END), 0)`,
-        })
+      const movementRaw = db
+        .select()
         .from(ledgerEntries)
-        .where(and(...movementWhere as any))
-        .all();
-      opening += parseAmount(movementRow?.total || "0");
+        .where(and(...(movementWhere as any)))
+        .orderBy(ledgerEntries.entryDate, ledgerEntries.id)
+        .all() as LedgerEntry[];
+      const movementRows = await this.filterExistingSourceLedgerEntries(movementRaw);
+      const delta = movementRows.reduce((sum, row) => {
+        const amount = parseAmount(row.amount);
+        if (normalSide === "DEBIT") {
+          return sum + (row.transactionType === "debit" ? amount : -amount);
+        }
+        return sum + (row.transactionType === "credit" ? amount : -amount);
+      }, 0);
+      opening += delta;
     }
       const rows = rowsBase;
       let running = opening;
@@ -4425,6 +4869,22 @@ export class DatabaseStorage implements IStorage {
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
           }).where(eq(purchases.id, purchaseId)).run();
+        }
+
+        // Auto-sync payroll status when employee payable account is settled via CP/BP.
+        for (const line of cleanLines) {
+          const amount = parseAmount(line.debit || "0");
+          if (amount <= 0) continue;
+          const [acc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, line.accountId)).limit(1).all();
+          if (!acc || String(acc.type).toLowerCase() !== "employee") continue;
+          this.autoMarkPayrollPaidForEmployee(tx as unknown as DbClient, {
+            employeeAccountId: acc.id,
+            amount,
+            paymentDate: postingDate,
+            method: voucherType === "BP" ? "Bank" : "Cash",
+            source: `receipt_voucher:${voucher.id}`,
+            actorUserId: (data as any).createdBy ?? undefined,
+          });
         }
       }
 
@@ -4797,6 +5257,35 @@ export class DatabaseStorage implements IStorage {
 
       if (status === "approved") {
         this.postJournalToLedger(client, voucher, normalized);
+
+      const debitLine = normalized.find((e) => e.entryType === "DEBIT");
+      const creditLine = normalized.find((e) => e.entryType === "CREDIT");
+      if (debitLine && creditLine) {
+        const [debitAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, debitLine.accountId)).limit(1).all();
+        const [creditAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, creditLine.accountId)).limit(1).all();
+        if (creditAcc && String(creditAcc.type).toLowerCase() === "employee") {
+          this.autoMarkPayrollApprovedForEmployee(client, {
+            employeeAccountId: creditAcc.id,
+            amount: parseAmount(creditLine.amount || "0"),
+            postingDate,
+            journalVoucherId: voucher.id,
+            source: `journal_voucher:${voucher.id}`,
+            actorUserId: (data as any).createdBy ?? undefined,
+          });
+        }
+        if (debitAcc && String(debitAcc.type).toLowerCase() === "employee") {
+          const method = String(creditAcc?.type || "").toLowerCase() === "bank" ? "Bank" : "Cash";
+          this.autoMarkPayrollPaidForEmployee(client, {
+            employeeAccountId: debitAcc.id,
+            amount: parseAmount(debitLine.amount || "0"),
+              paymentDate: postingDate,
+              method,
+              paymentJournalVoucherId: voucher.id,
+              source: `journal_voucher:${voucher.id}`,
+              actorUserId: (data as any).createdBy ?? undefined,
+            });
+          }
+        }
       }
 
       return voucher;
@@ -4806,16 +5295,60 @@ export class DatabaseStorage implements IStorage {
   async updateJournalVoucher(id: number, data: Partial<InsertJournalVoucher>, entries: JournalEntryInput[]): Promise<JournalVoucher | undefined> {
     const existing = await this.getJournalVoucher(id);
     if (!existing) return undefined;
-    if (existing.status === "approved") {
-      throw new Error("Approved vouchers cannot be edited");
-    }
 
     this.ensureAccountsExist(entries);
     const { normalized, total } = this.normalizeJournalEntries(entries);
 
     return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const isApproved = existing.status === "approved";
+      if (isApproved) {
+        const linkedPayroll = tx
+          .select({ id: payrolls.id })
+          .from(payrolls)
+          .where(or(eq(payrolls.journalVoucherId, id), eq(payrolls.paymentJournalVoucherId, id)))
+          .limit(1)
+          .all();
+        if (linkedPayroll.length) {
+          throw new Error("Approved voucher is linked with payroll and cannot be edited");
+        }
+        const linkedCashTx = tx
+          .select({ id: cashTransactions.id })
+          .from(cashTransactions)
+          .where(eq(cashTransactions.journalVoucherId, id))
+          .limit(1)
+          .all();
+        const linkedCashReceipt = tx
+          .select({ id: cashReceipts.id })
+          .from(cashReceipts)
+          .where(and(eq(cashReceipts.referenceType, "journal"), eq(cashReceipts.referenceId, id)))
+          .limit(1)
+          .all();
+        const linkedCashPayment = tx
+          .select({ id: cashPayments.id })
+          .from(cashPayments)
+          .where(and(eq(cashPayments.referenceType, "journal"), eq(cashPayments.referenceId, id)))
+          .limit(1)
+          .all();
+        if (linkedCashTx.length || linkedCashReceipt.length || linkedCashPayment.length) {
+          throw new Error("Approved voucher has linked cash entries and cannot be edited");
+        }
+      }
 
-    tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
+      const priorLedgerEntries = isApproved
+        ? tx.select().from(ledgerEntries).where(buildLedgerReferenceWhere("journal_voucher", id) as any).all()
+        : [];
+      const affectedAccountIds = Array.from(
+        new Set([
+          ...priorLedgerEntries.map((entry) => entry.accountId),
+          ...normalized.map((entry) => entry.accountId),
+        ]),
+      );
+      if (isApproved) {
+        tx.delete(ledgerEntries).where(buildLedgerReferenceWhere("journal_voucher", id) as any).run();
+      }
+
+      tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
 
       for (const entry of normalized) {
         tx.insert(journalVoucherEntries).values({
@@ -4831,11 +5364,92 @@ export class DatabaseStorage implements IStorage {
         createdBy: data.createdBy ?? existing.createdBy,
         status: existing.status,
         totalAmount: total.toString(),
-        
         updatedAt: new Date(),
       }).where(eq(journalVouchers.id, id)).returning().all();
 
+      if (isApproved) {
+        this.postJournalToLedger(client, { ...existing, ...updated }, normalized);
+      }
+      this.recomputeAccountBalances(client, affectedAccountIds);
+
       return updated;
+    });
+  }
+
+  private async filterExistingSourceLedgerEntries(rows: LedgerEntry[]): Promise<LedgerEntry[]> {
+    if (!rows.length) return rows;
+
+    const idsByType = rows.reduce(
+      (acc, row) => {
+        const ref = getLedgerReference(row);
+        if (!ref.referenceType || !ref.referenceId) return acc;
+        const list = acc[ref.referenceType] || [];
+        list.push(ref.referenceId);
+        acc[ref.referenceType] = list;
+        return acc;
+      },
+      {} as Record<string, number[]>,
+    );
+
+    const unique = (list?: number[]) => Array.from(new Set((list || []).filter((id) => Number.isFinite(id))));
+    const saleIds = unique(idsByType.sale);
+    const purchaseIds = unique(idsByType.purchase);
+    const receiptIds = unique(idsByType.receipt_voucher);
+    const journalIds = unique(idsByType.journal_voucher);
+    const contraIds = unique(idsByType.contra_voucher);
+    const expenseIds = unique(idsByType.expense);
+
+    const existingSales = new Set<number>(
+      saleIds.length
+        ? db.select({ id: sales.id }).from(sales).where(inArray(sales.id, saleIds)).all().map((r) => r.id)
+        : [],
+    );
+    const existingPurchases = new Set<number>(
+      purchaseIds.length
+        ? db
+            .select({ id: purchases.id })
+            .from(purchases)
+            .where(and(inArray(purchases.id, purchaseIds), isNull(purchases.deletedAt)))
+            .all()
+            .map((r) => r.id)
+        : [],
+    );
+    const existingReceipts = new Set<number>(
+      receiptIds.length
+        ? db
+            .select({ id: receiptVouchers.id })
+            .from(receiptVouchers)
+            .where(and(inArray(receiptVouchers.id, receiptIds), isNull(receiptVouchers.deletedAt)))
+            .all()
+            .map((r) => r.id)
+        : [],
+    );
+    const existingJournals = new Set<number>(
+      journalIds.length
+        ? db.select({ id: journalVouchers.id }).from(journalVouchers).where(inArray(journalVouchers.id, journalIds)).all().map((r) => r.id)
+        : [],
+    );
+    const existingContras = new Set<number>(
+      contraIds.length
+        ? db.select({ id: contraVouchers.id }).from(contraVouchers).where(inArray(contraVouchers.id, contraIds)).all().map((r) => r.id)
+        : [],
+    );
+    const existingExpenses = new Set<number>(
+      expenseIds.length
+        ? db.select({ id: expenseEntries.id }).from(expenseEntries).where(inArray(expenseEntries.id, expenseIds)).all().map((r) => r.id)
+        : [],
+    );
+
+    return rows.filter((row) => {
+      const ref = getLedgerReference(row);
+      if (!ref.referenceType || !ref.referenceId) return true;
+      if (ref.referenceType === "sale") return existingSales.has(ref.referenceId);
+      if (ref.referenceType === "purchase") return existingPurchases.has(ref.referenceId);
+      if (ref.referenceType === "receipt_voucher") return existingReceipts.has(ref.referenceId);
+      if (ref.referenceType === "journal_voucher") return existingJournals.has(ref.referenceId);
+      if (ref.referenceType === "contra_voucher") return existingContras.has(ref.referenceId);
+      if (ref.referenceType === "expense") return existingExpenses.has(ref.referenceId);
+      return true;
     });
   }
 
@@ -4861,6 +5475,35 @@ export class DatabaseStorage implements IStorage {
 
       this.postJournalToLedger(client, { ...existing, ...updated }, entries);
 
+      const debitLine = entries.find((e) => String(e.entryType).toUpperCase() === "DEBIT");
+      const creditLine = entries.find((e) => String(e.entryType).toUpperCase() === "CREDIT");
+      if (debitLine && creditLine) {
+        const [debitAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, debitLine.accountId)).limit(1).all();
+        const [creditAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, creditLine.accountId)).limit(1).all();
+        if (creditAcc && String(creditAcc.type).toLowerCase() === "employee") {
+          this.autoMarkPayrollApprovedForEmployee(client, {
+            employeeAccountId: creditAcc.id,
+            amount: parseAmount(creditLine.amount || "0"),
+            postingDate,
+            journalVoucherId: id,
+            source: `journal_voucher:${id}`,
+            actorUserId: approverId,
+          });
+        }
+        if (debitAcc && String(debitAcc.type).toLowerCase() === "employee") {
+          const method = String(creditAcc?.type || "").toLowerCase() === "bank" ? "Bank" : "Cash";
+          this.autoMarkPayrollPaidForEmployee(client, {
+            employeeAccountId: debitAcc.id,
+            amount: parseAmount(debitLine.amount || "0"),
+            paymentDate: postingDate,
+            method,
+            paymentJournalVoucherId: id,
+            source: `journal_voucher:${id}`,
+            actorUserId: approverId,
+          });
+        }
+      }
+
       return updated;
     });
   }
@@ -4868,12 +5511,97 @@ export class DatabaseStorage implements IStorage {
   async deleteJournalVoucher(id: number): Promise<boolean> {
     const existing = await this.getJournalVoucher(id);
     if (!existing) return false;
-    if (existing.status === "approved") {
-      throw new Error("Approved vouchers cannot be deleted");
-    }
+
     return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const isApproved = existing.status === "approved";
+      if (isApproved) {
+        const linkedPayroll = tx
+          .select()
+          .from(payrolls)
+          .where(or(eq(payrolls.journalVoucherId, id), eq(payrolls.paymentJournalVoucherId, id)))
+          .all();
+
+        for (const p of linkedPayroll) {
+          const touchesAccrual = p.journalVoucherId === id;
+          const touchesPayment = p.paymentJournalVoucherId === id;
+
+          if (touchesAccrual && p.status === "paid" && p.paymentJournalVoucherId !== id) {
+            throw new Error("Payroll is already paid against a different payment JV. Delete payment JV first.");
+          }
+
+          if (touchesPayment && p.status === "paid") {
+            tx
+              .update(payrolls)
+              .set({
+                status: "approved",
+                paymentMethod: null,
+                paymentAccountId: null,
+                paidAt: null,
+                paymentJournalVoucherId: null,
+                updatedAt: new Date(),
+              } as any)
+              .where(eq(payrolls.id, p.id))
+              .run();
+            tx.insert(payrollAuditLogs).values({
+              payrollId: p.id,
+              action: "updated",
+              detailsJson: JSON.stringify({
+                source: `journal_voucher:${id}`,
+                rollback: "payment_deleted",
+              }),
+            } as any).run();
+          }
+
+          if (touchesAccrual && p.status !== "paid") {
+            tx
+              .update(payrolls)
+              .set({
+                status: "generated",
+                approvedBy: null,
+                approvedByRole: null,
+                approvedAt: null,
+                journalVoucherId: null,
+                updatedAt: new Date(),
+              } as any)
+              .where(eq(payrolls.id, p.id))
+              .run();
+            tx.insert(payrollAuditLogs).values({
+              payrollId: p.id,
+              action: "updated",
+              detailsJson: JSON.stringify({
+                source: `journal_voucher:${id}`,
+                rollback: "accrual_deleted",
+              }),
+            } as any).run();
+          }
+        }
+      }
+
+      // Remove cash module rows derived from this JV before deleting the voucher.
+      tx
+        .delete(cashReceipts)
+        .where(and(eq(cashReceipts.referenceType, "journal"), eq(cashReceipts.referenceId, id)))
+        .run();
+      tx
+        .delete(cashPayments)
+        .where(and(eq(cashPayments.referenceType, "journal"), eq(cashPayments.referenceId, id)))
+        .run();
+      tx
+        .delete(cashTransactions)
+        .where(eq(cashTransactions.journalVoucherId, id))
+        .run();
+
+      const priorEntries = tx
+        .select()
+        .from(ledgerEntries)
+        .where(buildLedgerReferenceWhere("journal_voucher", id) as any)
+        .all();
+      const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
+      tx.delete(ledgerEntries).where(buildLedgerReferenceWhere("journal_voucher", id) as any).run();
       tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
       tx.delete(journalVouchers).where(eq(journalVouchers.id, id)).run();
+      this.recomputeAccountBalances(client, affectedAccountIds);
       return true;
     });
   }
@@ -6309,6 +7037,21 @@ export class DatabaseStorage implements IStorage {
       .all();
     const cashBalanceRaw = parseAmount(cash.openingBalance || "0") + parseAmount(cashMovement?.movement || "0");
 
+    const [cashReceiptsRow] = db
+      .select({ total: sql<string>`COALESCE(SUM(CAST(${cashReceipts.amount} AS REAL)), 0)` })
+      .from(cashReceipts)
+      .where(and(eq(cashReceipts.cashAccountId, 1), lte(cashReceipts.receiptDate, asOf)))
+      .all();
+    const [cashPaymentsRow] = db
+      .select({ total: sql<string>`COALESCE(SUM(CAST(${cashPayments.amount} AS REAL)), 0)` })
+      .from(cashPayments)
+      .where(and(eq(cashPayments.cashAccountId, 1), lte(cashPayments.paymentDate, asOf)))
+      .all();
+    const cashBookBalanceRaw =
+      parseAmount(cash.openingBalance || "0") +
+      parseAmount(cashReceiptsRow?.total || "0") -
+      parseAmount(cashPaymentsRow?.total || "0");
+
     const bankBalanceRaw = await this.sumLedgerBalancesAsOf(asOfDate, "bank", "DEBIT");
     const receivablesRaw = await this.sumLedgerBalancesAsOf(asOfDate, "customer", "DEBIT");
     const payablesRaw = await this.sumLedgerBalancesAsOf(asOfDate, "supplier", "CREDIT");
@@ -6347,6 +7090,18 @@ export class DatabaseStorage implements IStorage {
     const equityTotalCents = capitalCents + retainedCents;
 
     const validation = computeBalanceSheetValidation(fromCents(assetsTotalCents), fromCents(liabilitiesTotalCents + equityTotalCents));
+    const cashGapCents = toCents(cashBookBalanceRaw) - cashCents;
+    const reasons: string[] = [];
+    if (!validation.balanced) {
+      reasons.push(
+        `Assets and Liabilities+Equity differ by Rs. ${formatMoney(Math.abs(parseAmount(validation.difference)))}.`,
+      );
+    }
+    if (cashGapCents !== 0) {
+      reasons.push(
+        `Cash book vs ledger mismatch: Rs. ${formatMoney(fromCents(Math.abs(cashGapCents)))}. This usually means some cash receipts/payments were saved in Cash in Hand but not posted to ledger.`,
+      );
+    }
 
     return {
       asOfDate,
@@ -6371,7 +7126,7 @@ export class DatabaseStorage implements IStorage {
         assets: fromCents(assetsTotalCents),
         liabilitiesAndEquity: fromCents(liabilitiesTotalCents + equityTotalCents),
       },
-      validation: { balanced: validation.balanced, difference: validation.difference },
+      validation: { balanced: validation.balanced, difference: validation.difference, reasons },
     };
   }
 
@@ -6427,6 +7182,7 @@ export class DatabaseStorage implements IStorage {
 
     const rows = db
       .select({
+        employeeId: payrolls.employeeId,
         payrollMonth: payrolls.payrollMonth,
         basicSalary: payrolls.basicSalary,
         allowances: payrolls.allowances,
@@ -6442,17 +7198,59 @@ export class DatabaseStorage implements IStorage {
       .orderBy(payrolls.payrollMonth)
       .all();
 
+    const employeeIds = Array.from(new Set(rows.map((r) => r.employeeId).filter((id): id is number => Number.isFinite(id))));
+    const structures = employeeIds.length
+      ? db
+        .select({
+          employeeId: employeeSalaryStructures.employeeId,
+          effectiveFrom: employeeSalaryStructures.effectiveFrom,
+          basicSalary: employeeSalaryStructures.basicSalary,
+          allowances: employeeSalaryStructures.allowances,
+          deductions: employeeSalaryStructures.deductions,
+        })
+        .from(employeeSalaryStructures)
+        .where(inArray(employeeSalaryStructures.employeeId, employeeIds))
+        .orderBy(desc(employeeSalaryStructures.effectiveFrom), desc(employeeSalaryStructures.id))
+        .all()
+      : [];
+
+    const structuresByEmployee = new Map<number, typeof structures>();
+    for (const s of structures) {
+      const list = structuresByEmployee.get(s.employeeId) || [];
+      list.push(s);
+      structuresByEmployee.set(s.employeeId, list);
+    }
+
     const mapped = rows.map((r) => {
-      const net = parseAmount(r.netSalary || "0");
+      let basic = parseAmount(r.basicSalary || "0");
+      let allowances = parseAmount(r.allowances || "0");
+      let deductions = parseAmount(r.deductions || "0");
+      let net = parseAmount(r.netSalary || "0");
+
+      // Backfill stale zero payroll rows from effective salary structure for that payroll month.
+      if (basic === 0 && allowances === 0 && deductions === 0 && net === 0) {
+        const monthStart = startOfPayrollMonth(r.payrollMonth);
+        const monthEnd = endOfMonth(monthStart);
+        const effective = (structuresByEmployee.get(r.employeeId) || []).find(
+          (s) => new Date(s.effectiveFrom as any) <= monthEnd,
+        );
+        if (effective) {
+          basic = parseAmount(effective.basicSalary || "0");
+          allowances = parseAmount(effective.allowances || "0");
+          deductions = parseAmount(effective.deductions || "0");
+          net = Math.max(basic + allowances - deductions, 0);
+        }
+      }
+
       const paid = (r as any).status === "paid" ? net : 0;
       const balance = Math.max(net - paid, 0);
       return {
         accountId: r.accountId ?? null,
         employee: r.employeeName || "Employee",
         salaryMonth: r.payrollMonth,
-        basicSalary: parseAmount(r.basicSalary || "0").toString(),
-        allowances: parseAmount(r.allowances || "0").toString(),
-        deductions: parseAmount(r.deductions || "0").toString(),
+        basicSalary: basic.toString(),
+        allowances: allowances.toString(),
+        deductions: deductions.toString(),
         netSalary: net.toString(),
         paidAmount: paid.toString(),
         balanceAmount: balance.toString(),

@@ -48,9 +48,9 @@ const employeeSchema = z.object({
   designation: z.string().optional(),
   department: z.string().optional(),
   joiningDate: z.string().optional(),
-  employmentType: z.enum(["Permanent", "Contract"]).default("Permanent"),
+  employmentType: z.enum(["permanent", "contract"]).default("permanent"),
   basicSalary: z.string().default("0"),
-  status: z.enum(["Active", "Inactive"]).default("Active"),
+  status: z.enum(["active", "inactive"]).default("active"),
 });
 type EmployeeFormData = z.infer<typeof employeeSchema>;
 
@@ -100,9 +100,9 @@ export default function EmployeesPage() {
       designation: "",
       department: "",
       joiningDate: "",
-      employmentType: "Permanent",
+      employmentType: "permanent",
       basicSalary: "0",
-      status: "Active",
+      status: "active",
     },
   });
 
@@ -224,7 +224,9 @@ export default function EmployeesPage() {
         key: "status",
         title: t("status"),
         render: (e) => (
-          <Badge variant={e.status === "Active" ? "default" : "secondary"}>{e.status}</Badge>
+          <Badge variant={String(e.status).toLowerCase() === "active" ? "default" : "secondary"}>
+            {String(e.status).toLowerCase() === "active" ? "Active" : "Inactive"}
+          </Badge>
         ),
       },
       {
@@ -258,9 +260,15 @@ export default function EmployeesPage() {
                     designation: e.designation || "",
                     department: e.department || "",
                     joiningDate: e.joiningDate ? new Date(e.joiningDate as any).toISOString().slice(0, 10) : "",
-                    employmentType: (e.employmentType as any) || "Permanent",
+                    employmentType:
+                      String((e.employmentType as any) || "permanent").toLowerCase() === "contract"
+                        ? "contract"
+                        : "permanent",
                     basicSalary: e.basicSalary || "0",
-                    status: (e.status as any) || "Active",
+                    status:
+                      String((e.status as any) || "active").toLowerCase() === "inactive"
+                        ? "inactive"
+                        : "active",
                   });
                   setOpenEmployeeDialog(true);
                 }}
@@ -295,9 +303,9 @@ export default function EmployeesPage() {
       designation: "",
       department: "",
       joiningDate: "",
-      employmentType: "Permanent",
+      employmentType: "permanent",
       basicSalary: "0",
-      status: "Active",
+      status: "active",
     });
     setOpenEmployeeDialog(true);
   };
@@ -457,8 +465,8 @@ export default function EmployeesPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="Permanent">Permanent</SelectItem>
-                          <SelectItem value="Contract">Contract</SelectItem>
+                          <SelectItem value="permanent">Permanent</SelectItem>
+                          <SelectItem value="contract">Contract</SelectItem>
                         </SelectContent>
                       </Select>
                     </FormItem>
@@ -489,8 +497,8 @@ export default function EmployeesPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="Active">Active</SelectItem>
-                          <SelectItem value="Inactive">Inactive</SelectItem>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="inactive">Inactive</SelectItem>
                         </SelectContent>
                       </Select>
                     </FormItem>

@@ -134,6 +134,8 @@ export default function JournalVoucherPage() {
   const role = useAuthStore((state) => state.user?.role || "operator");
   const canApprove = ["admin", "manager"].includes(role);
   const canEditDraft = ["admin", "manager", "accountant"].includes(role);
+  const canEditApproved = ["admin", "manager", "accountant"].includes(role);
+  const canDeleteVoucher = ["admin", "manager"].includes(role);
 
   const form = useForm<JournalFormData>({
     resolver: zodResolver(journalFormSchema),
@@ -214,6 +216,9 @@ export default function JournalVoucherPage() {
       toast({ title: "Journal voucher saved" });
       queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
+      });
       setDialogOpen(false);
       resetForm();
     },
@@ -229,6 +234,9 @@ export default function JournalVoucherPage() {
       toast({ title: "Journal voucher updated" });
       queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
+      });
       setDialogOpen(false);
       resetForm();
     },
@@ -244,6 +252,9 @@ export default function JournalVoucherPage() {
       toast({ title: "Voucher approved" });
       queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
+      });
       setDialogOpen(false);
       resetForm();
     },
@@ -255,6 +266,10 @@ export default function JournalVoucherPage() {
     onSuccess: () => {
       toast({ title: "Voucher deleted" });
       queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({
+        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
+      });
       setDialogOpen(false);
       resetForm();
     },
@@ -283,7 +298,7 @@ export default function JournalVoucherPage() {
       status: voucher.status,
     });
     setActiveId(voucher.id);
-    setIsViewing(lockView || voucher.status === "approved");
+    setIsViewing(lockView);
     setDialogOpen(true);
   };
 
@@ -315,17 +330,21 @@ export default function JournalVoucherPage() {
           <Button size="icon" variant="ghost" onClick={() => applyVoucherToForm(r, true)} title="View">
             <Eye className="h-4 w-4" />
           </Button>
-          {r.status === "draft" && canEditDraft && (
+          {((r.status === "draft" && canEditDraft) || (r.status === "approved" && canEditApproved)) && (
             <Button size="icon" variant="ghost" onClick={() => applyVoucherToForm(r)} title="Edit">
               <Pencil className="h-4 w-4" />
             </Button>
           )}
-          {r.status === "draft" && (
+          {canDeleteVoucher && (r.status === "draft" || r.status === "approved") && (
             <Button
               size="icon"
               variant="ghost"
               onClick={() => {
-                const ok = confirm("Delete this journal voucher?");
+                const ok = confirm(
+                  r.status === "approved"
+                    ? "Delete this approved journal voucher? This will remove its ledger impact."
+                    : "Delete this journal voucher?",
+                );
                 if (ok) deleteMutation.mutate(r.id);
               }}
               title="Delete"
@@ -349,8 +368,13 @@ export default function JournalVoucherPage() {
   ];
 
   const isApproved = form.watch("status") === "approved";
-  const isLocked = isApproved || isViewing;
-  const submitDisabled = isLocked || (!canEditDraft && !!activeId);
+  const canEditCurrent = activeId
+    ? isApproved
+      ? canEditApproved
+      : canEditDraft
+    : canEditDraft;
+  const isLocked = isViewing || !canEditCurrent;
+  const submitDisabled = isLocked;
   const readOnlyInputClass = "bg-muted/60 cursor-default focus-visible:ring-0 focus-visible:ring-offset-0 text-muted-foreground";
 
   return (
@@ -592,7 +616,7 @@ export default function JournalVoucherPage() {
                   <>
                     <Button type="submit" disabled={submitDisabled || createMutation.isPending || updateMutation.isPending}>
                       {(createMutation.isPending || updateMutation.isPending) && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                      {activeId ? "Update Draft" : "Save Draft"}
+                      {activeId ? (isApproved ? "Update Voucher" : "Update Draft") : "Save Draft"}
                     </Button>
                     <Button
                       type="button"
@@ -603,14 +627,18 @@ export default function JournalVoucherPage() {
                       {approveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle className="h-4 w-4 mr-2" />}
                       {t("approve")}
                     </Button>
-                    {activeId && !isApproved && (
+                    {activeId && canDeleteVoucher && (
                       <Button
                         type="button"
                         variant="outline"
                         className="text-destructive border-destructive"
                         disabled={deleteMutation.isPending}
                         onClick={() => {
-                          const ok = confirm("Delete this journal voucher?");
+                          const ok = confirm(
+                            isApproved
+                              ? "Delete this approved journal voucher? This will remove its ledger impact."
+                              : "Delete this journal voucher?",
+                          );
                           if (ok) deleteMutation.mutate(activeId);
                         }}
                       >

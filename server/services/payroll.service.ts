@@ -7,6 +7,13 @@ export async function listPayrolls(params: { month?: string; status?: string; em
   return rows.map((p) => ({ ...p, employee: employeeMap.get(p.employeeId) || null }));
 }
 
+export async function getPayrollById(id: number) {
+  const payroll = await storage.getPayrollById(id);
+  if (!payroll) return undefined;
+  const employee = await storage.getEmployee(payroll.employeeId);
+  return { ...payroll, employee: employee || null };
+}
+
 export async function generatePayroll(month: string, meta?: { userId?: number; role?: string }) {
   return storage.generateMonthlyPayroll(month, meta);
 }
@@ -25,4 +32,16 @@ export async function paySalary(
 
 export async function getPayrollAudit(id: number) {
   return storage.getPayrollAudit(id);
+}
+
+export async function updatePayroll(
+  id: number,
+  payload: { basicSalary?: number; allowances?: number; deductions?: number },
+  meta?: { userId?: number; role?: string },
+) {
+  return storage.updatePayroll(id, payload, meta);
+}
+
+export async function deletePayroll(id: number, meta?: { userId?: number; role?: string }) {
+  return storage.deletePayroll(id, meta);
 }

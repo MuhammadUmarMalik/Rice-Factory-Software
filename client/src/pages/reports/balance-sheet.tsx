@@ -16,6 +16,7 @@ type BalanceSheet = {
   liabilities: { payables: string; expensesPayable: string; total: string };
   equity: { capital: string; retainedEarnings: string; total: string };
   totals: { assets: string; liabilitiesAndEquity: string };
+  validation?: { balanced: boolean; difference: string; reasons?: string[] };
 };
 
 type BalanceSheetRow =
@@ -23,15 +24,15 @@ type BalanceSheetRow =
   | { type: "line" | "total" | "grand"; label: string; debit?: string; credit?: string };
 
 export default function BalanceSheetPage() {
-  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
+  const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const asOfDate = toDate || fromDate;
 
   const { data, isLoading, error } = useQuery<BalanceSheet>({
     queryKey: ["/api/financial/balance-sheet", asOfDate],
-    enabled: !!asOfDate,
+    enabled: isReady,
     queryFn: async () => {
       const params = new URLSearchParams();
-      params.set("asOfDate", asOfDate);
+      if (asOfDate) params.set("asOfDate", asOfDate);
       const res = await fetchWithAuth(`/api/financial/balance-sheet?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to load balance sheet");
       return res.json();
@@ -67,8 +68,9 @@ export default function BalanceSheetPage() {
 
   const totalDebitCents = lineDebitCents;
   const totalCreditCents = lineCreditCents;
-  const balanced = totalDebitCents === totalCreditCents;
+  const balanced = data?.validation?.balanced ?? (totalDebitCents === totalCreditCents);
   const differenceCents = Math.abs(totalDebitCents - totalCreditCents);
+  const mismatchReasons = data?.validation?.reasons || [];
 
   const assetsComponentCents = [
     data?.assets.cash,
@@ -239,7 +241,16 @@ export default function BalanceSheetPage() {
               </div>
 
               {!balanced && (
-                <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+                  <div className="mb-2 text-sm font-semibold text-destructive">Mismatch Reasons</div>
+                  {mismatchReasons.length > 0 && (
+                    <ul className="mb-2 list-disc pl-5 text-xs text-destructive/90">
+                      {mismatchReasons.map((reason, idx) => (
+                        <li key={`${idx}-${reason}`}>{reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="space-y-1 text-xs text-muted-foreground">
                   {assetsComponentCents !== assetsTotalCents && (
                     <div>
                       Assets components mismatch by Rs. {formatAmount(fromCents(Math.abs(assetsComponentCents - assetsTotalCents)))}.
@@ -263,6 +274,7 @@ export default function BalanceSheetPage() {
                   <div>
                     Check ledger postings, account mappings, and inventory valuation if the mismatch persists.
                   </div>
+                </div>
                 </div>
               )}
             </>
