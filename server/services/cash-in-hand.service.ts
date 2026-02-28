@@ -24,6 +24,24 @@ const parseNum = (v: string | number | null | undefined): number => {
   return Number.isFinite(n) ? n : 0;
 };
 
+const toDateValue = (value: string | number | Date | null | undefined, fieldName: string): Date => {
+  let dt: Date;
+  if (value instanceof Date) {
+    dt = value;
+  } else if (typeof value === "number") {
+    const normalized = Math.abs(value) < 1_000_000_000_000 ? value * 1000 : value;
+    dt = new Date(normalized);
+  } else if (typeof value === "string") {
+    dt = new Date(value);
+  } else {
+    dt = new Date();
+  }
+  if (Number.isNaN(dt.getTime())) {
+    throw new Error(`Invalid ${fieldName}`);
+  }
+  return dt;
+};
+
 function getNextVoucherNo(prefix: string, table: typeof cashReceipts | typeof cashPayments | typeof cashJournalVouchers): string {
   const year = new Date().getFullYear();
   const rows = db.select({ id: table.id })
@@ -65,7 +83,7 @@ export async function getBalance(cashAccountId = 1, asOfDate?: string): Promise<
     .where(asOfDate
       ? and(
           eq(cashReceipts.cashAccountId, cashAccountId),
-          lte(cashReceipts.receiptDate, new Date(asOfDate + "T23:59:59").getTime())
+          lte(cashReceipts.receiptDate, new Date(asOfDate + "T23:59:59"))
         )
       : eq(cashReceipts.cashAccountId, cashAccountId))
     .all();
@@ -75,7 +93,7 @@ export async function getBalance(cashAccountId = 1, asOfDate?: string): Promise<
     .where(asOfDate
       ? and(
           eq(cashPayments.cashAccountId, cashAccountId),
-          lte(cashPayments.paymentDate, new Date(asOfDate + "T23:59:59").getTime())
+          lte(cashPayments.paymentDate, new Date(asOfDate + "T23:59:59"))
         )
       : eq(cashPayments.cashAccountId, cashAccountId))
     .all();
@@ -94,14 +112,13 @@ export async function getReceipts(filters?: {
   to?: string;
   cashAccountId?: number;
 }): Promise<(CashReceipt & { saleRef?: string; invoiceRef?: string })[]> {
-  let q = db.select().from(cashReceipts).orderBy(desc(cashReceipts.receiptDate));
   const conditions = [];
   if (filters?.cashAccountId) conditions.push(eq(cashReceipts.cashAccountId, filters.cashAccountId));
-  if (filters?.from) conditions.push(gte(cashReceipts.receiptDate, new Date(filters.from).getTime()));
-  if (filters?.to) conditions.push(lte(cashReceipts.receiptDate, new Date(filters.to + "T23:59:59").getTime()));
-  if (conditions.length > 0) {
-    q = db.select().from(cashReceipts).where(and(...conditions)).orderBy(desc(cashReceipts.receiptDate));
-  }
+  if (filters?.from) conditions.push(gte(cashReceipts.receiptDate, new Date(filters.from)));
+  if (filters?.to) conditions.push(lte(cashReceipts.receiptDate, new Date(filters.to + "T23:59:59")));
+  const q = conditions.length > 0
+    ? db.select().from(cashReceipts).where(and(...conditions)).orderBy(desc(cashReceipts.receiptDate))
+    : db.select().from(cashReceipts).orderBy(desc(cashReceipts.receiptDate));
   const rows = q.all();
   const result = rows as (CashReceipt & { saleRef?: string; invoiceRef?: string })[];
   for (const r of result) {
@@ -122,10 +139,11 @@ export async function createReceipt(data: Omit<InsertCashReceipt, "voucherNo" | 
   const voucherNo = data.voucherNo ?? getNextVoucherNo("CR", cashReceipts);
   const amount = parseNum(data.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
+  if (!data.receivedFrom || !String(data.receivedFrom).trim()) throw new Error("Received from is required");
   await ensureCashAccount(data.cashAccountId ?? 1);
   const [inserted] = db.insert(cashReceipts).values({
     voucherNo,
-    receiptDate: typeof data.receiptDate === "string" ? new Date(data.receiptDate).getTime() : (data.receiptDate as number),
+    receiptDate: toDateValue(data.receiptDate as any, "receipt date"),
     receivedFrom: data.receivedFrom,
     amount: String(amount),
     description: data.description ?? null,
@@ -146,7 +164,7 @@ export async function updateReceipt(id: number, data: Partial<Omit<InsertCashRec
   const amount = data.amount != null ? parseNum(data.amount) : parseNum(existing.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
   const [updated] = db.update(cashReceipts).set({
-    ...(data.receiptDate != null && { receiptDate: typeof data.receiptDate === "string" ? new Date(data.receiptDate).getTime() : data.receiptDate }),
+    ...(data.receiptDate != null && { receiptDate: toDateValue(data.receiptDate as any, "receipt date") }),
     ...(data.receivedFrom != null && { receivedFrom: data.receivedFrom }),
     ...(data.amount != null && { amount: String(amount) }),
     ...(data.description !== undefined && { description: data.description }),
@@ -171,8 +189,8 @@ export async function getPayments(filters?: {
 }): Promise<(CashPayment & { purchaseRef?: string; invoiceRef?: string })[]> {
   const conditions = [];
   if (filters?.cashAccountId) conditions.push(eq(cashPayments.cashAccountId, filters.cashAccountId));
-  if (filters?.from) conditions.push(gte(cashPayments.paymentDate, new Date(filters.from).getTime()));
-  if (filters?.to) conditions.push(lte(cashPayments.paymentDate, new Date(filters.to + "T23:59:59").getTime()));
+  if (filters?.from) conditions.push(gte(cashPayments.paymentDate, new Date(filters.from)));
+  if (filters?.to) conditions.push(lte(cashPayments.paymentDate, new Date(filters.to + "T23:59:59")));
   const q = conditions.length > 0
     ? db.select().from(cashPayments).where(and(...conditions)).orderBy(desc(cashPayments.paymentDate))
     : db.select().from(cashPayments).orderBy(desc(cashPayments.paymentDate));
@@ -196,10 +214,11 @@ export async function createPayment(data: Omit<InsertCashPayment, "voucherNo" | 
   const voucherNo = data.voucherNo ?? getNextVoucherNo("CP", cashPayments);
   const amount = parseNum(data.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
+  if (!data.paidTo || !String(data.paidTo).trim()) throw new Error("Paid to is required");
   await ensureCashAccount(data.cashAccountId ?? 1);
   const [inserted] = db.insert(cashPayments).values({
     voucherNo,
-    paymentDate: typeof data.paymentDate === "string" ? new Date(data.paymentDate).getTime() : (data.paymentDate as number),
+    paymentDate: toDateValue(data.paymentDate as any, "payment date"),
     paidTo: data.paidTo,
     amount: String(amount),
     description: data.description ?? null,
@@ -220,7 +239,7 @@ export async function updatePayment(id: number, data: Partial<Omit<InsertCashPay
   const amount = data.amount != null ? parseNum(data.amount) : parseNum(existing.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
   const [updated] = db.update(cashPayments).set({
-    ...(data.paymentDate != null && { paymentDate: typeof data.paymentDate === "string" ? new Date(data.paymentDate).getTime() : data.paymentDate }),
+    ...(data.paymentDate != null && { paymentDate: toDateValue(data.paymentDate as any, "payment date") }),
     ...(data.paidTo != null && { paidTo: data.paidTo }),
     ...(data.amount != null && { amount: String(amount) }),
     ...(data.description !== undefined && { description: data.description }),
@@ -254,7 +273,10 @@ export type LedgerRow = {
 export async function getLedger(filters?: { from?: string; to?: string; cashAccountId?: number }): Promise<LedgerRow[]> {
   const cashAccountId = filters?.cashAccountId ?? 1;
   await ensureCashAccount(cashAccountId);
-  const balance = await getBalance(cashAccountId);
+  const openingAsOf = filters?.from
+    ? new Date(new Date(filters.from + "T00:00:00").getTime() - 1).toISOString().slice(0, 10)
+    : undefined;
+  const balance = await getBalance(cashAccountId, openingAsOf);
   const rows: LedgerRow[] = [];
   let runningBalance = balance.openingBalance;
 
@@ -333,14 +355,14 @@ export async function getTodaySummary(cashAccountId = 1): Promise<{
   const receiptRows = db.select({ amount: cashReceipts.amount }).from(cashReceipts)
     .where(and(
       eq(cashReceipts.cashAccountId, cashAccountId),
-      gte(cashReceipts.receiptDate, new Date(today).getTime()),
-      lte(cashReceipts.receiptDate, new Date(today + "T23:59:59").getTime())
+      gte(cashReceipts.receiptDate, new Date(today)),
+      lte(cashReceipts.receiptDate, new Date(today + "T23:59:59"))
     )).all();
   const paymentRows = db.select({ amount: cashPayments.amount }).from(cashPayments)
     .where(and(
       eq(cashPayments.cashAccountId, cashAccountId),
-      gte(cashPayments.paymentDate, new Date(today).getTime()),
-      lte(cashPayments.paymentDate, new Date(today + "T23:59:59").getTime())
+      gte(cashPayments.paymentDate, new Date(today)),
+      lte(cashPayments.paymentDate, new Date(today + "T23:59:59"))
     )).all();
   let todayReceipts = 0;
   let todayPayments = 0;
@@ -389,7 +411,7 @@ export async function createJournalVoucher(data: {
   const voucherNo = getNextVoucherNo("JV", cashJournalVouchers);
   const [v] = db.insert(cashJournalVouchers).values({
     voucherNo,
-    voucherDate: typeof data.voucherDate === "string" ? new Date(data.voucherDate).getTime() : data.voucherDate,
+    voucherDate: toDateValue(data.voucherDate as any, "voucher date"),
     narration: data.narration ?? null,
     totalDebit: String(totalDebit),
     totalCredit: String(totalCredit),
@@ -413,7 +435,7 @@ export async function createJournalVoucher(data: {
       const credit = parseNum(it.creditAmount);
       if (debit > 0) {
         await createReceipt({
-          receiptDate: typeof data.voucherDate === "string" ? data.voucherDate : new Date(data.voucherDate).toISOString().slice(0, 10),
+          receiptDate: toDateValue(data.voucherDate as any, "receipt date"),
           receivedFrom: data.narration || "Journal Entry",
           amount: String(debit),
           description: `JV ${voucherNo}`,
@@ -424,7 +446,7 @@ export async function createJournalVoucher(data: {
       }
       if (credit > 0) {
         await createPayment({
-          paymentDate: typeof data.voucherDate === "string" ? data.voucherDate : new Date(data.voucherDate).toISOString().slice(0, 10),
+          paymentDate: toDateValue(data.voucherDate as any, "payment date"),
           paidTo: data.narration || "Journal Entry",
           amount: String(credit),
           description: `JV ${voucherNo}`,
@@ -451,9 +473,7 @@ export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
   const [cashAccount] = db.select().from(accounts)
     .where(and(eq(accounts.name, "Cash in Hand"), eq(accounts.isSystemAccount, true))).all();
   if (!cashAccount) return;
-  const receiptDate = typeof voucher.voucherDate === "number"
-    ? new Date(voucher.voucherDate).toISOString().slice(0, 10)
-    : new Date(voucher.voucherDate).toISOString().slice(0, 10);
+  const receiptDate = toDateValue(voucher.voucherDate as any, "receipt date");
   const narration = voucher.narration || `JV ${voucher.voucherNo}`;
   for (const e of entries) {
     if (e.accountId !== cashAccount.id) continue;
@@ -511,7 +531,7 @@ export async function createReceiptForSale(params: {
 }): Promise<number> {
   if (params.paidAmount <= 0) return 0;
   const receipt = await createReceipt({
-    receiptDate: typeof params.receiptDate === "string" ? params.receiptDate : new Date(params.receiptDate).toISOString().slice(0, 10),
+    receiptDate: toDateValue(params.receiptDate as any, "receipt date"),
     receivedFrom: params.receivedFrom,
     amount: String(params.paidAmount),
     description: `Sale ${params.invoiceNumber}`,
@@ -534,14 +554,13 @@ export async function updateOrCreateReceiptForSale(params: {
   existingCashReceiptId?: number | null;
 }): Promise<number | null> {
   if (params.paidAmount <= 0) return null;
-  const receiptDateStr = typeof params.receiptDate === "string" ? params.receiptDate : new Date(params.receiptDate).toISOString().slice(0, 10);
+  const receiptDate = toDateValue(params.receiptDate as any, "receipt date");
   const amountStr = String(params.paidAmount);
   const description = `Sale ${params.invoiceNumber}`;
 
   if (params.existingCashReceiptId) {
-    const ts = new Date(receiptDateStr).getTime();
     db.update(cashReceipts).set({
-      receiptDate: ts,
+      receiptDate,
       receivedFrom: params.receivedFrom,
       amount: amountStr,
       description,
@@ -550,7 +569,7 @@ export async function updateOrCreateReceiptForSale(params: {
     return params.existingCashReceiptId;
   }
   const receipt = await createReceipt({
-    receiptDate: receiptDateStr,
+    receiptDate,
     receivedFrom: params.receivedFrom,
     amount: amountStr,
     description,
@@ -561,6 +580,35 @@ export async function updateOrCreateReceiptForSale(params: {
   sqlite.prepare("UPDATE sales SET cash_receipt_id = ? WHERE id = ?").run(receipt.id, params.saleId);
   syncSalePaidAmount(params.saleId, params.paidAmount);
   return receipt.id;
+}
+
+/** Auto-link: remove existing cash receipt linkage from a sale (used when payment mode/amount changes) */
+export async function unlinkReceiptForSale(params: {
+  saleId: number;
+  existingCashReceiptId?: number | null;
+}): Promise<void> {
+  const receiptId = params.existingCashReceiptId ?? null;
+  if (receiptId) {
+    db.delete(cashReceipts)
+      .where(and(
+        eq(cashReceipts.id, receiptId),
+        eq(cashReceipts.referenceType, "sale"),
+        eq(cashReceipts.referenceId, params.saleId),
+      ))
+      .run();
+  } else {
+    db.delete(cashReceipts)
+      .where(and(
+        eq(cashReceipts.referenceType, "sale"),
+        eq(cashReceipts.referenceId, params.saleId),
+      ))
+      .run();
+  }
+
+  db.update(sales)
+    .set({ cashReceiptId: null })
+    .where(eq(sales.id, params.saleId))
+    .run();
 }
 
 /** Get cash receipt voucher no by id (for sale display) */
@@ -590,7 +638,7 @@ export async function createPaymentForPurchase(params: {
 }): Promise<number> {
   if (params.paidAmount <= 0) return 0;
   const payment = await createPayment({
-    paymentDate: typeof params.paymentDate === "string" ? params.paymentDate : new Date(params.paymentDate).toISOString().slice(0, 10),
+    paymentDate: toDateValue(params.paymentDate as any, "payment date"),
     paidTo: params.paidTo,
     amount: String(params.paidAmount),
     description: `Purchase ${params.invoiceNumber}`,
@@ -612,14 +660,13 @@ export async function updateOrCreatePaymentForPurchase(params: {
   existingCashPaymentId?: number | null;
 }): Promise<number | null> {
   if (params.paidAmount <= 0) return null;
-  const paymentDateStr = typeof params.paymentDate === "string" ? params.paymentDate : new Date(params.paymentDate).toISOString().slice(0, 10);
+  const paymentDate = toDateValue(params.paymentDate as any, "payment date");
   const amountStr = String(params.paidAmount);
   const description = `Purchase ${params.invoiceNumber}`;
 
   if (params.existingCashPaymentId) {
-    const ts = new Date(paymentDateStr).getTime();
     db.update(cashPayments).set({
-      paymentDate: ts,
+      paymentDate,
       paidTo: params.paidTo,
       amount: amountStr,
       description,
@@ -627,7 +674,7 @@ export async function updateOrCreatePaymentForPurchase(params: {
     return params.existingCashPaymentId;
   }
   const payment = await createPayment({
-    paymentDate: paymentDateStr,
+    paymentDate,
     paidTo: params.paidTo,
     amount: amountStr,
     description,

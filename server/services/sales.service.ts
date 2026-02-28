@@ -73,8 +73,17 @@ export async function updateSale(
     } catch (err) {
       console.error("Cash receipt sync on sale update failed:", err);
     }
+  } else if ((existing as any)?.cashReceiptId || (sale as any)?.cashReceiptId) {
+    try {
+      await cashService.unlinkReceiptForSale({
+        saleId: sale.id,
+        existingCashReceiptId: (existing as any)?.cashReceiptId ?? (sale as any)?.cashReceiptId ?? null,
+      });
+    } catch (err) {
+      console.error("Cash receipt unlink on sale update failed:", err);
+    }
   }
-  return sale;
+  return (await getSale(id)) ?? sale;
 }
 
 export async function deleteSale(id: number) {

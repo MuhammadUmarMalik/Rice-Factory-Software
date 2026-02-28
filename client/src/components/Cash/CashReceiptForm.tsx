@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -68,9 +69,9 @@ export function CashReceiptForm({
       toast({ title: "Receipt saved successfully" });
     },
     onError: async (err: unknown) => {
-      const e = err as { json?: () => Promise<{ error?: string }> };
-      const json = await e?.json?.().catch(() => ({}));
-      toast({ title: json?.error ?? "Failed to save receipt", variant: "destructive" });
+      const message = err instanceof Error ? err.message : "Failed to save receipt";
+      const parsed = message.includes(":") ? message.split(":").slice(1).join(":").trim() : message;
+      toast({ title: parsed || "Failed to save receipt", variant: "destructive" });
     },
     onSettled: () => setSubmitting(false),
   });
@@ -82,7 +83,7 @@ export function CashReceiptForm({
       receivedFrom: data.receivedFrom,
       amount: data.amount,
       description: data.description || undefined,
-      referenceType: saleRef ? "sale" : "manual",
+      referenceType: saleRef ? "sale" : undefined,
     });
   };
 
@@ -91,6 +92,9 @@ export function CashReceiptForm({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New Cash Receipt</DialogTitle>
+          <DialogDescription className="sr-only">
+            Enter date, received from, amount, and optional description for the cash receipt.
+          </DialogDescription>
         </DialogHeader>
         {saleRef && (
           <div className="rounded-lg bg-muted/50 p-3 text-sm">

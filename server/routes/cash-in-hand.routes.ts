@@ -21,5 +21,6 @@ router.delete("/api/cash/payments/:id", finance, ctrl.deletePayment);
 
 router.get("/api/cash/ledger", finance, ctrl.getLedger);
 router.get("/api/cash/summary", finance, ctrl.getSummary);
+router.get("/api/cash/transactions", finance, ctrl.getTransactions);
 
 export default router;

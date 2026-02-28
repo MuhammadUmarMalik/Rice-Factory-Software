@@ -46,6 +46,12 @@ const PrintPreviewPage = lazy(() => import("@/pages/print-preview"));
 const PeriodPurchases = lazy(() => import("@/pages/reports/period-purchases"));
 const PeriodSales = lazy(() => import("@/pages/reports/period-sales"));
 const GrossProfit = lazy(() => import("@/pages/reports/gross-profit"));
+const OutstandingCustomers = lazy(() => import("@/pages/reports/outstanding-customers"));
+const OutstandingSuppliers = lazy(() => import("@/pages/reports/outstanding-suppliers"));
+const IncomeStatement = lazy(() => import("@/pages/reports/income-statement"));
+const BalanceSheet = lazy(() => import("@/pages/reports/balance-sheet"));
+const Capital = lazy(() => import("@/pages/reports/capital"));
+const SalaryAccount = lazy(() => import("@/pages/reports/salary"));
 const DayBook = lazy(() => import("@/pages/reports/day-book"));
 const DayBookSales = lazy(() => import("@/pages/reports/day-book-sales"));
 const DayBookPurchases = lazy(() => import("@/pages/reports/day-book-purchases"));
@@ -53,12 +59,6 @@ const DayBookCash = lazy(() => import("@/pages/reports/day-book-cash"));
 const DayBookSalesReturns = lazy(() => import("@/pages/reports/day-book-sales-returns"));
 const DayBookPurchaseReturns = lazy(() => import("@/pages/reports/day-book-purchase-returns"));
 const DayBookGeneralJournal = lazy(() => import("@/pages/reports/day-book-general-journal"));
-const OutstandingCustomers = lazy(() => import("@/pages/reports/outstanding-customers"));
-const OutstandingSuppliers = lazy(() => import("@/pages/reports/outstanding-suppliers"));
-const IncomeStatement = lazy(() => import("@/pages/reports/income-statement"));
-const BalanceSheet = lazy(() => import("@/pages/reports/balance-sheet"));
-const Capital = lazy(() => import("@/pages/reports/capital"));
-const SalaryAccount = lazy(() => import("@/pages/reports/salary"));
 const Receipts = lazy(() => import("@/pages/receipts"));
 const PaymentsPage = lazy(() => import("@/pages/payments"));
 const Journal = lazy(() => import("@/pages/journal"));
@@ -66,6 +66,7 @@ const EmployeesPage = lazy(() => import("@/pages/hr/employees"));
 const PayrollPage = lazy(() => import("@/pages/hr/payroll"));
 const ExpensesPage = lazy(() => import("@/pages/expenses"));
 const CashDashboard = lazy(() => import("@/pages/Cash/CashDashboard"));
+const CashLedger = lazy(() => import("@/pages/Cash/CashLedger"));
 
 function Router() {
   return (
@@ -95,12 +96,19 @@ function Router() {
         <Route path="/reports/period-sales" component={PeriodSales} />
         <Route path="/reports/gross-profit" component={GrossProfit} />
         <Route path="/reports/day-book" component={DayBook} />
+        <Route path="/reports/day-book-sales" component={DayBookSales} />
         <Route path="/reports/day-book/sales" component={DayBookSales} />
+        <Route path="/reports/day-book-purchases" component={DayBookPurchases} />
         <Route path="/reports/day-book/purchases" component={DayBookPurchases} />
+        <Route path="/reports/day-book-cash" component={DayBookCash} />
         <Route path="/reports/day-book/cash" component={DayBookCash} />
+        <Route path="/reports/day-book-sales-returns" component={DayBookSalesReturns} />
         <Route path="/reports/day-book/sales-returns" component={DayBookSalesReturns} />
+        <Route path="/reports/day-book-purchase-returns" component={DayBookPurchaseReturns} />
         <Route path="/reports/day-book/purchase-returns" component={DayBookPurchaseReturns} />
+        <Route path="/reports/day-book-general-journal" component={DayBookGeneralJournal} />
         <Route path="/reports/day-book/general-journal" component={DayBookGeneralJournal} />
+        <Route path="/reports/cash-ledger" component={CashLedger} />
         <Route path="/reports/outstanding-customers" component={OutstandingCustomers} />
         <Route path="/reports/outstanding-suppliers" component={OutstandingSuppliers} />
         <Route path="/reports/income-statement" component={IncomeStatement} />

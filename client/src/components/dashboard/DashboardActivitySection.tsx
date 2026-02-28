@@ -54,9 +54,6 @@ export function DashboardActivitySection({
       <Card>
         <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
           <CardTitle className="text-base font-semibold">Today's Day Book</CardTitle>
-          <Link href="/reports/day-book">
-            <Button variant="ghost" size="sm">View full</Button>
-          </Link>
         </CardHeader>
         <CardContent>
           {dayBookLoading ? (

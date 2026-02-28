@@ -67,12 +67,18 @@ const reportsSubmenuGroups = [
       { title: "periodPurchases", url: "/reports/period-purchases" },
       { title: "periodSales", url: "/reports/period-sales" },
       { title: "grossProfit", url: "/reports/gross-profit" },
-      { title: "dayBookSales", url: "/reports/day-book/sales" },
-      { title: "dayBookPurchases", url: "/reports/day-book/purchases" },
-      { title: "dayBookCash", url: "/reports/day-book/cash" },
-      { title: "dayBookSalesReturns", url: "/reports/day-book/sales-returns" },
-      { title: "dayBookPurchaseReturns", url: "/reports/day-book/purchase-returns" },
-      { title: "dayBookGeneralJournal", url: "/reports/day-book/general-journal" },
+    ],
+  },
+  {
+    label: "Day Book",
+    items: [
+      { title: "dayBook", url: "/reports/day-book" },
+      { title: "dayBookSales", url: "/reports/day-book-sales" },
+      { title: "dayBookPurchases", url: "/reports/day-book-purchases" },
+      { title: "dayBookCash", url: "/reports/day-book-cash" },
+      { title: "dayBookSalesReturns", url: "/reports/day-book-sales-returns" },
+      { title: "dayBookPurchaseReturns", url: "/reports/day-book-purchase-returns" },
+      { title: "dayBookGeneralJournal", url: "/reports/day-book-general-journal" },
     ],
   },
   {
@@ -83,8 +89,9 @@ const reportsSubmenuGroups = [
     ],
   },
   {
-    label: "Ledger",
+    label: "Cash & Ledger",
     items: [
+      { title: "cashLedger", url: "/reports/cash-ledger" },
       { title: "ledger", url: "/reports/ledger" },
       // { title: "salesLedger", url: "/reports/ledger-sales" },
       // { title: "purchaseLedger", url: "/reports/ledger-purchases" },

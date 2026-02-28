@@ -68,9 +68,9 @@ export function CashPaymentForm({
       toast({ title: "Payment saved successfully" });
     },
     onError: async (err: unknown) => {
-      const e = err as { json?: () => Promise<{ error?: string }> };
-      const json = await e?.json?.().catch(() => ({}));
-      toast({ title: json?.error ?? "Failed to save payment", variant: "destructive" });
+      const message = err instanceof Error ? err.message : "Failed to save payment";
+      const parsed = message.includes(":") ? message.split(":").slice(1).join(":").trim() : message;
+      toast({ title: parsed || "Failed to save payment", variant: "destructive" });
     },
     onSettled: () => setSubmitting(false),
   });
@@ -82,7 +82,7 @@ export function CashPaymentForm({
       paidTo: data.paidTo,
       amount: data.amount,
       description: data.description || undefined,
-      referenceType: purchaseRef ? "purchase" : "manual",
+      referenceType: purchaseRef ? "purchase" : undefined,
     });
   };
 

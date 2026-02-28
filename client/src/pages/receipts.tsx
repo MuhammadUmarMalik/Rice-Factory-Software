@@ -137,7 +137,15 @@ export default function ReceiptsPage() {
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
   const { data: salesList = [] } = useQuery<Array<{ id: number; invoiceNumber: string; totalAmount: string; paidAmount: string; balanceDue: string; customerId: number }>>({ queryKey: ["/api/sales"] });
   const salesWithBalance = useMemo(
-    () => salesList.filter((s) => parseFloat(s.balanceDue || "0") > 0),
+    () =>
+      salesList.filter((s) => {
+        const total = parseFloat(s.totalAmount || "0");
+        const paid = parseFloat(s.paidAmount || "0");
+        const storedDue = parseFloat(s.balanceDue || "0");
+        const computedDue = Math.max(total - paid, 0);
+        const due = Number.isFinite(storedDue) && storedDue > 0 ? storedDue : computedDue;
+        return due > 0;
+      }),
     [salesList]
   );
   const { data: receipts = [], isLoading } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
@@ -572,11 +580,18 @@ export default function ReceiptsPage() {
                           </FormControl>
                           <SelectContent>
                             <SelectItem value="none">None</SelectItem>
-                            {salesWithBalance.map((s) => (
-                              <SelectItem key={s.id} value={String(s.id)}>
-                                {s.invoiceNumber} – {accounts.find((a) => a.id === s.customerId)?.name || "Customer"} (Due: Rs. {parseFloat(s.balanceDue || "0").toLocaleString()})
-                              </SelectItem>
-                            ))}
+                            {salesWithBalance.map((s) => {
+                              const total = parseFloat(s.totalAmount || "0");
+                              const paid = parseFloat(s.paidAmount || "0");
+                              const storedDue = parseFloat(s.balanceDue || "0");
+                              const computedDue = Math.max(total - paid, 0);
+                              const due = Number.isFinite(storedDue) && storedDue > 0 ? storedDue : computedDue;
+                              return (
+                                <SelectItem key={s.id} value={String(s.id)}>
+                                  {s.invoiceNumber} – {accounts.find((a) => a.id === s.customerId)?.name || "Customer"} (Due: Rs. {due.toLocaleString()})
+                                </SelectItem>
+                              );
+                            })}
                           </SelectContent>
                         </Select>
                         <p className="text-xs text-muted-foreground">If selected, this receipt will update the sale&apos;s paid amount automatically.</p>

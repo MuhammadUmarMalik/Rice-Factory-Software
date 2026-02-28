@@ -2883,6 +2883,9 @@ export class DatabaseStorage implements IStorage {
       const charges = loadingCharge + weighingCharge + otherCharge + rentCharge;
       const taxAmount = parseAmount((sale as any).taxAmount || 0);
       const totalAmount = Math.max(0, subtotal + charges - discountAmount + taxAmount);
+      const requestedPaid = parseAmount((sale as any).paidAmount || "0");
+      const paidAmount = Math.min(Math.max(0, requestedPaid), totalAmount);
+      const balanceDue = Math.max(totalAmount - paidAmount, 0);
 
       const newSale = tx.insert(sales).values({
         ...sale,
@@ -2890,6 +2893,8 @@ export class DatabaseStorage implements IStorage {
         gatePassNumber,
         subtotal: subtotal.toString(),
         totalAmount: totalAmount.toString(),
+        paidAmount: paidAmount.toString(),
+        balanceDue: balanceDue.toString(),
         taxAmount: taxAmount.toString(),
         taxTypeId: (sale as any).taxTypeId ?? null,
       }).returning().get();
@@ -3090,7 +3095,9 @@ export class DatabaseStorage implements IStorage {
         const charges = loadingCharge + weighingCharge + otherCharge + rentCharge;
         const taxAmount = parseAmount((sale as any).taxAmount ?? existing.taxAmount ?? 0);
         const totalAmount = Math.max(0, subtotal + charges - discountAmount + taxAmount);
-        const paidAmount = parseAmount(sale.paidAmount ?? existing.paidAmount ?? 0);
+        const requestedPaid = parseAmount(sale.paidAmount ?? existing.paidAmount ?? 0);
+        const paidAmount = Math.min(Math.max(0, requestedPaid), totalAmount);
+        const balanceDue = Math.max(totalAmount - paidAmount, 0);
 
         const updatedSale = tx.update(sales).set({
           ...sale,
@@ -3099,6 +3106,7 @@ export class DatabaseStorage implements IStorage {
           taxAmount: taxAmount.toString(),
           taxTypeId: (sale as any).taxTypeId ?? existing.taxTypeId ?? null,
           paidAmount: paidAmount.toString(),
+          balanceDue: balanceDue.toString(),
         }).where(eq(sales.id, id)).returning().get();
 
         tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
