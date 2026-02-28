@@ -40,8 +40,10 @@ export function DashboardActivitySection({
   const { data: processingBatches = [], isLoading: processingLoading } = useQuery<any[]>({
     queryKey: ["/api/processing"],
     staleTime: 0,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   const pendingBatches = useMemo(

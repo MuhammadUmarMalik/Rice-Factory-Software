@@ -1,4 +1,4 @@
-import { format, startOfMonth } from "date-fns";
+import { format } from "date-fns";
 import { storage } from "../models/storage";
 
 type DashboardRange = { fromDate: Date; toDate: Date };
@@ -156,15 +156,16 @@ export async function getDashboardSummary(
 
   if (includeCore) {
     try {
+    const asOfDate = toDate ?? new Date();
     const [profitLoss, trialBalance, purchasesReport, salesReport, accounts, outstandingCustomers, outstandingSuppliers] =
       await Promise.all([
         storage.getProfitLoss(fromDate, toDate),
-        storage.getTrialBalance(toDate ?? undefined),
+        storage.getTrialBalance(asOfDate),
         storage.getPurchaseReport({ fromDate, toDate }),
         storage.getSalesReport({ fromDate, toDate }),
         storage.getAccounts(),
-        storage.getOutstandingCustomers(toDate),
-        storage.getOutstandingSuppliers(toDate),
+        storage.getOutstandingCustomers(asOfDate),
+        storage.getOutstandingSuppliers(asOfDate),
       ]);
 
     const cashBankAccounts = accounts.filter((a) => {
@@ -187,8 +188,12 @@ export async function getDashboardSummary(
     );
 
     const ledgerToDate = await storage.getLedgerEntries(undefined, undefined, undefined, toDate ?? undefined);
-    let cashBalance = 0;
-    let bankBalance = 0;
+    let cashBalance = cashBankAccounts
+      .filter((a) => cashAccountIds.has(a.id))
+      .reduce((sum, a) => sum + parseAmount(a.openingBalance || "0"), 0);
+    let bankBalance = cashBankAccounts
+      .filter((a) => bankAccountIds.has(a.id))
+      .reduce((sum, a) => sum + parseAmount(a.openingBalance || "0"), 0);
     for (const entry of ledgerToDate) {
       const amount = parseAmount(entry.amount);
       if (cashAccountIds.has(entry.accountId)) {
@@ -306,7 +311,9 @@ export async function getDashboardSummary(
       },
       dayBook: {
         date: (toDate ?? new Date()).toISOString(),
-        rows: dayBook.rows.slice(0, 10),
+        rows: dayBook.rows
+          .filter((r) => parseAmount(r.receipt) > 0 || parseAmount(r.payment) > 0)
+          .slice(0, 10),
       },
     };
     } catch (err) {
@@ -337,7 +344,7 @@ export async function getDashboardSummary(
 export async function getDashboardCharts(params: Partial<DashboardRange>) {
   const resolved = await resolveRange(params);
   const now = new Date();
-  const fromDate = resolved.fromDate ?? startOfMonth(now);
+  const fromDate = resolved.fromDate ?? new Date(1980, 0, 1);
   const toDate = resolved.toDate ?? endOfDay(now);
   const [purchasePeriods, salesPeriods, stockReport] = await Promise.all([
     storage.getPeriodPurchases(fromDate, toDate, undefined, "month"),
@@ -345,11 +352,34 @@ export async function getDashboardCharts(params: Partial<DashboardRange>) {
     storage.getStockReport({ fromDate, toDate }),
   ]);
 
-  const monthlyTotals = purchasePeriods.rows.map((row, idx) => ({
-    name: format(new Date(row.periodStart), "MMM"),
-    purchases: parseAmount(row.totalAmount),
-    sales: parseAmount(salesPeriods.rows[idx]?.totalAmount || "0"),
-  }));
+  const byMonth = new Map<string, { label: string; periodStart: Date; purchases: number; sales: number }>();
+  for (const row of purchasePeriods.rows) {
+    const key = format(new Date(row.periodStart), "yyyy-MM");
+    const existing = byMonth.get(key);
+    byMonth.set(key, {
+      label: format(new Date(row.periodStart), "MMM yy"),
+      periodStart: new Date(row.periodStart),
+      purchases: parseAmount(row.totalAmount),
+      sales: existing?.sales || 0,
+    });
+  }
+  for (const row of salesPeriods.rows) {
+    const key = format(new Date(row.periodStart), "yyyy-MM");
+    const existing = byMonth.get(key);
+    byMonth.set(key, {
+      label: format(new Date(row.periodStart), "MMM yy"),
+      periodStart: new Date(row.periodStart),
+      purchases: existing?.purchases || 0,
+      sales: parseAmount(row.totalAmount),
+    });
+  }
+  const monthlyTotals = Array.from(byMonth.values())
+    .sort((a, b) => a.periodStart.getTime() - b.periodStart.getTime())
+    .map((row) => ({
+      name: row.label,
+      purchases: row.purchases,
+      sales: row.sales,
+    }));
 
   const productStock = stockReport.rows.slice(0, 12).map((r) => ({
     name: r.itemName,
@@ -362,6 +392,7 @@ export async function getDashboardCharts(params: Partial<DashboardRange>) {
 
 export async function getDashboardAlerts(params: Partial<DashboardRange>) {
   const { toDate } = await resolveRange(params);
+  const asOfDate = toDate ?? new Date();
   const alerts: Array<{ key: string; severity: "info" | "warning" | "critical"; message: string }> = [];
 
   let trialBalance: Awaited<ReturnType<typeof storage.getTrialBalance>> | null = null;
@@ -371,10 +402,10 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
 
   try {
     [trialBalance, products, outstandingCustomers, outstandingSuppliers] = await Promise.all([
-      storage.getTrialBalance(toDate),
+      storage.getTrialBalance(asOfDate),
       storage.getProducts(),
-      storage.getOutstandingCustomers(toDate),
-      storage.getOutstandingSuppliers(toDate),
+      storage.getOutstandingCustomers(asOfDate),
+      storage.getOutstandingSuppliers(asOfDate),
     ]);
   } catch (err) {
     console.error("[dashboard alerts] failed to load base data:", err instanceof Error ? err.message : err);

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { DashboardCharts } from "@/components/dashboard/DashboardCharts";
+import { fetchWithAuth } from "@/lib/authFetch";
 
 type DashboardChartsSectionProps = {
   fromDate: string;
@@ -27,13 +28,15 @@ export function DashboardChartsSection({
       const params = new URLSearchParams();
       if (fromDate) params.set("fromDate", fromDate);
       if (toDate) params.set("toDate", toDate);
-      const res = await fetch(`/api/dashboard/charts?${params.toString()}`);
+      const res = await fetchWithAuth(`/api/dashboard/charts?${params.toString()}`);
       if (!res.ok) throw new Error("Failed to fetch chart data");
       return res.json();
     },
     staleTime: 0,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
   return (

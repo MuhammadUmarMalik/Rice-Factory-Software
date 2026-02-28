@@ -1,10 +1,13 @@
 import { Router } from "express";
 import {
   approvePayroll,
+  deletePayroll,
   generatePayroll,
+  getPayroll,
   getPayrollAudit,
   listPayrolls,
   paySalary,
+  updatePayroll,
 } from "../controllers/payroll.controller";
 import { requireRoles } from "../utils/auth";
 
@@ -15,10 +18,25 @@ router.get(
   requireRoles(["admin", "manager", "hr", "accountant"]),
   listPayrolls,
 );
+router.get(
+  "/api/payrolls/:id",
+  requireRoles(["admin", "manager", "hr", "accountant"]),
+  getPayroll,
+);
 router.post(
   "/api/payrolls/generate",
   requireRoles(["admin", "manager", "hr", "accountant"]),
   generatePayroll,
+);
+router.patch(
+  "/api/payrolls/:id",
+  requireRoles(["admin", "manager", "hr", "accountant"]),
+  updatePayroll,
+);
+router.delete(
+  "/api/payrolls/:id",
+  requireRoles(["admin", "manager", "hr", "accountant"]),
+  deletePayroll,
 );
 router.post(
   "/api/payrolls/:id/approve",

@@ -5,6 +5,13 @@ import * as employeesService from "../services/employees.service";
 import { getUserId } from "../utils/auth";
 import { parseRequiredInt } from "../utils/parse";
 
+function normalizeSalaryInput(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return parsed.toString();
+}
+
 export async function listEmployees(req: Request, res: Response) {
   try {
     const rows = await employeesService.listEmployees();
@@ -30,9 +37,34 @@ export async function getEmployee(req: Request, res: Response) {
 
 export async function createEmployee(req: Request, res: Response) {
   try {
-    const data = insertEmployeeSchema.parse(req.body);
-    const created = await employeesService.createEmployee(data, getUserId(req));
-    res.status(201).json(created);
+    const basicSalary = normalizeSalaryInput(req.body?.basicSalary);
+    if (req.body?.basicSalary !== undefined && basicSalary === undefined) {
+      return res.status(400).json({ error: "Invalid basicSalary" });
+    }
+
+    const joiningDate = req.body?.joiningDate ? new Date(req.body.joiningDate) : undefined;
+    const data = insertEmployeeSchema.parse({
+      ...req.body,
+      joiningDate,
+    });
+    const userId = getUserId(req);
+    const created = await employeesService.createEmployee(data, userId);
+
+    if (basicSalary !== undefined && Number(basicSalary) > 0) {
+      await employeesService.createSalaryStructure(
+        created.id,
+        {
+          basicSalary,
+          allowances: "0",
+          deductions: "0",
+          effectiveFrom: joiningDate || new Date(),
+        },
+        userId,
+      );
+    }
+
+    const employeeWithSalary = await employeesService.getEmployee(created.id);
+    res.status(201).json(employeeWithSalary ?? created);
   } catch (error) {
     if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
     console.error(error);
@@ -44,10 +76,44 @@ export async function updateEmployee(req: Request, res: Response) {
   try {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid employee id" });
-    const data = insertEmployeeSchema.partial().parse(req.body);
+    const hasBasicSalary = Object.prototype.hasOwnProperty.call(req.body ?? {}, "basicSalary");
+    const basicSalary = normalizeSalaryInput(req.body?.basicSalary);
+    if (hasBasicSalary && basicSalary === undefined) {
+      return res.status(400).json({ error: "Invalid basicSalary" });
+    }
+
+    const joiningDate = req.body?.joiningDate ? new Date(req.body.joiningDate) : undefined;
+    const data = insertEmployeeSchema.partial().parse({
+      ...req.body,
+      joiningDate,
+    });
     const updated = await employeesService.updateEmployee(id, data);
     if (!updated) return res.status(404).json({ error: "Employee not found" });
-    res.json(updated);
+
+    if (hasBasicSalary && basicSalary !== undefined) {
+      const structures = await employeesService.getSalaryStructures(id);
+      const [latest] = structures;
+      if (latest) {
+        await employeesService.updateSalaryStructure(id, latest.id, {
+          basicSalary,
+          effectiveFrom: joiningDate || latest.effectiveFrom,
+        });
+      } else {
+        await employeesService.createSalaryStructure(
+          id,
+          {
+            basicSalary,
+            allowances: "0",
+            deductions: "0",
+            effectiveFrom: joiningDate || new Date(),
+          },
+          getUserId(req),
+        );
+      }
+    }
+
+    const employeeWithSalary = await employeesService.getEmployee(id);
+    res.json(employeeWithSalary ?? updated);
   } catch (error) {
     if (error instanceof z.ZodError) return res.status(400).json({ error: error.errors });
     console.error(error);
