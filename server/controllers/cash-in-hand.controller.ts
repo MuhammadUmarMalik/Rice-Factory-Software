@@ -29,6 +29,7 @@ export async function getReceipts(req: Request, res: Response) {
 export async function getReceiptById(req: Request, res: Response) {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid receipt id" });
     const result = await cashService.getReceiptById(id);
     if (!result) return res.status(404).json({ error: "Receipt not found" });
     res.json(result);
@@ -44,7 +45,9 @@ export async function createReceipt(req: Request, res: Response) {
     res.status(201).json(result);
   } catch (error: any) {
     const msg = error?.message || "Failed to create receipt";
-    if (msg.includes("Amount")) return res.status(400).json({ error: msg });
+    if (msg.includes("Amount") || msg.includes("Invalid") || msg.includes("required")) {
+      return res.status(400).json({ error: msg });
+    }
     console.error(error);
     res.status(500).json({ error: msg });
   }
@@ -53,13 +56,14 @@ export async function createReceipt(req: Request, res: Response) {
 export async function updateReceipt(req: Request, res: Response) {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid receipt id" });
     const result = await cashService.updateReceipt(id, req.body);
     if (!result) return res.status(404).json({ error: "Receipt not found" });
     res.json(result);
   } catch (error: any) {
     const msg = error?.message || "Failed to update receipt";
     if (msg.includes("linked")) return res.status(400).json({ error: msg });
-    if (msg.includes("Amount")) return res.status(400).json({ error: msg });
+    if (msg.includes("Amount") || msg.includes("Invalid") || msg.includes("required")) return res.status(400).json({ error: msg });
     console.error(error);
     res.status(500).json({ error: msg });
   }
@@ -68,6 +72,7 @@ export async function updateReceipt(req: Request, res: Response) {
 export async function deleteReceipt(req: Request, res: Response) {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid receipt id" });
     const result = await cashService.deleteReceipt(id);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.status(204).send();
@@ -93,6 +98,7 @@ export async function getPayments(req: Request, res: Response) {
 export async function getPaymentById(req: Request, res: Response) {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid payment id" });
     const result = await cashService.getPaymentById(id);
     if (!result) return res.status(404).json({ error: "Payment not found" });
     res.json(result);
@@ -108,7 +114,9 @@ export async function createPayment(req: Request, res: Response) {
     res.status(201).json(result);
   } catch (error: any) {
     const msg = error?.message || "Failed to create payment";
-    if (msg.includes("Amount")) return res.status(400).json({ error: msg });
+    if (msg.includes("Amount") || msg.includes("Invalid") || msg.includes("required")) {
+      return res.status(400).json({ error: msg });
+    }
     console.error(error);
     res.status(500).json({ error: msg });
   }
@@ -117,13 +125,14 @@ export async function createPayment(req: Request, res: Response) {
 export async function updatePayment(req: Request, res: Response) {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid payment id" });
     const result = await cashService.updatePayment(id, req.body);
     if (!result) return res.status(404).json({ error: "Payment not found" });
     res.json(result);
   } catch (error: any) {
     const msg = error?.message || "Failed to update payment";
     if (msg.includes("linked")) return res.status(400).json({ error: msg });
-    if (msg.includes("Amount")) return res.status(400).json({ error: msg });
+    if (msg.includes("Amount") || msg.includes("Invalid") || msg.includes("required")) return res.status(400).json({ error: msg });
     console.error(error);
     res.status(500).json({ error: msg });
   }
@@ -132,6 +141,7 @@ export async function updatePayment(req: Request, res: Response) {
 export async function deletePayment(req: Request, res: Response) {
   try {
     const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid payment id" });
     const result = await cashService.deletePayment(id);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.status(204).send();
@@ -158,10 +168,40 @@ export async function getSummary(req: Request, res: Response) {
   try {
     const cashAccountId = req.query.cashAccountId ? parseInt(req.query.cashAccountId as string, 10) : 1;
     const result = await cashService.getTodaySummary(cashAccountId);
-    res.json(result);
+    // Backward-compatible shape for legacy cash screens.
+    res.json({
+      ...result,
+      opening: result.openingBalance,
+      debit: result.todayReceipts,
+      credit: result.todayPayments,
+      closing: result.closingBalance,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch summary" });
   }
 }
 
+export async function getTransactions(req: Request, res: Response) {
+  try {
+    const from = req.query.from as string | undefined;
+    const to = req.query.to as string | undefined;
+    const cashAccountId = req.query.cashAccountId ? parseInt(req.query.cashAccountId as string, 10) : undefined;
+    const rows = await cashService.getLedger({ from, to, cashAccountId });
+    const tx = rows
+      .filter((r) => r.type !== "opening")
+      .map((r, idx) => ({
+        id: idx + 1,
+        transactionDate: r.date,
+        transactionType: r.type === "receipt" ? "DEBIT" : "CREDIT",
+        referenceType: r.referenceType ?? null,
+        referenceId: r.referenceId ?? null,
+        amount: String(r.type === "receipt" ? r.debit : r.credit),
+        narration: r.description || "",
+      }));
+    res.json(tx);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch cash transactions" });
+  }
+}

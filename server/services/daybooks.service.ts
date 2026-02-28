@@ -46,6 +46,41 @@ function toMs(value?: Date | string | number | null) {
   return Number.isFinite(d.getTime()) ? d.getTime() : null;
 }
 
+function toEndOfDayMs(value?: Date | string | number | null) {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      const d = new Date(`${raw}T23:59:59.999`);
+      return Number.isFinite(d.getTime()) ? d.getTime() : null;
+    }
+  }
+  const ms = toMs(value);
+  if (!ms) return ms;
+  const d = new Date(ms);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+
+function tableExists(tableName: string) {
+  try {
+    const row = sqlite
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`)
+      .get(tableName) as any;
+    return Boolean(row?.name);
+  } catch {
+    return false;
+  }
+}
+
+function safePrepare(sql: string) {
+  try {
+    return sqlite.prepare(sql);
+  } catch {
+    return null;
+  }
+}
+
 function assertNotFutureDate(value?: Date | string | number | null, label = "Date") {
   if (value == null) return;
   const ms = toMs(value);
@@ -82,7 +117,7 @@ function buildCommonFilters(filters: ListFilters, partyColumn: string, amountCol
   }
   if (filters.dateTo) {
     where.push(`${dateColumn} <= ?`);
-    params.push(toMs(filters.dateTo));
+    params.push(toEndOfDayMs(filters.dateTo));
   }
   if (filters.party) {
     where.push(`${partyColumn} LIKE ?`);
@@ -368,19 +403,21 @@ function ensureDaybookSeededFromLegacy() {
     );
     if (daybookTotal > 0) return;
 
-    const legacyTotal = Number(
-      (
-        sqlite
-          .prepare(
-            `SELECT
-               (SELECT COUNT(*) FROM sales WHERE deleted_at IS NULL) +
-               (SELECT COUNT(*) FROM purchases WHERE deleted_at IS NULL) +
-               (SELECT COUNT(*) FROM cash_transactions WHERE deleted_at IS NULL) +
-               (SELECT COUNT(*) FROM journal_vouchers) AS c`,
-          )
-          .get() as any
-      )?.c ?? 0,
-    );
+    const countIfExists = (tableName: string) => {
+      if (!tableExists(tableName)) return 0;
+      try {
+        const row = sqlite.prepare(`SELECT COUNT(*) as c FROM ${tableName}`).get() as any;
+        return Number(row?.c ?? 0);
+      } catch {
+        return 0;
+      }
+    };
+
+    const legacyTotal =
+      countIfExists("sales") +
+      countIfExists("purchases") +
+      countIfExists("cash_transactions") +
+      countIfExists("journal_vouchers");
     if (legacyTotal === 0) return;
 
     migrateLegacyDayBook(new Date());
@@ -680,7 +717,7 @@ export function listCashBook(filters: ListFilters = {}) {
   }
   if (filters.dateTo) {
     where.push("transaction_date <= ?");
-    params.push(toMs(filters.dateTo));
+    params.push(toEndOfDayMs(filters.dateTo));
   }
   if (filters.status) {
     where.push("transaction_type = ?");
@@ -708,19 +745,19 @@ export function listCashBook(filters: ListFilters = {}) {
     .prepare(`SELECT * FROM cash_book WHERE ${where.join(" AND ")} ORDER BY ${sortBy} ${sortDir}, id DESC`)
     .all(...params) as any[];
 
-  const salePartyById = sqlite.prepare(
+  const salePartyById = tableExists("sales") ? safePrepare(
     `SELECT COALESCE(a.name, '') as party
      FROM sales s
      LEFT JOIN accounts a ON a.id = s.customer_id
      WHERE s.id = ?`,
-  );
-  const purchasePartyById = sqlite.prepare(
+  ) : null;
+  const purchasePartyById = tableExists("purchases") ? safePrepare(
     `SELECT COALESCE(a.name, '') as party
      FROM purchases p
      LEFT JOIN accounts a ON a.id = p.supplier_id
      WHERE p.id = ?`,
-  );
-  const receiptPartyById = sqlite.prepare(
+  ) : null;
+  const receiptPartyById = tableExists("receipt_voucher_lines") ? safePrepare(
     `SELECT COALESCE(a.name, '') as party
      FROM receipt_voucher_lines l
      LEFT JOIN accounts a ON a.id = l.account_id
@@ -728,8 +765,8 @@ export function listCashBook(filters: ListFilters = {}) {
        AND (a.type IS NULL OR a.type NOT IN ('bank', 'asset'))
      ORDER BY l.id ASC
      LIMIT 1`,
-  );
-  const allocatedReceiptPartyById = sqlite.prepare(
+  ) : null;
+  const allocatedReceiptPartyById = tableExists("invoice_allocations") && tableExists("sales") ? safePrepare(
     `SELECT COALESCE(a.name, '') as party
      FROM invoice_allocations ia
      JOIN sales s ON s.id = ia.invoice_id
@@ -737,8 +774,8 @@ export function listCashBook(filters: ListFilters = {}) {
      WHERE ia.voucher_type = 'receipt' AND ia.voucher_id = ?
      ORDER BY ia.id DESC
      LIMIT 1`,
-  );
-  const allocatedPaymentPartyById = sqlite.prepare(
+  ) : null;
+  const allocatedPaymentPartyById = tableExists("invoice_allocations") && tableExists("purchases") ? safePrepare(
     `SELECT COALESCE(a.name, '') as party
      FROM invoice_allocations ia
      JOIN purchases p ON p.id = ia.invoice_id
@@ -746,14 +783,14 @@ export function listCashBook(filters: ListFilters = {}) {
      WHERE ia.voucher_type = 'payment' AND ia.voucher_id = ?
      ORDER BY ia.id DESC
      LIMIT 1`,
-  );
-  const receiptVoucherById = sqlite.prepare(
+  ) : null;
+  const receiptVoucherById = tableExists("receipt_vouchers") ? safePrepare(
     `SELECT id, voucher_type, voucher_date, total_debit, total_credit
      FROM receipt_vouchers
      WHERE id = ?
      LIMIT 1`,
-  );
-  const salePartyByAmountDate = sqlite.prepare(
+  ) : null;
+  const salePartyByAmountDate = tableExists("sales") ? safePrepare(
     `SELECT COALESCE(a.name, '') as party
      FROM sales s
      LEFT JOIN accounts a ON a.id = s.customer_id
@@ -762,8 +799,8 @@ export function listCashBook(filters: ListFilters = {}) {
            = date(?, 'unixepoch')
      ORDER BY s.id DESC
      LIMIT 1`,
-  );
-  const purchasePartyByAmountDate = sqlite.prepare(
+  ) : null;
+  const purchasePartyByAmountDate = tableExists("purchases") ? safePrepare(
     `SELECT COALESCE(a.name, '') as party
      FROM purchases p
      LEFT JOIN accounts a ON a.id = p.supplier_id
@@ -772,9 +809,9 @@ export function listCashBook(filters: ListFilters = {}) {
            = date(?, 'unixepoch')
      ORDER BY p.id DESC
      LIMIT 1`,
-  );
-  const voucherAccountTypeById = sqlite.prepare(`SELECT type FROM accounts WHERE id = ? LIMIT 1`);
-  const accountNameById = sqlite.prepare(`SELECT name FROM accounts WHERE id = ? LIMIT 1`);
+  ) : null;
+  const voucherAccountTypeById = tableExists("accounts") ? safePrepare(`SELECT type FROM accounts WHERE id = ? LIMIT 1`) : null;
+  const accountNameById = tableExists("accounts") ? safePrepare(`SELECT name FROM accounts WHERE id = ? LIMIT 1`) : null;
 
   const isGenericPartyName = (value: string) => {
     const v = value.trim().toLowerCase();
@@ -802,39 +839,39 @@ export function listCashBook(filters: ListFilters = {}) {
 
     let party = "";
     if (refType === "sale" || refType === "sales") {
-      party = String((salePartyById.get(refId) as any)?.party ?? "");
+      party = String((salePartyById?.get(refId) as any)?.party ?? "");
     } else if (refType === "purchase" || refType === "purchases") {
-      party = String((purchasePartyById.get(refId) as any)?.party ?? "");
+      party = String((purchasePartyById?.get(refId) as any)?.party ?? "");
     } else if (refType === "receipt" || refType === "payment") {
-      party = String((receiptPartyById.get(refId) as any)?.party ?? "");
+      party = String((receiptPartyById?.get(refId) as any)?.party ?? "");
       if (!party) {
         const allocated =
           refType === "receipt"
-            ? (allocatedReceiptPartyById.get(refId) as any)
-            : (allocatedPaymentPartyById.get(refId) as any);
+            ? (allocatedReceiptPartyById?.get(refId) as any)
+            : (allocatedPaymentPartyById?.get(refId) as any);
         party = String(allocated?.party ?? "");
       }
       if (!party) {
-        const v = receiptVoucherById.get(refId) as any;
+        const v = receiptVoucherById?.get(refId) as any;
         const txSec =
           Number((v?.voucher_date ?? row.transaction_date) || 0) > 1000000000000
             ? Math.floor(Number(v?.voucher_date ?? row.transaction_date) / 1000)
             : Math.floor(Number(v?.voucher_date ?? row.transaction_date));
         if (refType === "receipt") {
           const amt = Number(v?.total_debit ?? row.amount ?? 0);
-          party = String((salePartyByAmountDate.get(amt, txSec) as any)?.party ?? "");
+          party = String((salePartyByAmountDate?.get(amt, txSec) as any)?.party ?? "");
         } else {
           const amt = Number(v?.total_credit ?? row.amount ?? 0);
-          party = String((purchasePartyByAmountDate.get(amt, txSec) as any)?.party ?? "");
+          party = String((purchasePartyByAmountDate?.get(amt, txSec) as any)?.party ?? "");
         }
       }
     }
 
     // Fallback to linked bank account name when it is a real bank account.
     if (!party && row.bank_account_id) {
-      const type = String((voucherAccountTypeById.get(Number(row.bank_account_id)) as any)?.type ?? "");
+      const type = String((voucherAccountTypeById?.get(Number(row.bank_account_id)) as any)?.type ?? "");
       if (type === "bank") {
-        party = String((accountNameById.get(Number(row.bank_account_id)) as any)?.name ?? "");
+        party = String((accountNameById?.get(Number(row.bank_account_id)) as any)?.name ?? "");
       }
     }
 
@@ -1149,7 +1186,7 @@ export function listGeneralJournal(filters: ListFilters & { account?: string; en
   }
   if (filters.dateTo) {
     where.push("gj.transaction_date <= ?");
-    params.push(toMs(filters.dateTo));
+    params.push(toEndOfDayMs(filters.dateTo));
   }
   if (filters.status) {
     where.push("gj.status = ?");

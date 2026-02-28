@@ -302,10 +302,10 @@ export async function getDashboardSummary(
         bardanaOut,
         bardanaBalance,
         lowStock,
-        valuation: parseAmount(stockReport?.totals.closingValue),
+        valuation: parseAmount(stockReport?.totals?.closingValue),
       },
       dayBook: {
-        date: toDate.toISOString(),
+        date: (toDate ?? new Date()).toISOString(),
         rows: dayBook.rows.slice(0, 10),
       },
     };
@@ -323,7 +323,7 @@ export async function getDashboardSummary(
           lowStock: [],
           valuation: 0,
         },
-        dayBook: { date: toDate.toISOString(), rows: [] },
+        dayBook: { date: (toDate ?? new Date()).toISOString(), rows: [] },
       };
     }
   }

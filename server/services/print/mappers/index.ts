@@ -998,11 +998,8 @@ export async function mapLessReport(params: Record<string, any>, ctx: PrintConte
 }
 
 export async function mapPeriodPurchases(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  if (!params.fromDate || !params.toDate) {
-    throw new Error("fromDate and toDate are required");
-  }
-  const fromDate = new Date(String(params.fromDate));
-  const toDate = new Date(String(params.toDate));
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
+  const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const supplierId = params.supplierId ? Number(params.supplierId) : undefined;
   const groupBy = (params.groupBy as "day" | "week" | "month") || "month";
   const report = await storage.getPeriodPurchases(fromDate, toDate, supplierId, groupBy);
@@ -1057,11 +1054,8 @@ export async function mapPeriodPurchases(params: Record<string, any>, ctx: Print
 }
 
 export async function mapPeriodSales(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  if (!params.fromDate || !params.toDate) {
-    throw new Error("fromDate and toDate are required");
-  }
-  const fromDate = new Date(String(params.fromDate));
-  const toDate = new Date(String(params.toDate));
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
+  const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const customerId = params.customerId ? Number(params.customerId) : undefined;
   const groupBy = (params.groupBy as "day" | "week" | "month") || "month";
   const report = await storage.getPeriodSales(fromDate, toDate, customerId, groupBy);
@@ -1115,11 +1109,8 @@ export async function mapPeriodSales(params: Record<string, any>, ctx: PrintCont
   };
 }
 export async function mapGrossProfit(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  if (!params.fromDate || !params.toDate) {
-    throw new Error("fromDate and toDate are required");
-  }
-  const fromDate = new Date(String(params.fromDate));
-  const toDate = new Date(String(params.toDate));
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
+  const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const report = await storage.getGrossProfit(fromDate, toDate);
 
   return {
@@ -1142,7 +1133,7 @@ export async function mapGrossProfit(params: Record<string, any>, ctx: PrintCont
 }
 
 export async function mapDayBook(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  const type = String(params.daybookType || "").trim() || "legacy";
+  const type = String(params.daybookType || params.kind || "").trim() || "legacy";
   const dateFrom = params.dateFrom ? new Date(String(params.dateFrom)) : undefined;
   const dateTo = params.dateTo ? new Date(String(params.dateTo)) : undefined;
   const filters = {
@@ -1152,7 +1143,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
     search: params.search ? String(params.search) : undefined,
   };
 
-  if (!["sales", "purchases", "cash", "sales-returns", "purchase-returns", "general-journal"].includes(type)) {
+  if (!["sales", "purchases", "cash", "sales-returns", "purchase-returns", "general-journal", "all"].includes(type)) {
     const date = params.date ? new Date(String(params.date)) : new Date();
     const report = await storage.getDayBook(date);
     const balanceLabel = (amount?: string | number | null, side?: string) => {
@@ -1567,11 +1558,8 @@ export async function mapOutstandingSuppliers(params: Record<string, any>, ctx: 
 }
 
 export async function mapIncomeStatement(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  if (!params.fromDate || !params.toDate) {
-    throw new Error("fromDate and toDate are required");
-  }
-  const fromDate = new Date(String(params.fromDate));
-  const toDate = new Date(String(params.toDate));
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
+  const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const report = await storage.getIncomeStatement(fromDate, toDate);
 
   const columns = buildColumns([
@@ -1630,11 +1618,8 @@ export async function mapProfitLoss(params: Record<string, any>, ctx: PrintConte
 }
 
 export async function mapCapital(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  if (!params.fromDate || !params.toDate) {
-    throw new Error("fromDate and toDate are required");
-  }
-  const fromDate = new Date(String(params.fromDate));
-  const toDate = new Date(String(params.toDate));
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
+  const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const report = await storage.getCapitalStatement(fromDate, toDate);
 
   const rows = [
@@ -1666,11 +1651,8 @@ export async function mapCapital(params: Record<string, any>, ctx: PrintContext)
 }
 
 export async function mapSalary(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  if (!params.fromDate || !params.toDate) {
-    throw new Error("fromDate and toDate are required");
-  }
-  const fromDate = new Date(String(params.fromDate));
-  const toDate = new Date(String(params.toDate));
+  const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
+  const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const report = await storage.getSalaryAccount(fromDate, toDate);
 
   const columns = buildColumns([

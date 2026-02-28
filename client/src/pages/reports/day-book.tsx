@@ -58,39 +58,76 @@ type DayBookPageProps = {
   pageTitle?: string;
 };
 
-export default function DayBookPage({ initialTab, singleTab, pageTitle }: DayBookPageProps = {}) {
+export default function DayBookPage(props: any = {}) {
+  const { initialTab, singleTab, pageTitle } = props as DayBookPageProps;
   const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
   const selectedDate = toDate || fromDate;
   const dateForApi = selectedDate || format(new Date(), "yyyy-MM-dd");
   const isSpecialized = Boolean(initialTab && DAYBOOK_API_MAP[initialTab]);
 
-  const { data: combinedData, isLoading: combinedLoading } = useQuery<DayBookReport>({
+  const readErrorMessage = async (res: Response, fallback: string) => {
+    const text = await res.text();
+    if (!text) return fallback;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown };
+      if (typeof parsed?.error === "string" && parsed.error.trim()) return parsed.error;
+    } catch {
+      // Ignore JSON parse failure and use raw text.
+    }
+    return text;
+  };
+
+  const { data: combinedData, isLoading: combinedLoading, isError: combinedError, error: combinedErrorObj } = useQuery<DayBookReport>({
     queryKey: ["/api/reports/day-book", dateForApi],
     enabled: !isSpecialized,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("date", dateForApi);
       const res = await fetchWithAuth(`/api/reports/day-book?${params.toString()}`);
-      if (!res.ok) throw new Error("Failed to load day book");
+      if (!res.ok) {
+        const msg = await readErrorMessage(res, "Failed to load day book");
+        throw new Error(msg || "Failed to load day book");
+      }
       return res.json();
     },
   });
 
-  const { data: specializedData, isLoading: specializedLoading } = useQuery<Record<string, unknown>[]>({
+  const {
+    data: specializedDataRaw,
+    isLoading: specializedLoading,
+    isError: specializedError,
+    error: specializedErrorObj,
+  } = useQuery<Record<string, unknown>[] | { rows?: Record<string, unknown>[] }>({
     queryKey: [DAYBOOK_API_MAP[initialTab!], fromDate, toDate],
     enabled: isSpecialized && !!initialTab,
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (fromDate) params.set("dateFrom", fromDate);
-      if (toDate) params.set("dateTo", toDate);
+      if (fromDate) {
+        params.set("dateFrom", fromDate);
+        params.set("fromDate", fromDate);
+      }
+      if (toDate) {
+        params.set("dateTo", toDate);
+        params.set("toDate", toDate);
+      }
       const url = `${DAYBOOK_API_MAP[initialTab!]}?${params.toString()}`;
       const res = await fetchWithAuth(url);
-      if (!res.ok) throw new Error(`Failed to load ${pageTitle || initialTab}`);
+      if (!res.ok) {
+        const msg = await readErrorMessage(res, `Failed to load ${pageTitle || initialTab}`);
+        throw new Error(msg || `Failed to load ${pageTitle || initialTab}`);
+      }
       return res.json();
     },
   });
+  const specializedData = Array.isArray(specializedDataRaw)
+    ? specializedDataRaw
+    : Array.isArray((specializedDataRaw as { rows?: Record<string, unknown>[] } | undefined)?.rows)
+      ? ((specializedDataRaw as { rows?: Record<string, unknown>[] }).rows ?? [])
+      : [];
 
   const isLoading = isSpecialized ? specializedLoading : combinedLoading;
+  const queryError = isSpecialized ? specializedErrorObj : combinedErrorObj;
+  const hasError = isSpecialized ? specializedError : combinedError;
 
   const formatAmount = (value?: string | number) => {
     const num = typeof value === "number" ? value : parseFloat(String(value ?? "0"));
@@ -293,8 +330,15 @@ export default function DayBookPage({ initialTab, singleTab, pageTitle }: DayBoo
     : selectedDateLabel ? `Day Book (${selectedDateLabel})` : "Daily voucher summary";
 
   const printParams = isSpecialized
-    ? { dateFrom: fromDate || undefined, dateTo: toDate || undefined, kind: initialTab }
-    : { date: dateForApi };
+    ? {
+        daybookType: initialTab,
+        dateFrom: fromDate || undefined,
+        dateTo: toDate || undefined,
+      }
+    : {
+        daybookType: "legacy",
+        date: dateForApi,
+      };
 
   return (
     <div className="p-6 space-y-6">
@@ -303,13 +347,11 @@ export default function DayBookPage({ initialTab, singleTab, pageTitle }: DayBoo
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           <p className="text-sm text-muted-foreground">{subtitle}</p>
         </div>
-        {!isSpecialized && (
-          <PrintActions
-            docKey={docKeys.dayBook}
-            params={printParams as { date?: string }}
-            title={title}
-          />
-        )}
+        <PrintActions
+          docKey={docKeys.dayBook}
+          params={printParams}
+          title={title}
+        />
       </div>
 
       <Card>
@@ -328,9 +370,14 @@ export default function DayBookPage({ initialTab, singleTab, pageTitle }: DayBoo
           <CardTitle className="text-lg">Entries</CardTitle>
         </CardHeader>
         <CardContent>
+          {hasError ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+              {queryError instanceof Error ? queryError.message : "Failed to load daybook report"}
+            </div>
+          ) : null}
           <DataTable
             columns={columns}
-            data={displayRows}
+            data={hasError ? [] : displayRows}
             isLoading={isLoading}
             searchable={false}
             emptyMessage="No entries found"
