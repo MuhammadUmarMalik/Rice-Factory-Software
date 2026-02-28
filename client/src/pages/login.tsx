@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useAuthStore } from "@/stores/auth.store";
 import { apiRequest } from "@/lib/apiRequest";
+import { useLanguage } from "@/contexts/language-context";
 import { useLocation } from "wouter";
 
 const EyeIcon = (props: SVGProps<SVGSVGElement>) => (
@@ -42,6 +43,7 @@ const EyeOffIcon = (props: SVGProps<SVGSVGElement>) => (
 );
 
 export default function LoginPage() {
+  const { t, isRTL } = useLanguage();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const setSession = useAuthStore((state) => state.setSession);
@@ -65,25 +67,25 @@ export default function LoginPage() {
       setSession({ token: data.token || null, user: data.user || null });
       setLocation("/");
     } catch (err: any) {
-      toast({ title: "Login failed", description: err?.message || "Invalid credentials", variant: "destructive" });
+      toast({ title: t("login"), description: err?.message || t("signInToContinue"), variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/30 px-4">
+    <div className={`min-h-screen flex items-center justify-center bg-muted/30 px-4 ${isRTL ? "font-urdu" : ""}`}>
       <Card className="w-full max-w-md min-h-[330px] shadow-sm">
         <CardHeader className="min-h-[84px]">
-          <CardTitle className="text-2xl leading-tight">Sign in</CardTitle>
+          <CardTitle className={`text-2xl leading-tight ${isRTL ? "text-right" : ""}`}>{t("signIn")}</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Use your account credentials to access Mill Manager.
+            {t("useCredentials")}
           </p>
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <label className="text-sm font-medium">Username</label>
+              <label className="text-sm font-medium">{t("username")}</label>
               <Input
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -93,7 +95,7 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="text-sm font-medium">Password</label>
+              <label className="text-sm font-medium">{t("password")}</label>
               <div className="relative">
                 <Input
                   type={showPassword ? "text" : "password"}
@@ -107,15 +109,15 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword((prev) => !prev)}
-                  className="absolute inset-y-0 right-2 inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className={`absolute inset-y-0 ${isRTL ? "left-2" : "right-2"} inline-flex items-center justify-center text-muted-foreground hover:text-foreground`}
+                  aria-label={showPassword ? t("hidePassword") : t("showPassword")}
                 >
                   {showPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
                 </button>
               </div>
             </div>
             <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? "Signing in..." : "Sign in"}
+              {isSubmitting ? t("signingIn") : t("signIn")}
             </Button>
           </form>
         </CardContent>

@@ -25,6 +25,7 @@ type DashboardActivitySectionProps = {
   money: (value?: number) => string;
   pendingLabel: string;
   inProgressLabel: string;
+  completedLabel: string;
   onOpenDetail: (reference: { type: string; id: number }) => void;
 };
 
@@ -35,6 +36,7 @@ export function DashboardActivitySection({
   money,
   pendingLabel,
   inProgressLabel,
+  completedLabel,
   onOpenDetail,
 }: DashboardActivitySectionProps) {
   const { data: processingBatches = [], isLoading: processingLoading } = useQuery<any[]>({
@@ -46,10 +48,20 @@ export function DashboardActivitySection({
     refetchOnReconnect: true,
   });
 
-  const pendingBatches = useMemo(
-    () => processingBatches.filter((p: any) => p.status !== "completed"),
-    [processingBatches],
-  );
+  const { visibleBatches, isFallbackList } = useMemo(() => {
+    const pending = processingBatches.filter((p: any) => p.status !== "completed");
+    if (pending.length > 0) {
+      return { visibleBatches: pending.slice(0, 3), isFallbackList: false };
+    }
+    const recentCompleted = [...processingBatches]
+      .filter((p: any) => p.status === "completed")
+      .sort(
+        (a: any, b: any) =>
+          new Date(b.completedDate || b.startDate || 0).getTime() - new Date(a.completedDate || a.startDate || 0).getTime(),
+      )
+      .slice(0, 3);
+    return { visibleBatches: recentCompleted, isFallbackList: true };
+  }, [processingBatches]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
@@ -118,7 +130,12 @@ export function DashboardActivitySection({
             </div>
           ) : (
             <div className="space-y-4">
-              {pendingBatches.slice(0, 3).map((item: any, index: number) => (
+              {isFallbackList && visibleBatches.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No pending processing. Showing recent completed batches.
+                </p>
+              )}
+              {visibleBatches.map((item: any, index: number) => (
                 <div
                   key={index}
                   className={`flex items-center gap-3 p-3 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}
@@ -136,15 +153,25 @@ export function DashboardActivitySection({
                       {parseFloat(item.sourceQuantity || "0").toLocaleString()} kg
                     </p>
                     <Badge
-                      variant={item.status === "in_progress" ? "default" : "secondary"}
+                      variant={
+                        item.status === "in_progress"
+                          ? "default"
+                          : item.status === "completed"
+                            ? "outline"
+                            : "secondary"
+                      }
                       className="text-xs"
                     >
-                      {item.status === "in_progress" ? inProgressLabel : pendingLabel}
+                      {item.status === "in_progress"
+                        ? inProgressLabel
+                        : item.status === "completed"
+                          ? completedLabel
+                          : pendingLabel}
                     </Badge>
                   </div>
                 </div>
               ))}
-              {pendingBatches.length === 0 && (
+              {visibleBatches.length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-4">
                   No pending processing.
                 </p>

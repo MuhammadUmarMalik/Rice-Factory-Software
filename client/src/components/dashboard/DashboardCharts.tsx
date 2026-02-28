@@ -1,8 +1,8 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkeletonBox } from "@/components/ui/skeletons";
 import {
-  LineChart,
+  ComposedChart,
   Line,
   XAxis,
   YAxis,
@@ -32,6 +32,15 @@ function DashboardChartsComponent({
   purchasesLabel,
   salesLabel,
 }: DashboardChartsProps) {
+  const monthlyData = useMemo(
+    () =>
+      (chartData?.monthlyTotals || []).map((row) => ({
+        ...row,
+        net: (row.sales || 0) - (row.purchases || 0),
+      })),
+    [chartData?.monthlyTotals],
+  );
+
   return (
     <div className="grid gap-6">
       <Card>
@@ -49,6 +58,10 @@ function DashboardChartsComponent({
               <div className="h-3 w-3 rounded-full bg-primary" />
               <span className="text-muted-foreground">{salesLabel}</span>
             </div>
+            <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+              <div className="h-[2px] w-4 rounded-full bg-chart-5" />
+              <span className="text-muted-foreground">{isRTL ? "خالص فرق" : "Net"}</span>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -57,21 +70,59 @@ function DashboardChartsComponent({
               <SkeletonBox className="h-full w-full" />
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData?.monthlyTotals || []}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="name" className="text-xs" />
-                  <YAxis className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
+                <ComposedChart data={monthlyData} margin={{ top: 12, right: 18, left: 6, bottom: 8 }} barCategoryGap={20}>
+                  <CartesianGrid strokeDasharray="4 6" stroke="hsl(var(--border) / 0.55)" vertical={false} />
+                  <XAxis
+                    dataKey="name"
+                    className="text-xs"
+                    tickLine={false}
+                    axisLine={false}
+                    dy={8}
+                  />
+                  <YAxis
+                    className="text-xs"
+                    tickLine={false}
+                    axisLine={false}
+                    width={48}
+                    tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                  />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "6px",
+                      border: "1px solid hsl(var(--border) / 0.9)",
+                      borderRadius: "10px",
+                      boxShadow: "0 8px 26px hsl(var(--foreground) / 0.12)",
+                      padding: "10px 12px",
                     }}
-                    formatter={(value: number) => [`Rs. ${value.toLocaleString()}`, ""]}
+                    cursor={{ stroke: "hsl(var(--border))", strokeDasharray: "4 4" }}
+                    formatter={(value: number, name) => {
+                      const label = name === "purchases" ? purchasesLabel : name === "sales" ? salesLabel : (isRTL ? "خالص فرق" : "Net");
+                      return [`Rs. ${value.toLocaleString()}`, label];
+                    }}
+                    labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: "4px" }}
                   />
-                  <Line type="monotone" dataKey="purchases" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="sales" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
-                </LineChart>
+                  <Bar
+                    dataKey="purchases"
+                    fill="hsl(var(--chart-2) / 0.85)"
+                    radius={[6, 6, 0, 0]}
+                    isAnimationActive={false}
+                  />
+                  <Bar
+                    dataKey="sales"
+                    fill="hsl(var(--primary) / 0.9)"
+                    radius={[6, 6, 0, 0]}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="net"
+                    stroke="hsl(var(--chart-5))"
+                    strokeWidth={2.25}
+                    dot={monthlyData.length <= 2}
+                    activeDot={{ r: 4.5, strokeWidth: 0 }}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
               </ResponsiveContainer>
             )}
           </div>

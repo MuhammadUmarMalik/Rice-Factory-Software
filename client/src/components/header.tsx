@@ -89,7 +89,7 @@ export function Header({ title }: HeaderProps) {
               variant="ghost"
               data-testid="button-notifications"
               className="relative"
-              aria-label="Notifications"
+              aria-label={t("notifications")}
             >
               <Bell className="h-4 w-4" />
               {unreadCount > 0 && (
@@ -101,10 +101,10 @@ export function Header({ title }: HeaderProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align={isRTL ? "start" : "end"} className="w-80">
             <div className="px-2 py-2 text-xs uppercase tracking-wide text-muted-foreground">
-              Notifications
+              {t("notifications")}
             </div>
             {notifications.length === 0 && (
-              <div className="px-2 py-3 text-sm text-muted-foreground">No notifications yet.</div>
+              <div className="px-2 py-3 text-sm text-muted-foreground">{t("noNotifications")}</div>
             )}
             {notifications.slice(0, 8).map((n) => (
               <DropdownMenuItem
@@ -127,7 +127,7 @@ export function Header({ title }: HeaderProps) {
                 className="justify-center text-xs"
               >
                 <Check className="h-3 w-3 mr-2" />
-                Mark all read
+                {t("markAllRead")}
               </DropdownMenuItem>
             )}
           </DropdownMenuContent>
@@ -135,41 +135,41 @@ export function Header({ title }: HeaderProps) {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button 
-              size="icon" 
+            <Button
+              size="icon"
               variant="ghost"
               data-testid="button-language-toggle"
-              aria-label="Change language"
+              aria-label={t("changeLanguage")}
             >
               <Globe className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align={isRTL ? "start" : "end"}>
-            <DropdownMenuItem 
+            <DropdownMenuItem
               onClick={() => setLanguage("en")}
               className={language === "en" ? "bg-accent" : ""}
               data-testid="menu-item-english"
             >
               <span className="mr-2">EN</span>
-              English
+              {t("english")}
             </DropdownMenuItem>
-            <DropdownMenuItem 
+            <DropdownMenuItem
               onClick={() => setLanguage("ur")}
               className={language === "ur" ? "bg-accent" : ""}
               data-testid="menu-item-urdu"
             >
               <span className="mr-2 font-urdu">اردو</span>
-              Urdu
+              {t("urdu")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <Button 
-          size="icon" 
-          variant="ghost" 
+        <Button
+          size="icon"
+          variant="ghost"
           onClick={toggleTheme}
           data-testid="button-theme-toggle"
-          aria-label="Toggle theme"
+          aria-label={t("toggleTheme")}
         >
           {theme === "light" ? (
             <Moon className="h-4 w-4" />
