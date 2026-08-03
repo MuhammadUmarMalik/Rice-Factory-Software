@@ -30,6 +30,11 @@ function num(value?: string | number | null) {
   return n.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function statusLabel(status?: string | null) {
+  if (!status) return "-";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 function baseMeta(ctx: PrintContext, meta?: PrintableDocumentPayload["meta"]) {
   return {
     createdBy: ctx.createdBy,
@@ -44,6 +49,56 @@ function summaryCard(label: string, value: string, highlight = false): Printable
 
 function buildColumns(list: Array<{ key: string; label: string; align?: "left" | "right" | "center"; width?: string }>): PrintableTableColumn[] {
   return list.map((c) => ({ key: c.key, label: c.label, align: c.align, width: c.width }));
+}
+
+/*
+ * Report filter chips are built straight from query params. The pages send "all"
+ * (or nothing) to mean "no filter", and bare numeric ids otherwise - printing
+ * either one verbatim is what produced chips like "Customer: all" and
+ * "Supplier: 42". Everything that renders a filter chip goes through these two
+ * helpers instead.
+ */
+function isAllSentinel(value: unknown) {
+  if (value === undefined || value === null) return true;
+  const text = String(value).trim().toLowerCase();
+  return text === "" || text === "all" || text === "undefined" || text === "null";
+}
+
+/** Falls back to `#id` only when the entity lookup came back empty. */
+function filterLabel(value: unknown, resolvedName?: string | null) {
+  if (isAllSentinel(value)) return "All";
+  return resolvedName || `#${String(value).trim()}`;
+}
+
+/** Title-cases a free-text filter such as a status or voucher type. */
+function filterTextLabel(value: unknown) {
+  if (isAllSentinel(value)) return "All";
+  const text = String(value).trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+async function lookupAccountName(id: unknown) {
+  if (isAllSentinel(id)) return null;
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) return null;
+  try {
+    const account = await storage.getAccount(numericId);
+    return account?.name || null;
+  } catch {
+    return null;
+  }
+}
+
+async function lookupProductName(id: unknown) {
+  if (isAllSentinel(id)) return null;
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) return null;
+  try {
+    const product = await storage.getProduct(numericId);
+    return product?.name || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
@@ -185,7 +240,9 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
         amount: money(sale.totalAmount),
       },
     },
-    notes: sale.notes ? `Notes: ${sale.notes}` : "",
+    // The template already renders the "Notes:" label - prefixing here produced
+    // "Notes: Notes: pending".
+    notes: sale.notes || "",
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },
@@ -347,7 +404,9 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
         return `${chargeLabel(c.type)}${c.mode === "less" ? " (Less / Watta Kaat (Moisture + Quality))" : ""}: ${money(signed)}`;
       }),
       (purchase as { amountInWords?: string }).amountInWords ? `In words: ${(purchase as { amountInWords?: string }).amountInWords}` : "",
-      purchase.notes ? `Notes: ${purchase.notes}` : "",
+      // "Remarks", not "Notes" - the template already prefixes the whole block
+      // with "Notes:", so a second "Notes:" here read as "Notes: Notes: ...".
+      purchase.notes ? `Remarks: ${purchase.notes}` : "",
     ]
       .filter(Boolean)
       .join(" | "),
@@ -719,6 +778,7 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
     { key: "outQty", label: "Out Qty", align: "right", width: "6%" },
     { key: "outValue", label: "Out Value", align: "right", width: "9%" },
     { key: "closingQty", label: "Closing Qty", align: "right", width: "6%" },
+    { key: "avgCost", label: "Avg Cost", align: "right", width: "8%" },
     { key: "closingValue", label: "Closing Value", align: "right", width: "9%" },
   ]);
 
@@ -734,6 +794,7 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
     outQty: num(r.outQty),
     outValue: money(r.outValue),
     closingQty: num(r.closingQty),
+    avgCost: money(r.avgCost),
     closingValue: money(r.closingValue),
   }));
 
@@ -746,9 +807,9 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
       dateFrom: params.fromDate,
       dateTo: params.toDate,
       filters: {
-        Product: params.productId ? String(params.productId) : "All",
-        Category: params.category || "All",
-        Unit: params.unit || "All",
+        Product: filterLabel(params.productId, await lookupProductName(params.productId)),
+        Category: filterTextLabel(params.category),
+        Unit: filterTextLabel(params.unit),
       },
     }),
     sections: [
@@ -792,12 +853,13 @@ export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintC
     { key: "date", label: "Date", width: "14%" },
     { key: "supplier", label: "Supplier" },
     { key: "subtotal", label: "Subtotal", align: "right" },
-    { key: "discount", label: "Discount", align: "right" },
+    { key: "discount", label: "Less Charges", align: "right" },
     { key: "tax", label: "Tax", align: "right" },
     { key: "other", label: "Other", align: "right" },
     { key: "total", label: "Total", align: "right" },
     { key: "paid", label: "Paid", align: "right" },
     { key: "balance", label: "Balance", align: "right" },
+    { key: "status", label: "Status", align: "center" },
   ]);
 
   const rows = report.rows.map((r) => ({
@@ -811,6 +873,7 @@ export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintC
     total: money(r.total),
     paid: money(r.paid),
     balance: money(r.balance),
+    status: statusLabel(r.status),
   }));
 
   return {
@@ -822,9 +885,9 @@ export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintC
       dateFrom: params.fromDate,
       dateTo: params.toDate,
       filters: {
-        Supplier: params.supplierId ? String(params.supplierId) : "All",
-        Product: params.productId ? String(params.productId) : "All",
-        Status: params.paymentStatus || "All",
+        Supplier: filterLabel(params.supplierId, await lookupAccountName(params.supplierId)),
+        Product: filterLabel(params.productId, await lookupProductName(params.productId)),
+        Status: filterTextLabel(params.paymentStatus),
       },
     }),
     sections: [
@@ -860,19 +923,9 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     productId: params.productId ? Number(params.productId) : undefined,
     paymentStatus: params.paymentStatus,
   });
-  const totals = report.rows.reduce(
-    (acc, r) => {
-      acc.subtotal += parseFloat(String(r.subtotal || "0"));
-      acc.discount += parseFloat(String(r.discount || "0"));
-      acc.tax += parseFloat(String(r.tax || "0"));
-      acc.otherCharges += parseFloat(String(r.otherCharges || "0"));
-      acc.total += parseFloat(String(r.total || "0"));
-      acc.received += parseFloat(String(r.received || "0"));
-      acc.balance += parseFloat(String(r.balance || "0"));
-      return acc;
-    },
-    { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, received: 0, balance: 0 },
-  );
+  // Use the report's own totals rather than re-summing here — a second
+  // accumulator is a second source of truth that can drift from the screen.
+  const totals = report.totals;
 
   const columns = buildColumns([
     { key: "invoice", label: "Sales No" },
@@ -885,6 +938,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     { key: "total", label: "Total", align: "right" },
     { key: "received", label: "Received", align: "right" },
     { key: "balance", label: "Balance", align: "right" },
+    { key: "status", label: "Status", align: "center" },
   ]);
 
   const rows = report.rows.map((r) => ({
@@ -898,6 +952,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     total: money(r.total),
     received: money(r.received),
     balance: money(r.balance),
+    status: statusLabel(r.status),
   }));
 
   return {
@@ -909,9 +964,9 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
       dateFrom: params.fromDate,
       dateTo: params.toDate,
       filters: {
-        Customer: params.customerId ? String(params.customerId) : "All",
-        Product: params.productId ? String(params.productId) : "All",
-        Status: params.paymentStatus || "All",
+        Customer: filterLabel(params.customerId, await lookupAccountName(params.customerId)),
+        Product: filterLabel(params.productId, await lookupProductName(params.productId)),
+        Status: filterTextLabel(params.paymentStatus),
       },
     }),
     sections: [
@@ -933,6 +988,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
         total: money(totals.total),
         received: money(totals.received),
         balance: money(totals.balance),
+        status: "",
       },
     },
     settings: { currency: "PKR" },
@@ -962,7 +1018,7 @@ export async function mapBardanaReport(params: Record<string, any>, ctx: PrintCo
       summaryCard("Total Bardana / Kaat", `${num(report.totals.totalKg)} kg`, true),
       summaryCard("Total Bags", num(report.totals.totalBags)),
       summaryCard("Avg / Bag", `${num(report.totals.avgPerBag)} kg`),
-      summaryCard("Purchases", String(report.totals.purchaseCount)),
+      summaryCard("Purchases", report.totals.purchaseCount.toLocaleString("en-PK")),
     ],
     settings: { currency: "PKR" },
   };
@@ -991,7 +1047,7 @@ export async function mapLessReport(params: Record<string, any>, ctx: PrintConte
       summaryCard("Total Less / Watta Kaat (Moisture + Quality)", `${num(report.totals.totalKg)} kg`, true),
       summaryCard("Total Bags", num(report.totals.totalBags)),
       summaryCard("Avg / Bag", `${num(report.totals.avgPerBag)} kg`),
-      summaryCard("Purchases", String(report.totals.purchaseCount)),
+      summaryCard("Purchases", report.totals.purchaseCount.toLocaleString("en-PK")),
     ],
     settings: { currency: "PKR" },
   };
@@ -1029,8 +1085,8 @@ export async function mapPeriodPurchases(params: Record<string, any>, ctx: Print
       dateFrom: fmtDate(fromDate),
       dateTo: fmtDate(toDate),
       filters: {
-        GroupBy: groupBy,
-        Supplier: supplierId ? String(supplierId) : "All",
+        GroupBy: filterTextLabel(groupBy),
+        Supplier: filterLabel(supplierId, await lookupAccountName(supplierId)),
       },
     }),
     sections: [
@@ -1085,8 +1141,8 @@ export async function mapPeriodSales(params: Record<string, any>, ctx: PrintCont
       dateFrom: fmtDate(fromDate),
       dateTo: fmtDate(toDate),
       filters: {
-        GroupBy: groupBy,
-        Customer: customerId ? String(customerId) : "All",
+        GroupBy: filterTextLabel(groupBy),
+        Customer: filterLabel(customerId, await lookupAccountName(customerId)),
       },
     }),
     sections: [
@@ -1334,7 +1390,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       meta: baseMeta(ctx, {
         dateFrom: dateFrom ? fmtDate(dateFrom) : undefined,
         dateTo: dateTo ? fmtDate(dateTo) : undefined,
-        filters: { Type: "all" },
+        filters: { Type: "All" },
       }),
       sections,
       table: { columns, rows },
@@ -1444,8 +1500,8 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       dateFrom: dateFrom ? fmtDate(dateFrom) : undefined,
       dateTo: dateTo ? fmtDate(dateTo) : undefined,
       filters: {
-        Type: type,
-        ...(filters.status ? { Status: filters.status } : {}),
+        Type: filterTextLabel(type),
+        ...(filters.status ? { Status: filterTextLabel(filters.status) } : {}),
         ...(filters.search ? { Search: filters.search } : {}),
       },
     }),
