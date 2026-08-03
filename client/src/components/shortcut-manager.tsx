@@ -85,7 +85,7 @@ function triggerDownloadPdf() {
 export function ShortcutManager() {
   const user = useAuthStore((state) => state.user);
 
-  useQuery<SettingsPayload>({
+  const settingsQuery = useQuery<SettingsPayload>({
     queryKey: ["/api/settings/shortcuts"],
     enabled: !!user,
     queryFn: async () => {
@@ -93,14 +93,15 @@ export function ShortcutManager() {
       return res.json();
     },
     staleTime: 60 * 60 * 1000,
-    onSuccess: (data) => {
-      const merged = mergeShortcutConfig(data.shortcuts);
-      setShortcutConfig(merged);
-    },
-    onError: () => {
-      setShortcutConfig(defaultShortcutConfig);
-    },
   });
+
+  useEffect(() => {
+    if (settingsQuery.data) {
+      setShortcutConfig(mergeShortcutConfig(settingsQuery.data.shortcuts));
+    } else if (settingsQuery.isError) {
+      setShortcutConfig(defaultShortcutConfig);
+    }
+  }, [settingsQuery.data, settingsQuery.isError]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {

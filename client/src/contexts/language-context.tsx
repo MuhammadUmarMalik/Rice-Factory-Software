@@ -15,13 +15,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => {
     if (typeof window !== "undefined") {
       try {
-        return (localStorage.getItem("language") as Language) || "ur";
+        return (localStorage.getItem("language") as Language) || "en";
       } catch (err) {
-        console.warn("Language storage unavailable, falling back to ur", err);
-        return "ur";
+        console.warn("Language storage unavailable, falling back to en", err);
+        return "en";
       }
     }
-    return "ur";
+    return "en";
   });
 
   const isRTL = language === "ur";

@@ -168,11 +168,28 @@ export function importJsonBackup(payload: BackupPayload, mode: "replace" | "merg
   const importTables = Object.keys(payload.tables || {}).filter((name) => tables.includes(name));
   const importedTables: Array<{ name: string; rows: number }> = [];
 
+  if (!payload?.meta || payload.meta.formatVersion !== 1 || !payload.tables || typeof payload.tables !== "object") {
+    db.close();
+    throw new Error("Unsupported or malformed backup");
+  }
+  const unknownTables = Object.keys(payload.tables).filter((name) => !tables.includes(name));
+  if (unknownTables.length) {
+    db.close();
+    throw new Error(`Backup contains unknown tables: ${unknownTables.join(", ")}`);
+  }
+  if (mode === "replace") {
+    const missingTables = tables.filter((name) => !Object.prototype.hasOwnProperty.call(payload.tables, name));
+    if (missingTables.length) {
+      db.close();
+      throw new Error(`Replace backup is incomplete; missing tables: ${missingTables.join(", ")}`);
+    }
+  }
+
+  db.pragma("foreign_keys = OFF");
   const transaction = db.transaction(() => {
-    db.pragma("foreign_keys = OFF");
 
     if (mode === "replace") {
-      importTables.forEach((table) => {
+      tables.forEach((table) => {
         db.prepare(`DELETE FROM "${table}"`).run();
       });
     }
@@ -187,8 +204,13 @@ export function importJsonBackup(payload: BackupPayload, mode: "replace" | "merg
       const columns = db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>;
       const columnNames = columns.map((col) => col.name);
 
-      const firstRow = rows[0] || {};
-      const insertColumns = columnNames.filter((col) => Object.prototype.hasOwnProperty.call(firstRow, col));
+      const unknownColumns = [...new Set(rows.flatMap((row) => Object.keys(row).filter((key) => !columnNames.includes(key))))];
+      if (unknownColumns.length) throw new Error(`Unknown columns in ${table}: ${unknownColumns.join(", ")}`);
+      // Backups are sparse: a column may be absent from the first row but
+      // present in later ones. Deriving the insert list from row 0 alone
+      // silently dropped those values, so union the keys across every row.
+      const presentColumns = new Set(rows.flatMap((row) => Object.keys(row)));
+      const insertColumns = columnNames.filter((col) => presentColumns.has(col));
       const safeColumns = insertColumns.length > 0 ? insertColumns : columnNames;
 
       const quotedColumns = safeColumns.map((col) => `"${col}"`).join(", ");
@@ -209,7 +231,8 @@ export function importJsonBackup(payload: BackupPayload, mode: "replace" | "merg
       importedTables.push({ name: table, rows: rowCount });
     });
 
-    db.pragma("foreign_keys = ON");
+    const fkErrors = db.pragma("foreign_key_check") as Array<Record<string, unknown>>;
+    if (fkErrors.length) throw new Error(`Backup violates ${fkErrors.length} foreign-key constraint(s)`);
   });
 
   try {

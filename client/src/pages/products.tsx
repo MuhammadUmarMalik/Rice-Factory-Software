@@ -37,14 +37,26 @@ import { z } from "zod";
 import type { Product } from "@/types/schema";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
+// Mirrors the server rule: amounts must be complete, non-negative numbers.
+const nonNegativeAmount = (label: string) =>
+  z.coerce
+    .string()
+    .default("0")
+    .refine((value) => value === "" || /^[+]?(\d+(\.\d*)?|\.\d+)$/.test(value.trim()), {
+      message: `${label} must be a number`,
+    })
+    .refine((value) => value === "" || parseFloat(value) >= 0, {
+      message: `${label} cannot be negative`,
+    });
+
 const productFormSchema = z.object({
-  name: z.string().min(1, "Product name is required"),
-  nameUrdu: z.string().optional(),
+  name: z.string().trim().min(1, "Product name is required").max(150),
+  nameUrdu: z.string().trim().max(150).optional(),
   productType: z.enum(["raw", "bio"]).default("raw"),
-  unit: z.string().default("kg"),
-  salePrice: z.coerce.string().default("0"),
-  currentStock: z.coerce.string().default("0"),
-  avgPurchasePrice: z.coerce.string().default("0"),
+  unit: z.string().min(1, "Unit is required").default("kg"),
+  salePrice: nonNegativeAmount("Sale price"),
+  currentStock: nonNegativeAmount("Opening stock"),
+  avgPurchasePrice: nonNegativeAmount("Average purchase price"),
 });
 
 type ProductFormData = z.infer<typeof productFormSchema>;
@@ -71,7 +83,13 @@ export default function ProductsPage() {
     },
   });
 
-  const { data: products = [], isLoading } = useQuery<Product[]>({
+  const {
+    data: products = [],
+    isLoading,
+    isError,
+    error: loadError,
+    refetch,
+  } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
 
@@ -105,7 +123,7 @@ export default function ProductsPage() {
   }, [products, searchQuery, sortOption, typeFilter]);
 
   const createMutation = useMutation({
-    mutationFn: (data: ProductFormData) => {
+    mutationFn: async (data: ProductFormData) => {
       const payload = {
         ...data,
         productType: (data.productType || "raw").toLowerCase() as "raw" | "bio",
@@ -113,13 +131,24 @@ export default function ProductsPage() {
         avgPurchasePrice: data.avgPurchasePrice || "0",
         salePrice: data.salePrice || "0",
       };
-      return apiRequest("POST", "/api/products", payload);
+      const response = await apiRequest("POST", "/api/products", payload);
+      return response.json() as Promise<Product>;
     },
-    onSuccess: () => {
+    onSuccess: (createdProduct) => {
+      queryClient.setQueryData<Product[]>(["/api/products"], (current = []) =>
+        [...current.filter((product) => product.id !== createdProduct.id), createdProduct],
+      );
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
+    },
+    onError: (error) => {
+      toast({
+        title: language === "ur" ? "مصنوعات محفوظ نہیں ہو سکی" : "Product could not be saved",
+        description: error instanceof Error ? error.message : "Please check the entered values and try again.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -133,11 +162,17 @@ export default function ProductsPage() {
       );
       return { previousProducts };
     },
-    onError: (_err, _id, context) => {
+    onError: (err, _id, context) => {
       if (context?.previousProducts) {
         queryClient.setQueryData(["/api/products"], context.previousProducts);
       }
-      toast({ title: "Delete failed", variant: "destructive" });
+      // The server explains *why* (e.g. the product is referenced by invoices);
+      // dropping that message left the user with no way to act on the failure.
+      toast({
+        title: "Delete failed",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     },
     onSuccess: () => {
       toast({ title: t("deletedSuccessfully") });
@@ -148,22 +183,31 @@ export default function ProductsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (data: ProductFormData & { id: number }) => {
+    mutationFn: async ({ id, currentStock: _currentStock, avgPurchasePrice: _avgPurchasePrice, ...data }: ProductFormData & { id: number }) => {
       const payload = {
         ...data,
         productType: (data.productType || "raw").toLowerCase() as "raw" | "bio",
-        currentStock: data.currentStock || "0",
-        avgPurchasePrice: data.avgPurchasePrice || "0",
         salePrice: data.salePrice || "0",
       };
-      return apiRequest("PATCH", `/api/products/${data.id}`, payload);
+      const response = await apiRequest("PATCH", `/api/products/${id}`, payload);
+      return response.json() as Promise<Product>;
     },
-    onSuccess: () => {
+    onSuccess: (updatedProduct) => {
+      queryClient.setQueryData<Product[]>(["/api/products"], (current = []) =>
+        current.map((product) => product.id === updatedProduct.id ? updatedProduct : product),
+      );
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       setIsDialogOpen(false);
       setEditingProduct(null);
       form.reset();
       toast({ title: t("savedSuccessfully") });
+    },
+    onError: (error) => {
+      toast({
+        title: language === "ur" ? "مصنوعات اپ ڈیٹ نہیں ہو سکی" : "Product could not be updated",
+        description: error instanceof Error ? error.message : "Please check the entered values and try again.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -412,13 +456,24 @@ export default function ProductsPage() {
               </Select>
             </div>
           </div>
-          <DataTable
-            columns={columns}
-            data={filteredProducts}
-            isLoading={isLoading}
-            searchAlign="end"
-            testIdPrefix="products"
-          />
+          {isError ? (
+            <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <p className="text-sm text-destructive">
+                {loadError instanceof Error ? loadError.message : "Failed to load products"}
+              </p>
+              <Button variant="outline" size="sm" onClick={() => refetch()}>
+                {language === "ur" ? "دوبارہ کوشش کریں" : "Retry"}
+              </Button>
+            </div>
+          ) : (
+            <DataTable
+              columns={columns}
+              data={filteredProducts}
+              isLoading={isLoading}
+              searchAlign="end"
+              testIdPrefix="products"
+            />
+          )}
         </CardContent>
       </Card>
 
@@ -500,7 +555,7 @@ export default function ProductsPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{language === "ur" ? "یونٹ" : "Unit"}</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger data-testid="select-unit">
                             <SelectValue placeholder="Select unit" />
@@ -538,10 +593,23 @@ export default function ProductsPage() {
                   name="currentStock"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{language === "ur" ? "U.U^OªU^O_U?" : "Opening Stock"}</FormLabel>
+                      <FormLabel>{language === "ur" ? "ابتدائی اسٹاک" : "Opening Stock"}</FormLabel>
                       <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-opening-stock" />
+                        <Input
+                          {...field}
+                          type="number"
+                          step="0.01"
+                          disabled={Boolean(editingProduct)}
+                          data-testid="input-opening-stock"
+                        />
                       </FormControl>
+                      {editingProduct && (
+                        <p className="text-xs text-muted-foreground">
+                          {language === "ur"
+                            ? "موجودہ اسٹاک خرید، فروخت اور پروسیسنگ کے ذریعے تبدیل ہوتا ہے۔"
+                            : "Current stock changes through purchases, sales, and processing transactions."}
+                        </p>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -551,10 +619,23 @@ export default function ProductsPage() {
                   name="avgPurchasePrice"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{language === "ur" ? "OU^O3Oú U,OU_O¦" : "Avg. Purchase Price"}</FormLabel>
+                      <FormLabel>{language === "ur" ? "اوسط خرید قیمت" : "Avg. Purchase Price"}</FormLabel>
                       <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-avg-price" />
+                        <Input
+                          {...field}
+                          type="number"
+                          step="0.01"
+                          disabled={Boolean(editingProduct)}
+                          data-testid="input-avg-price"
+                        />
                       </FormControl>
+                      {editingProduct && (
+                        <p className="text-xs text-muted-foreground">
+                          {language === "ur"
+                            ? "اوسط خرید قیمت خریداری کی ٹرانزیکشنز سے حساب ہوتی ہے۔"
+                            : "Average purchase price is calculated from purchase transactions."}
+                        </p>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}

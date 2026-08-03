@@ -29,6 +29,7 @@ export type Product = {
   currentStock: string;
   avgPurchasePrice: string;
   salePrice: string;
+  reorderLevel: string;
   isActive: boolean;
   createdAt: Date | string;
 };
@@ -52,6 +53,7 @@ export type Purchase = {
   totalNetWeightKg: string;
   totalMoundQty: string;
   totalMoundRemainderKg: string;
+  moundBaseKg: number;
   chargesAdd: string;
   chargesLess: string;
   taxTypeId: number | null;
@@ -91,6 +93,7 @@ export type Sale = {
   notes: string | null;
   gatePassNumber: string | null;
   saleDate: Date | string;
+  dueDate?: Date | string | null;
   paymentMode?: string | null;
   cashReceiptId?: number | null;
   cashReceiptVoucherNo?: string | null;
