@@ -1,15 +1,16 @@
 import { MutationCache, QueryClient, QueryFunction } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/auth.store";
+import { toApiError } from "@/lib/apiError";
 
 async function throwIfResNotOk(res: Response, url?: string) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
+    const error = await toApiError(res);
     if (typeof window !== "undefined" && window.electronLog?.write) {
       window.electronLog.write(
-        `api error ${res.status} ${res.statusText || ""} ${url || ""} :: ${text}`,
+        `api error ${res.status} ${res.statusText || ""} ${url || ""} :: ${error.body}`,
       );
     }
-    throw new Error(`${res.status}: ${text}`);
+    throw error;
   }
 }
 
@@ -25,6 +26,7 @@ export async function apiRequest(
       method,
       headers: {
         ...(data ? { "Content-Type": "application/json" } : {}),
+        "X-Requested-With": "Mill-Manager",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: data ? JSON.stringify(data) : undefined,

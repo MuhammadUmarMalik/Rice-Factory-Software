@@ -8,14 +8,15 @@ export function parseRequiredDate(value: unknown, label: string): Date {
 export function parseOptionalDate(value: unknown): Date | undefined {
   if (!value || typeof value !== "string") return undefined;
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return undefined;
+  if (Number.isNaN(d.getTime())) throw new Error("Invalid date filter");
   return d;
 }
 
 export function parseOptionalInt(value: unknown): number | undefined {
   if (value == undefined || value == null || value == "") return undefined;
   const n = typeof value == "string" ? parseInt(value, 10) : Number(value);
-  return Number.isFinite(n) ? n : undefined;
+  if (!Number.isInteger(n) || n <= 0) throw new Error("Invalid numeric filter");
+  return n;
 }
 
 export function parseRequiredInt(value: unknown, label: string): number | undefined {

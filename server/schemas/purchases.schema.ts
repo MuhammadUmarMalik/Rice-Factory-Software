@@ -8,7 +8,7 @@ export const purchaseItemsSchema = z
       productId: z.number().int().positive(),
       serialNo: z.number().int().positive().optional(),
       marka: z.string().optional(),
-      bags: numericString,
+      bags: numericString.refine((value) => Number(value) >= 0, "Bags cannot be negative"),
       fillingPerBagKg: numericString,
       looseKgs: numericString.optional().default("0"),
       grossWeightKg: numericString.optional(),
@@ -17,7 +17,7 @@ export const purchaseItemsSchema = z
       netWeightKg: numericString.optional(),
       moundQty: numericString.optional(),
       moundRemainderKg: numericString.optional(),
-      rate: numericString,
+      rate: numericString.refine((value) => Number(value) > 0, "Rate must be greater than zero"),
       rateUnit: z.enum(["kg", "mound", "bag", "quintal", "ton"]),
       amount: numericString.optional(),
     })

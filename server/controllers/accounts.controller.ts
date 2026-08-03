@@ -3,6 +3,7 @@ import { z } from "zod";
 import { insertAccountSchema } from "../db/schema";
 import * as accountsService from "../services/accounts.service";
 import { parseRequiredInt } from "../utils/parse";
+import { isBusinessRuleError } from "../utils/errors";
 
 export async function listAccounts(req: Request, res: Response) {
   try {
@@ -83,7 +84,7 @@ export async function deleteAccount(req: Request, res: Response) {
     }
     res.status(204).send();
   } catch (error) {
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);

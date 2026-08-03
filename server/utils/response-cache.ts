@@ -19,6 +19,19 @@ function buildCacheKey(req: Request, keyPrefix = "cache") {
   return `${keyPrefix}:${userId}:${req.method}:${query}`;
 }
 
+/** Remove every cached entry that belongs to the given key prefix. */
+export function invalidateCache(keyPrefix: string) {
+  const prefix = `${keyPrefix}:`;
+  for (const key of responseCache.keys()) {
+    if (key.startsWith(prefix)) responseCache.delete(key);
+  }
+}
+
+/** Remove all cached responses (e.g. before a backup restore). */
+export function clearResponseCache() {
+  responseCache.clear();
+}
+
 export function cacheResponse({ ttlMs, keyPrefix }: CacheOptions) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (req.method !== "GET") return next();

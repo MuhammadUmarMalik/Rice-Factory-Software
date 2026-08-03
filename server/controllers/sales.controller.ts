@@ -4,6 +4,7 @@ import { insertSaleSchema } from "../db/schema";
 import { saleItemsSchema } from "../schemas/sales.schema";
 import * as salesService from "../services/sales.service";
 import { notifyLowStock, notifyUsers } from "../utils/notifications";
+import { isBusinessRuleError } from "../utils/errors";
 import { parseRequiredInt } from "../utils/parse";
 
 const isFutureDate = (value: Date) => {
@@ -16,6 +17,17 @@ const isFutureDate = (value: Date) => {
 const normalizeDate = (value: unknown) => {
   if (value == null || value === "") return undefined;
   return value instanceof Date ? value : new Date(value as any);
+};
+
+const dueDateIsBeforeTransaction = (dueDate: Date | undefined | null, transactionDate: Date | undefined | null) => {
+  if (!dueDate || !transactionDate) return false;
+  const dueDay = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate()).getTime();
+  const transactionDay = new Date(
+    transactionDate.getFullYear(),
+    transactionDate.getMonth(),
+    transactionDate.getDate(),
+  ).getTime();
+  return dueDay < transactionDay;
 };
 
 export async function listSales(req: Request, res: Response) {
@@ -49,9 +61,13 @@ export async function createSale(req: Request, res: Response) {
     const data = insertSaleSchema.parse({
       ...saleData,
       saleDate: normalizeDate((saleData as any).saleDate),
+      dueDate: normalizeDate((saleData as any).dueDate),
     });
     if (data.saleDate && isFutureDate(data.saleDate)) {
       return res.status(400).json({ error: "Sale date cannot be in the future" });
+    }
+    if (dueDateIsBeforeTransaction(data.dueDate, data.saleDate ?? new Date())) {
+      return res.status(400).json({ error: "Due date cannot be before the sale date" });
     }
     const parsedItems = saleItemsSchema.parse(items || []);
     const sale = await salesService.createSale(data, parsedItems);
@@ -72,7 +88,7 @@ export async function createSale(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error && error.message.toLowerCase().includes("insufficient stock")) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -92,9 +108,13 @@ export async function updateSale(req: Request, res: Response) {
     const data = insertSaleSchema.partial().parse({
       ...saleData,
       saleDate: normalizeDate((saleData as any).saleDate),
+      dueDate: normalizeDate((saleData as any).dueDate),
     });
     if (data.saleDate && isFutureDate(data.saleDate)) {
       return res.status(400).json({ error: "Sale date cannot be in the future" });
+    }
+    if (dueDateIsBeforeTransaction(data.dueDate, data.saleDate ?? existing.saleDate)) {
+      return res.status(400).json({ error: "Due date cannot be before the sale date" });
     }
     const parsedItems = saleItemsSchema.parse(items || []);
     const sale = await salesService.updateSale(id, data, parsedItems);
@@ -104,7 +124,7 @@ export async function updateSale(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -120,7 +140,7 @@ export async function deleteSale(req: Request, res: Response) {
     if (!ok) return res.status(404).json({ error: "Sale not found" });
     res.status(204).send();
   } catch (error) {
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);

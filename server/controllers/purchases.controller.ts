@@ -9,12 +9,24 @@ import * as purchasesService from "../services/purchases.service";
 import { getUserId } from "../utils/auth";
 import { notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
+import { isBusinessRuleError } from "../utils/errors";
 
 const isFutureDate = (value: Date) => {
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const check = new Date(value.getFullYear(), value.getMonth(), value.getDate());
   return check.getTime() > todayStart.getTime();
+};
+
+const dueDateIsBeforeTransaction = (dueDate: Date | undefined | null, transactionDate: Date | undefined | null) => {
+  if (!dueDate || !transactionDate) return false;
+  const dueDay = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate()).getTime();
+  const transactionDay = new Date(
+    transactionDate.getFullYear(),
+    transactionDate.getMonth(),
+    transactionDate.getDate(),
+  ).getTime();
+  return dueDay < transactionDay;
 };
 
 const normalizeChargeType = (value: unknown) => {
@@ -90,6 +102,9 @@ export async function createPurchase(req: Request, res: Response) {
     if (data.purchaseDate && isFutureDate(data.purchaseDate)) {
       return res.status(400).json({ error: "Purchase date cannot be in the future" });
     }
+    if (dueDateIsBeforeTransaction(data.dueDate, data.purchaseDate ?? new Date())) {
+      return res.status(400).json({ error: "Due date cannot be before the purchase date" });
+    }
     const parsedItems = purchaseItemsSchema.parse(items || []);
     const parsedCharges = purchaseChargesSchema.parse(normalizeCharges(charges || []));
     const moundBaseKg = (data as any).moundBaseKg == 60 ? 60 : 40;
@@ -112,6 +127,9 @@ export async function createPurchase(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
+    if (isBusinessRuleError(error)) {
+      return res.status(400).json({ error: error.message });
+    }
     console.error(error);
     res.status(500).json({ error: "Failed to create purchase" });
   }
@@ -121,10 +139,15 @@ export async function updatePurchase(req: Request, res: Response) {
   try {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid purchase id" });
+    const existing = await purchasesService.getPurchase(id);
+    if (!existing) return res.status(404).json({ error: "Purchase not found" });
     const { items, charges, ...purchaseBody } = req.body;
     const data = purchaseInputSchema.partial().parse(purchaseBody);
     if (data.purchaseDate && isFutureDate(data.purchaseDate)) {
       return res.status(400).json({ error: "Purchase date cannot be in the future" });
+    }
+    if (dueDateIsBeforeTransaction(data.dueDate, data.purchaseDate ?? existing.purchaseDate)) {
+      return res.status(400).json({ error: "Due date cannot be before the purchase date" });
     }
     const parsedItems = items ? purchaseItemsSchema.parse(items) : [];
     if (parsedItems.length === 0) {
@@ -148,6 +171,9 @@ export async function updatePurchase(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
+    if (isBusinessRuleError(error)) {
+      return res.status(400).json({ error: error.message });
+    }
     console.error(error);
     res.status(500).json({ error: "Failed to update purchase" });
   }
@@ -165,7 +191,7 @@ export async function deletePurchase(req: Request, res: Response) {
     if (!ok) return res.status(404).json({ error: "Purchase not found" });
     res.json({ success: true, message: "Purchase deleted successfully" });
   } catch (error) {
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);

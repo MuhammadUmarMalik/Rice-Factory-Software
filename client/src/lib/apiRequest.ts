@@ -1,9 +1,9 @@
 import { useAuthStore } from "@/stores/auth.store";
+import { toApiError } from "@/lib/apiError";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    throw await toApiError(res);
   }
 }
 
@@ -17,6 +17,7 @@ export async function apiRequest(
     method,
     headers: {
       ...(data ? { "Content-Type": "application/json" } : {}),
+      "X-Requested-With": "Mill-Manager",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: data ? JSON.stringify(data) : undefined,

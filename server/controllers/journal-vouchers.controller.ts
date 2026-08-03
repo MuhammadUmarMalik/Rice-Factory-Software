@@ -3,6 +3,7 @@ import { z } from "zod";
 import { journalVoucherInputSchema } from "../schemas/journal.schema";
 import * as journalService from "../services/journal-vouchers.service";
 import { parseOptionalInt, parseRequiredInt } from "../utils/parse";
+import { isBusinessRuleError } from "../utils/errors";
 
 export async function listJournalVouchers(_req: Request, res: Response) {
   try {
@@ -46,7 +47,7 @@ export async function createJournalVoucher(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -66,7 +67,7 @@ export async function updateJournalVoucher(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -83,7 +84,7 @@ export async function approveJournalVoucher(req: Request, res: Response) {
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
   } catch (error) {
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -99,7 +100,7 @@ export async function deleteJournalVoucher(req: Request, res: Response) {
     if (!ok) return res.status(404).json({ error: "Voucher not found" });
     res.status(204).send();
   } catch (error) {
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);

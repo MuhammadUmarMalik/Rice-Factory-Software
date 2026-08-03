@@ -4,6 +4,7 @@ import { expenseEntrySchema, expenseEntryUpdateSchema } from "../schemas/expense
 import { createExpense, deleteExpense, listExpenses, updateExpense } from "../services/expenses.service";
 import { getUserId, getUserRole } from "../utils/auth";
 import { parseRequiredInt } from "../utils/parse";
+import { isBusinessRuleError } from "../utils/errors";
 
 export async function listExpensesHandler(_req: Request, res: Response) {
   try {
@@ -24,7 +25,7 @@ export async function createExpenseHandler(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -44,7 +45,7 @@ export async function updateExpenseHandler(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -60,7 +61,7 @@ export async function deleteExpenseHandler(req: Request, res: Response) {
     if (!ok) return res.status(404).json({ error: "Expense not found" });
     res.status(204).send();
   } catch (error) {
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
