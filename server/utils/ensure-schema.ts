@@ -1,10 +1,16 @@
 import { execSync } from "child_process";
 import path from "path";
-import { fileURLToPath } from "url";
 import { sqlite, resolvedDbPath } from "../models/db";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const serverDir = path.resolve(__dirname, "..");
+function resolveServerDir() {
+  if (typeof __dirname === "string") {
+    return path.resolve(__dirname, "..");
+  }
+
+  return path.resolve(process.cwd(), "server");
+}
+
+const serverDir = resolveServerDir();
 
 function hasUsersTable(): boolean {
   try {
@@ -52,6 +58,19 @@ function ensureSalesColumns(): void {
     if (!names.includes("discount_amount")) {
       sqlite.prepare("ALTER TABLE sales ADD COLUMN discount_amount TEXT DEFAULT '0'").run();
     }
+    if (!names.includes("due_date")) {
+      sqlite.prepare("ALTER TABLE sales ADD COLUMN due_date INTEGER").run();
+    }
+  } catch {
+    // table may not exist yet
+  }
+
+  try {
+    const itemColumns = sqlite.prepare("PRAGMA table_info(sale_items)").all() as Array<{ name: string }>;
+    if (!itemColumns.some((column) => column.name === "quantity_kg")) {
+      sqlite.prepare("ALTER TABLE sale_items ADD COLUMN quantity_kg TEXT NOT NULL DEFAULT '0'").run();
+      sqlite.prepare(`UPDATE sale_items SET quantity_kg = CAST(CAST(quantity AS REAL) * CASE LOWER(unit) WHEN 'mound' THEN 40 WHEN 'quintal' THEN 100 WHEN 'ton' THEN 1000 ELSE 1 END AS TEXT)`).run();
+    }
   } catch {
     // table may not exist yet
   }
@@ -67,8 +86,24 @@ function ensurePurchasesColumns(): void {
     if (!names.includes("cash_payment_id")) {
       sqlite.prepare("ALTER TABLE purchases ADD COLUMN cash_payment_id INTEGER").run();
     }
+    if (!names.includes("mound_base_kg")) {
+      sqlite.prepare("ALTER TABLE purchases ADD COLUMN mound_base_kg INTEGER NOT NULL DEFAULT 40").run();
+    }
   } catch {
     // table may not exist yet
+  }
+}
+
+function ensureProductColumns(): void {
+  try {
+    const rows = sqlite.prepare("PRAGMA table_info(products)").all() as Array<{ name: string }>;
+    if (rows.length && !rows.some((column) => column.name === "reorder_level")) {
+      sqlite.prepare("ALTER TABLE products ADD COLUMN reorder_level TEXT NOT NULL DEFAULT '10'").run();
+    }
+    sqlite.prepare("CREATE UNIQUE INDEX IF NOT EXISTS uq_products_normalized_name ON products (LOWER(TRIM(name)))").run();
+  } catch (error) {
+    console.error("Unable to apply product schema safeguards:", error);
+    throw error;
   }
 }
 
@@ -86,6 +121,83 @@ function ensureCashAccounts(): void {
   const row = sqlite.prepare("SELECT id FROM cash_accounts WHERE id = 1").get();
   if (!row) {
     sqlite.prepare("INSERT INTO cash_accounts (id, account_name, opening_balance) VALUES (1, 'Main Cash', 0)").run();
+  }
+}
+
+function ensureSequencesTable(): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS sequences (
+      name TEXT PRIMARY KEY,
+      value INTEGER NOT NULL
+    );
+  `);
+}
+
+function warnOrphanedCashLinks(): void {
+  try {
+    const orphanReceipts = sqlite
+      .prepare(
+        "SELECT COUNT(*) AS n FROM sales s LEFT JOIN cash_receipts cr ON cr.id = s.cash_receipt_id " +
+          "WHERE s.cash_receipt_id IS NOT NULL AND cr.id IS NULL",
+      )
+      .get() as { n: number };
+    const orphanPayments = sqlite
+      .prepare(
+        "SELECT COUNT(*) AS n FROM purchases p LEFT JOIN cash_payments cp ON cp.id = p.cash_payment_id " +
+          "WHERE p.cash_payment_id IS NOT NULL AND cp.id IS NULL",
+      )
+      .get() as { n: number };
+    if (orphanReceipts.n > 0 || orphanPayments.n > 0) {
+      console.warn(
+        `Orphaned cash links found (sales.cash_receipt_id=${orphanReceipts.n}, purchases.cash_payment_id=${orphanPayments.n}). ` +
+          "Reconcile or null these columns before relying on cash-link foreign keys.",
+      );
+    }
+  } catch {
+    // tables may not exist yet
+  }
+}
+
+/**
+ * Repairs timestamp columns that hold TEXT instead of a Unix epoch integer.
+ *
+ * Rows written while the schema defaulted these columns to CURRENT_TIMESTAMP
+ * stored the literal "YYYY-MM-DD HH:MM:SS". Because the columns are read back
+ * as `integer(..., { mode: "timestamp" })`, Drizzle evaluated `text * 1000` and
+ * produced an Invalid Date, so the value reached the client as null. The schema
+ * now defaults to `unixepoch()`; this converts the rows written before that.
+ */
+function ensureIntegerTimestamps(): void {
+  try {
+    const tables = sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+      .all() as Array<{ name: string }>;
+
+    for (const { name: table } of tables) {
+      const columns = sqlite.prepare(`PRAGMA table_info("${table}")`).all() as Array<{
+        name: string;
+        type: string;
+      }>;
+
+      for (const column of columns) {
+        if (column.type.toLowerCase() !== "integer") continue;
+        // Only date-bearing columns; other integers never held CURRENT_TIMESTAMP.
+        if (!/(_at|_date)$/.test(column.name)) continue;
+
+        // `unixepoch` reads the stored literal as UTC, matching what
+        // CURRENT_TIMESTAMP wrote, so the instant round-trips unchanged.
+        // Values it cannot parse yield NULL and are left untouched rather than
+        // being destroyed.
+        sqlite
+          .prepare(
+            `UPDATE "${table}" SET "${column.name}" = unixepoch("${column.name}") ` +
+              `WHERE typeof("${column.name}") = 'text' AND unixepoch("${column.name}") IS NOT NULL`,
+          )
+          .run();
+      }
+    }
+  } catch (error) {
+    console.warn("Could not normalise timestamp columns:", error);
   }
 }
 
@@ -122,5 +234,9 @@ export function ensureSchema(): void {
   ensureAccountsColumns();
   ensureSalesColumns();
   ensurePurchasesColumns();
+  ensureProductColumns();
   ensureCashAccounts();
+  ensureSequencesTable();
+  ensureIntegerTimestamps();
+  warnOrphanedCashLinks();
 }

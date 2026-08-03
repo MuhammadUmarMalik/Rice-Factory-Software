@@ -3,7 +3,13 @@ import { sqliteTable, text, integer, check, uniqueIndex, AnySQLiteColumn } from 
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-const now = sql`CURRENT_TIMESTAMP`;
+// These columns are declared `integer(..., { mode: "timestamp" })`, so the
+// default must produce a Unix epoch *integer*. SQLite's CURRENT_TIMESTAMP
+// returns the TEXT literal "YYYY-MM-DD HH:MM:SS", which SQLite stores verbatim
+// (an INTEGER column keeps a non-numeric string as TEXT). Drizzle then read it
+// back as `new Date(text * 1000)` -> Invalid Date, which serialises to null, so
+// every defaulted timestamp reached the client as null.
+const now = sql`(unixepoch())`;
 
 // Users table
 export const users = sqliteTable("users", {
@@ -299,6 +305,7 @@ export const products = sqliteTable("products", {
   currentStock: text("current_stock").notNull().default("0"),
   avgPurchasePrice: text("avg_purchase_price").notNull().default("0"),
   salePrice: text("sale_price").notNull().default("0"),
+  reorderLevel: text("reorder_level").notNull().default("10"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
@@ -331,6 +338,7 @@ export const purchases = sqliteTable("purchases", {
   totalNetWeightKg: text("total_net_weight_kg").notNull().default("0"),
   totalMoundQty: text("total_mound_qty").notNull().default("0"),
   totalMoundRemainderKg: text("total_mound_remainder_kg").notNull().default("0"),
+  moundBaseKg: integer("mound_base_kg").notNull().default(40),
   chargesAdd: text("charges_add").notNull().default("0"),
   chargesLess: text("charges_less").notNull().default("0"),
   taxTypeId: integer("tax_type_id").references(() => taxTypes.id),
@@ -339,9 +347,9 @@ export const purchases = sqliteTable("purchases", {
   balanceDue: text("balance_due").notNull().default("0"),
   paidAmount: text("paid_amount").notNull().default("0"),
   notes: text("notes"),
-  purchaseDate: integer("purchase_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  purchaseDate: integer("purchase_date", { mode: "timestamp" }).notNull().default(now),
   paymentMode: text("payment_mode").default("cash"),
-  cashPaymentId: integer("cash_payment_id"),
+  cashPaymentId: integer("cash_payment_id").references(() => cashPayments.id, { onDelete: "set null" }),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
   deletedAt: integer("deleted_at", { mode: "timestamp" }),
@@ -431,7 +439,7 @@ export const processing = sqliteTable("processing", {
   wastageQuantity: text("wastage_quantity"),
   status: text("status", { enum: ["pending", "in_progress", "completed"] }).notNull().default("pending"),
   notes: text("notes"),
-  startDate: integer("start_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  startDate: integer("start_date", { mode: "timestamp" }).notNull().default(now),
   completedDate: integer("completed_date", { mode: "timestamp" }),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
@@ -465,9 +473,10 @@ export const sales = sqliteTable("sales", {
   paidAmount: text("paid_amount").notNull().default("0"),
   notes: text("notes"),
   gatePassNumber: text("gate_pass_number"),
-  saleDate: integer("sale_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  saleDate: integer("sale_date", { mode: "timestamp" }).notNull().default(now),
+  dueDate: integer("due_date", { mode: "timestamp" }),
   paymentMode: text("payment_mode").default("cash"),
-  cashReceiptId: integer("cash_receipt_id"),
+  cashReceiptId: integer("cash_receipt_id").references(() => cashReceipts.id, { onDelete: "set null" }),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
@@ -489,6 +498,7 @@ export const saleItems = sqliteTable("sale_items", {
   saleId: integer("sale_id").notNull().references(() => sales.id, { onDelete: "cascade" }),
   productId: integer("product_id").notNull().references(() => products.id),
   quantity: text("quantity").notNull(),
+  quantityKg: text("quantity_kg").notNull().default("0"),
   unit: text("unit").notNull().default("kg"),
   pricePerUnit: text("price_per_unit").notNull(),
   totalPrice: text("total_price").notNull(),
@@ -516,7 +526,7 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
   journalVoucherId: integer("journal_voucher_id").references(() => journalVouchers.id),
   contraVoucherId: integer("contra_voucher_id").references(() => contraVouchers.id),
   expenseEntryId: integer("expense_entry_id").references(() => expenseEntries.id),
-  entryDate: integer("entry_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  entryDate: integer("entry_date", { mode: "timestamp" }).notNull().default(now),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 }, (table) => ({
   ckLedgerEntriesSingleRef: check(
@@ -545,15 +555,15 @@ export const receiptVouchers = sqliteTable("receipt_vouchers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   voucherNumber: text("voucher_number").notNull().unique(),
   voucherType: text("voucher_type", { enum: ["CR", "CP", "BR", "BP"] }).notNull().default("CR"),
-  voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(now),
   settlementAccountId: integer("settlement_account_id").references(() => accounts.id), // cash/bank account used as counter-entry
   totalDebit: text("total_debit").notNull().default("0"),
   totalCredit: text("total_credit").notNull().default("0"),
   narration: text("narration"),
   createdBy: integer("created_by").references(() => users.id),
   updatedBy: integer("updated_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
   deletedAt: integer("deleted_at", { mode: "timestamp" }),
 });
 

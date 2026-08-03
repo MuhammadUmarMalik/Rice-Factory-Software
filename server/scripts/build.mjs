@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { rm, readFile } from "fs/promises";
+import { mkdir, rm, readFile } from "fs/promises";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -8,7 +8,7 @@ const serverRoot = path.resolve(__dirname, "..");
 const rootDir = path.resolve(serverRoot, "..");
 
 const allowlist = [
-  "connect-pg-simple",
+  "compression",
   "cors",
   "date-fns",
   "drizzle-orm",
@@ -16,20 +16,18 @@ const allowlist = [
   "express",
   "express-rate-limit",
   "express-session",
+  "helmet",
   "jsonwebtoken",
-  "memorystore",
   "nanoid",
-  "passport",
-  "passport-local",
-  "pg",
-  "ws",
   "zod",
   "zod-validation-error",
 ];
 
 async function buildServer() {
   const distDir = path.join(rootDir, "dist");
-  await rm(distDir, { recursive: true, force: true });
+  const serverBundlePath = path.join(distDir, "index.cjs");
+  await mkdir(distDir, { recursive: true });
+  await rm(serverBundlePath, { force: true });
   const outDir = path.join(serverRoot, "dist");
   await rm(outDir, { recursive: true, force: true });
 
@@ -47,7 +45,7 @@ async function buildServer() {
     platform: "node",
     bundle: true,
     format: "cjs",
-    outfile: path.join(rootDir, "dist", "index.cjs"),
+    outfile: serverBundlePath,
     define: {
       "process.env.NODE_ENV": '"production"',
     },

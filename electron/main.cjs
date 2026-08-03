@@ -375,25 +375,65 @@ ipcMain.handle("print-preview:open", (_event, payload) => {
   return win.id;
 });
 
+/*
+ * Paper geometry must match server/services/print/types.ts exactly. Electron,
+ * Playwright and the preview iframe each get the SAME width/height/margins, so
+ * "Print", "Download" and the on-screen preview cannot drift apart.
+ */
+const PAPER_SIZES_MM = {
+  A4: { width: 210, height: 297 },
+  A5: { width: 148, height: 210 },
+  Letter: { width: 216, height: 279 },
+  Legal: { width: 216, height: 356 },
+  Thermal80: { width: 80, height: 297 },
+};
+
+function resolvePrintGeometry(opts) {
+  const format = opts?.format || "A4";
+  const base =
+    format === "Custom"
+      ? { width: Number(opts?.widthMm) || 210, height: Number(opts?.heightMm) || 297 }
+      : PAPER_SIZES_MM[format] || PAPER_SIZES_MM.A4;
+  // Roll paper has no landscape mode.
+  const rotate = opts?.orientation === "landscape" && format !== "Thermal80";
+  const uniform = Number.isFinite(opts?.marginMm) ? Number(opts.marginMm) : 10;
+  const pick = (value) => (Number.isFinite(Number(value)) ? Number(value) : uniform);
+  return {
+    widthMm: rotate ? base.height : base.width,
+    heightMm: rotate ? base.width : base.height,
+    marginTopMm: pick(opts?.marginTopMm),
+    marginRightMm: pick(opts?.marginRightMm),
+    marginBottomMm: pick(opts?.marginBottomMm),
+    marginLeftMm: pick(opts?.marginLeftMm),
+  };
+}
+
+const MM_PER_INCH = 25.4;
+const MICRONS_PER_MM = 1000;
+
 ipcMain.handle("print-preview:render-pdf", async (_event, payload) => {
   const html = payload?.html || "";
-  const opts = payload?.options || {};
+  const geometry = resolvePrintGeometry(payload?.options || {});
   const win = await createHiddenPrintWindow(html);
   try {
-    const isCustom = opts.format === "Custom" && Number.isFinite(opts.widthMm) && Number.isFinite(opts.heightMm);
-    const width = Number(opts.widthMm || 0);
-    const height = Number(opts.heightMm || 0);
-    const customSize = {
-      width: opts.orientation === "landscape" ? height : width,
-      height: opts.orientation === "landscape" ? width : height,
-    };
     const pdf = await win.webContents.printToPDF({
-      landscape: !isCustom && opts.orientation === "landscape",
+      // Size is always explicit; `landscape` stays false because the rotation is
+      // already baked into width/height.
+      landscape: false,
       printBackground: true,
-      pageSize: isCustom
-        ? { width: Math.round(customSize.width * 1000), height: Math.round(customSize.height * 1000) }
-        : opts.format || "A4",
-      marginsType: 1,
+      pageSize: {
+        width: Math.round(geometry.widthMm * MICRONS_PER_MM),
+        height: Math.round(geometry.heightMm * MICRONS_PER_MM),
+      },
+      // printToPDF margins are in inches. `marginsType: 1` used to force zero
+      // margins here, so Electron downloads ignored the user's margin settings.
+      margins: {
+        marginType: "custom",
+        top: geometry.marginTopMm / MM_PER_INCH,
+        right: geometry.marginRightMm / MM_PER_INCH,
+        bottom: geometry.marginBottomMm / MM_PER_INCH,
+        left: geometry.marginLeftMm / MM_PER_INCH,
+      },
     });
     return Buffer.from(pdf).toString("base64");
   } finally {
@@ -405,11 +445,29 @@ ipcMain.handle("print-preview:print-html", async (_event, payload) => {
   const html = payload?.html || "";
   const silent = payload?.silent !== false;
   const deviceName = payload?.deviceName;
+  const geometry = resolvePrintGeometry(payload?.options || {});
   const win = await createHiddenPrintWindow(html);
   try {
     const result = await new Promise((resolve) => {
       win.webContents.print(
-        { silent, printBackground: true, deviceName: deviceName || "" },
+        {
+          silent,
+          printBackground: true,
+          deviceName: deviceName || "",
+          landscape: false,
+          pageSize: {
+            width: Math.round(geometry.widthMm * MICRONS_PER_MM),
+            height: Math.round(geometry.heightMm * MICRONS_PER_MM),
+          },
+          // print() margins are in pixels at 96dpi.
+          margins: {
+            marginType: "custom",
+            top: Math.round((geometry.marginTopMm / MM_PER_INCH) * 96),
+            right: Math.round((geometry.marginRightMm / MM_PER_INCH) * 96),
+            bottom: Math.round((geometry.marginBottomMm / MM_PER_INCH) * 96),
+            left: Math.round((geometry.marginLeftMm / MM_PER_INCH) * 96),
+          },
+        },
         (success, failureReason) => {
         if (!success) {
           resolve(false);
