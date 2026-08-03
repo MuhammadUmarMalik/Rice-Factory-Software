@@ -8,12 +8,12 @@ const LoginPage = lazy(() => import("@/pages/login"));
 
 function syncStoredLocale() {
   if (typeof document === "undefined") return;
-  let language = "ur";
+  let language = "en";
   try {
     const stored = localStorage.getItem("language");
     if (stored === "ur" || stored === "en") language = stored;
   } catch {
-    language = "ur";
+    language = "en";
   }
   document.documentElement.dir = language === "ur" ? "rtl" : "ltr";
   document.documentElement.lang = language;

@@ -3,6 +3,7 @@ import { useAuthStore } from "@/stores/auth.store";
 export function getAuthHeaders(extra?: HeadersInit) {
   const token = useAuthStore.getState().token;
   return {
+    "X-Requested-With": "Mill-Manager",
     ...(extra || {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   } as HeadersInit;
