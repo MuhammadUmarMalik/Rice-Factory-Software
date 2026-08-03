@@ -27,6 +27,12 @@ type GrossProfitReport = {
 };
 type GrossProfitRow = NonNullable<GrossProfitReport["rows"]>[number];
 
+const money = (value: string | number | null | undefined) =>
+  Number(value || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 export default function GrossProfitPage() {
   const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
@@ -66,19 +72,19 @@ export default function GrossProfitPage() {
         key: "netSales",
         title: "Net Sales",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.netSales || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.netSales)}</span>,
       },
       {
         key: "costOfGoodsSold",
         title: "COGS",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.costOfGoodsSold || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.costOfGoodsSold)}</span>,
       },
       {
         key: "grossProfit",
         title: "Gross Profit",
         align: "right",
-        render: (r) => <span className="font-mono font-semibold">Rs. {Number(r.grossProfit || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono font-semibold">Rs. {money(r.grossProfit)}</span>,
       },
     ],
     [],
@@ -179,7 +185,7 @@ function MetricCard({
           <SkeletonBox className="h-6 w-24" />
         ) : (
           <div className={`text-2xl font-bold font-mono ${highlight ? "text-primary" : ""}`}>
-            {Number.isFinite(value) ? value.toLocaleString() : "0"}
+            {Number.isFinite(value) ? money(value) : "0.00"}
             {suffix ? ` ${suffix}` : ""}
           </div>
         )}

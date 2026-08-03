@@ -35,6 +35,12 @@ type PeriodPurchaseReport = {
   totals: { totalAmount: string; paidAmount: string; balanceAmount: string; invoiceCount: number };
 };
 
+const money = (value: string | number | null | undefined) =>
+  Number(value || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 export default function PeriodPurchasesPage() {
   const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const [supplierId, setSupplierId] = useState<string>("all");
@@ -69,19 +75,19 @@ export default function PeriodPurchasesPage() {
         key: "totalAmount",
         title: "Total Purchases",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.totalAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.totalAmount)}</span>,
       },
       {
         key: "paidAmount",
         title: "Paid",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.paidAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.paidAmount)}</span>,
       },
       {
         key: "balanceAmount",
         title: "Balance",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.balanceAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.balanceAmount)}</span>,
       },
       { key: "invoiceCount", title: "Invoices", align: "right" },
     ],
@@ -174,7 +180,7 @@ export default function PeriodPurchasesPage() {
         <SummaryCard label="Total Purchases" value={totals.totalAmount} />
         <SummaryCard label="Paid" value={totals.paidAmount} />
         <SummaryCard label="Balance" value={totals.balanceAmount} />
-        <SummaryCard label="Invoices" value={totals.invoiceCount.toString()} highlight />
+        <SummaryCard label="Invoices" value={totals.invoiceCount.toString()} highlight decimals={0} />
       </div>
 
       <Card>
@@ -195,13 +201,13 @@ export default function PeriodPurchasesPage() {
   );
 }
 
-function SummaryCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function SummaryCard({ label, value, highlight, decimals = 2 }: { label: string; value: string; highlight?: boolean; decimals?: number }) {
   return (
     <Card className={highlight ? "border-primary/30 shadow-sm" : ""}>
       <CardContent className="pt-4 space-y-1">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
         <p className={`text-2xl font-semibold font-mono ${highlight ? "text-primary" : ""}`}>
-          {Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          {Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
         </p>
       </CardContent>
     </Card>

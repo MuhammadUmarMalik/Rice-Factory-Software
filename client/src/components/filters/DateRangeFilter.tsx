@@ -75,7 +75,7 @@ export function DateRangeFilter({
       return;
     }
     const next = getPresetRange(preset);
-    setDraftRange({ from: next.from, to: next.to });
+    setDraftRange({ from: next.from ?? undefined, to: next.to ?? undefined });
     onChange({ preset, from: next.from, to: next.to });
   };
 
@@ -106,7 +106,7 @@ export function DateRangeFilter({
       return;
     }
     const next = getPresetRange(preset);
-    setDraftRange({ from: next.from, to: next.to });
+    setDraftRange({ from: next.from ?? undefined, to: next.to ?? undefined });
     onChange({ preset, from: next.from, to: next.to });
   };
 

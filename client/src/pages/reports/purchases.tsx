@@ -42,6 +42,7 @@ type PurchaseReportRow = {
   total: string;
   paid: string;
   balance: string;
+  status: "paid" | "partial" | "unpaid";
 };
 
 type PurchaseReport = {
@@ -56,6 +57,9 @@ type PurchaseReport = {
     balance: string;
   };
 };
+
+const money = (value: string | number | null | undefined) =>
+  Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function formatSafeDate(value: string | number | Date) {
   const date = new Date(value as any);
@@ -140,17 +144,17 @@ export default function PurchaseReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.subtotal || "0").toLocaleString()}
+          Rs. {money(item.subtotal)}
         </span>
       ),
     },
     {
       key: "discount",
-      title: "Discount",
+      title: "Less Charges",
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.discount || "0").toLocaleString()}
+          Rs. {money(item.discount)}
         </span>
       ),
     },
@@ -160,7 +164,7 @@ export default function PurchaseReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.tax || "0").toLocaleString()}
+          Rs. {money(item.tax)}
         </span>
       ),
     },
@@ -170,7 +174,7 @@ export default function PurchaseReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.otherCharges || "0").toLocaleString()}
+          Rs. {money(item.otherCharges)}
         </span>
       ),
     },
@@ -180,7 +184,7 @@ export default function PurchaseReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono font-medium">
-          Rs. {parseFloat(item.total || "0").toLocaleString()}
+          Rs. {money(item.total)}
         </span>
       ),
     },
@@ -190,7 +194,7 @@ export default function PurchaseReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm">
-          Rs. {parseFloat(item.paid || "0").toLocaleString()}
+          Rs. {money(item.paid)}
         </span>
       ),
     },
@@ -200,7 +204,7 @@ export default function PurchaseReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm text-destructive">
-          Rs. {parseFloat(item.balance || "0").toLocaleString()}
+          Rs. {money(item.balance)}
         </span>
       ),
     },
@@ -208,17 +212,16 @@ export default function PurchaseReportPage() {
       key: "status",
       title: "Status",
       align: "center",
-      render: (item) => {
-        const total = parseFloat(item.total || "0");
-        const paid = parseFloat(item.paid || "0");
-        const isPaid = paid >= total && total > 0;
-        const isPartial = paid > 0 && paid < total;
-        return (
-          <Badge variant={isPaid ? "default" : isPartial ? "secondary" : "outline"} className="text-xs">
-            {isPaid ? "Paid" : isPartial ? "Partial" : "Unpaid"}
-          </Badge>
-        );
-      },
+      // Read the backend's status verbatim so the badge can never disagree with
+      // what the paymentStatus filter selects on.
+      render: (item) => (
+        <Badge
+          variant={item.status === "paid" ? "default" : item.status === "partial" ? "secondary" : "outline"}
+          className="text-xs capitalize"
+        >
+          {item.status}
+        </Badge>
+      ),
     },
   ];
 
@@ -311,7 +314,7 @@ export default function PurchaseReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
-              Rs. {parseFloat(totals.total || "0").toLocaleString()}
+              Rs. {money(totals.total)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">{rows.length} transactions</p>
           </CardContent>
@@ -324,7 +327,7 @@ export default function PurchaseReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-primary ${isRTL ? "text-right" : ""}`}>
-              Rs. {parseFloat(totals.paid || "0").toLocaleString()}
+              Rs. {money(totals.paid)}
             </div>
           </CardContent>
         </Card>
@@ -336,7 +339,7 @@ export default function PurchaseReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-destructive ${isRTL ? "text-right" : ""}`}>
-              Rs. {parseFloat(totals.balance || "0").toLocaleString()}
+              Rs. {money(totals.balance)}
             </div>
           </CardContent>
         </Card>
