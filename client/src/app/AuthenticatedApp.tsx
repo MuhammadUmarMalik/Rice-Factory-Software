@@ -11,6 +11,8 @@ import { useAuthStore } from "@/stores/auth.store";
 import { fetchWithAuth } from "@/lib/authFetch";
 import { ensureMonoFonts } from "@/lib/fonts";
 import { RouteSkeleton } from "@/components/loading/route-skeleton";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { Roles, can, readAccountsRoles, readPayrollRoles, readProductsRoles } from "@/lib/roles";
 
 const AppSidebar = lazy(() =>
   import("@/components/app-sidebar").then((mod) => ({ default: mod.AppSidebar })),
@@ -23,53 +25,74 @@ const ShortcutManager = lazy(() =>
 );
 
 // Route-level code splitting keeps authenticated pages out of the login bundle.
+function withRoles(
+  Component: React.LazyExoticComponent<React.ComponentType>,
+  roles: readonly string[],
+): React.ComponentType {
+  return function RoleGuarded() {
+    const user = useAuthStore((state) => state.user);
+    const [, setLocation] = useLocation();
+    const allowed = can(user?.role, roles);
+    useEffect(() => {
+      if (!allowed) setLocation("/");
+    }, [allowed, setLocation]);
+    if (!allowed) return null;
+    return <Component />;
+  };
+}
+
 const NotFound = lazy(() => import("@/pages/not-found"));
-const Dashboard = lazy(() => import("@/pages/dashboard"));
-const Products = lazy(() => import("@/pages/products"));
-const Purchases = lazy(() => import("@/pages/purchases"));
-const Processing = lazy(() => import("@/pages/processing"));
-const Sales = lazy(() => import("@/pages/sales"));
-const Settings = lazy(() => import("@/pages/settings"));
-const UsersAdminPage = lazy(() => import("@/pages/admin/users"));
-const Customers = lazy(() => import("@/pages/accounts/customers"));
-const Suppliers = lazy(() => import("@/pages/accounts/suppliers"));
-const Banks = lazy(() => import("@/pages/accounts/banks"));
-const StockReport = lazy(() => import("@/pages/reports/stock"));
-const PurchaseReport = lazy(() => import("@/pages/reports/purchases"));
-const SalesReport = lazy(() => import("@/pages/reports/sales"));
-const BardanaReport = lazy(() => import("@/pages/reports/bardana"));
-const LessReport = lazy(() => import("@/pages/reports/less"));
-const Ledger = lazy(() => import("@/pages/reports/ledger"));
-const TrialBalance = lazy(() => import("@/pages/reports/trial-balance"));
-const ProfitLoss = lazy(() => import("@/pages/reports/profit-loss"));
-const PrintPreviewPage = lazy(() => import("@/pages/print-preview"));
-const PeriodPurchases = lazy(() => import("@/pages/reports/period-purchases"));
-const PeriodSales = lazy(() => import("@/pages/reports/period-sales"));
-const GrossProfit = lazy(() => import("@/pages/reports/gross-profit"));
-const OutstandingCustomers = lazy(() => import("@/pages/reports/outstanding-customers"));
-const OutstandingSuppliers = lazy(() => import("@/pages/reports/outstanding-suppliers"));
-const IncomeStatement = lazy(() => import("@/pages/reports/income-statement"));
-const BalanceSheet = lazy(() => import("@/pages/reports/balance-sheet"));
-const Capital = lazy(() => import("@/pages/reports/capital"));
-const SalaryAccount = lazy(() => import("@/pages/reports/salary"));
-const DayBook = lazy(() => import("@/pages/reports/day-book"));
-const DayBookSales = lazy(() => import("@/pages/reports/day-book-sales"));
-const DayBookPurchases = lazy(() => import("@/pages/reports/day-book-purchases"));
-const DayBookCash = lazy(() => import("@/pages/reports/day-book-cash"));
-const DayBookSalesReturns = lazy(() => import("@/pages/reports/day-book-sales-returns"));
-const DayBookPurchaseReturns = lazy(() => import("@/pages/reports/day-book-purchase-returns"));
-const DayBookGeneralJournal = lazy(() => import("@/pages/reports/day-book-general-journal"));
-const Receipts = lazy(() => import("@/pages/receipts"));
-const PaymentsPage = lazy(() => import("@/pages/payments"));
-const Journal = lazy(() => import("@/pages/journal"));
-const EmployeesPage = lazy(() => import("@/pages/hr/employees"));
-const PayrollPage = lazy(() => import("@/pages/hr/payroll"));
-const ExpensesPage = lazy(() => import("@/pages/expenses"));
-const CashDashboard = lazy(() => import("@/pages/Cash/CashDashboard"));
-const CashLedger = lazy(() => import("@/pages/Cash/CashLedger"));
+const Dashboard = withRoles(lazy(() => import("@/pages/dashboard")), Roles.all);
+const Products = withRoles(lazy(() => import("@/pages/products")), readProductsRoles);
+const Purchases = withRoles(lazy(() => import("@/pages/purchases")), Roles.purchasing);
+const Processing = withRoles(lazy(() => import("@/pages/processing")), Roles.ops);
+const Sales = withRoles(lazy(() => import("@/pages/sales")), Roles.sales);
+const Settings = withRoles(lazy(() => import("@/pages/settings")), Roles.settings);
+const UsersAdminPage = withRoles(lazy(() => import("@/pages/admin/users")), Roles.adminOnly);
+const Customers = withRoles(lazy(() => import("@/pages/accounts/customers")), readAccountsRoles);
+const Suppliers = withRoles(lazy(() => import("@/pages/accounts/suppliers")), readAccountsRoles);
+const Banks = withRoles(lazy(() => import("@/pages/accounts/banks")), readAccountsRoles);
+const StockReport = withRoles(lazy(() => import("@/pages/reports/stock")), Roles.purchasing);
+const PurchaseReport = withRoles(lazy(() => import("@/pages/reports/purchases")), Roles.purchasing);
+const SalesReport = withRoles(lazy(() => import("@/pages/reports/sales")), Roles.sales);
+const BardanaReport = withRoles(lazy(() => import("@/pages/reports/bardana")), Roles.purchasing);
+const LessReport = withRoles(lazy(() => import("@/pages/reports/less")), Roles.purchasing);
+const Ledger = withRoles(lazy(() => import("@/pages/reports/ledger")), Roles.finance);
+const TrialBalance = withRoles(lazy(() => import("@/pages/reports/trial-balance")), Roles.finance);
+const ProfitLoss = withRoles(lazy(() => import("@/pages/reports/profit-loss")), Roles.finance);
+const PrintPreviewPage = withRoles(lazy(() => import("@/pages/print-preview")), Roles.all);
+const PeriodPurchases = withRoles(lazy(() => import("@/pages/reports/period-purchases")), Roles.finance);
+const PeriodSales = withRoles(lazy(() => import("@/pages/reports/period-sales")), Roles.finance);
+const GrossProfit = withRoles(lazy(() => import("@/pages/reports/gross-profit")), Roles.finance);
+const OutstandingCustomers = withRoles(lazy(() => import("@/pages/reports/outstanding-customers")), Roles.finance);
+const OutstandingSuppliers = withRoles(lazy(() => import("@/pages/reports/outstanding-suppliers")), Roles.finance);
+const IncomeStatement = withRoles(lazy(() => import("@/pages/reports/income-statement")), Roles.finance);
+const BalanceSheet = withRoles(lazy(() => import("@/pages/reports/balance-sheet")), Roles.finance);
+const Capital = withRoles(lazy(() => import("@/pages/reports/capital")), Roles.finance);
+const SalaryAccount = withRoles(lazy(() => import("@/pages/reports/salary")), Roles.finance);
+const DayBook = withRoles(lazy(() => import("@/pages/reports/day-book")), Roles.finance);
+const DayBookSales = withRoles(lazy(() => import("@/pages/reports/day-book-sales")), Roles.finance);
+const DayBookPurchases = withRoles(lazy(() => import("@/pages/reports/day-book-purchases")), Roles.finance);
+const DayBookCash = withRoles(lazy(() => import("@/pages/reports/day-book-cash")), Roles.finance);
+const DayBookSalesReturns = withRoles(lazy(() => import("@/pages/reports/day-book-sales-returns")), Roles.finance);
+const DayBookPurchaseReturns = withRoles(lazy(() => import("@/pages/reports/day-book-purchase-returns")), Roles.finance);
+const DayBookGeneralJournal = withRoles(lazy(() => import("@/pages/reports/day-book-general-journal")), Roles.finance);
+const Receipts = withRoles(lazy(() => import("@/pages/receipts")), Roles.finance);
+const PaymentsPage = withRoles(lazy(() => import("@/pages/payments")), Roles.finance);
+const Journal = withRoles(lazy(() => import("@/pages/journal")), Roles.finance);
+const EmployeesPage = withRoles(lazy(() => import("@/pages/hr/employees")), Roles.all);
+const PayrollPage = withRoles(lazy(() => import("@/pages/hr/payroll")), readPayrollRoles);
+const ExpensesPage = withRoles(lazy(() => import("@/pages/expenses")), Roles.finance);
+const CashDashboard = withRoles(lazy(() => import("@/pages/Cash/CashDashboard")), Roles.finance);
+const CashLedger = withRoles(lazy(() => import("@/pages/Cash/CashLedger")), Roles.finance);
 
 function Router() {
+  const [location] = useLocation();
   return (
+    // A page that throws while rendering used to blow past the single root
+    // boundary and blank the whole shell. Keeping the boundary here preserves
+    // the sidebar/header, and keying it on the path resets it on navigation.
+    <ErrorBoundary key={location}>
     <Suspense fallback={<RouteSkeleton />}>
       <Switch>
         <Route path="/" component={Dashboard} />
@@ -132,6 +155,7 @@ function Router() {
         <Route component={NotFound} />
       </Switch>
     </Suspense>
+    </ErrorBoundary>
   );
 }
 

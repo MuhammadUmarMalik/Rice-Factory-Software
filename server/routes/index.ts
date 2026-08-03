@@ -26,11 +26,32 @@ import notificationsRoutes from "./notifications.routes";
 import dataManagementRoutes from "./data-management.routes";
 import daybooksRoutes from "./daybooks.routes";
 import { authenticate, requireAuth } from "../utils/auth";
+import { invalidateCache } from "../utils/response-cache";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use(authRoutes);
   app.use("/api", authenticate);
+  app.use("/api", (req, res, next) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(req.method) || req.headers.authorization) return next();
+    if (req.get("X-Requested-With") !== "Mill-Manager") {
+      return res.status(403).json({ error: "Missing CSRF protection header" });
+    }
+    const fetchSite = req.get("Sec-Fetch-Site");
+    if (fetchSite === "cross-site") return res.status(403).json({ error: "Cross-site request blocked" });
+    return next();
+  });
   app.use("/api", requireAuth);
+
+  // Any successful state-changing request can affect report data, so the
+  // 30s report response cache must be invalidated on mutations.
+  app.use("/api", (req, res, next) => {
+    res.on("finish", () => {
+      if (req.method !== "GET" && res.statusCode >= 200 && res.statusCode < 300) {
+        invalidateCache("reports");
+      }
+    });
+    next();
+  });
 
   app.use(settingsRoutes);
   app.use(dataManagementRoutes);

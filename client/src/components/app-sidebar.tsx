@@ -35,94 +35,102 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useLanguage } from "@/contexts/language-context";
 import { useAuthStore } from "@/stores/auth.store";
 import { apiRequest } from "@/lib/queryClient";
+import { Roles, can, readAccountsRoles, readPayrollRoles, readProductsRoles } from "@/lib/roles";
 
 const mainMenuItems = [
-  { title: "dashboard", url: "/", icon: LayoutDashboard },
-  { title: "products", url: "/products", icon: Package },
-  { title: "purchases", url: "/purchases", icon: ShoppingCart },
-  { title: "cashReceipts", url: "/receipts", icon: Receipt },
-  { title: "cashPayments", url: "/payments", icon: Receipt },
-  { title: "expenses", url: "/expenses", icon: ReceiptText },
-  { title: "cashInHand", url: "/cash", icon: Wallet },
-  { title: "journalVoucher", url: "/journal", icon: FileText },
-  { title: "processing", url: "/processing", icon: Factory },
-  { title: "sales", url: "/sales", icon: TrendingUp },
+  { title: "dashboard", url: "/", icon: LayoutDashboard, roles: Roles.all },
+  { title: "products", url: "/products", icon: Package, roles: readProductsRoles },
+  { title: "purchases", url: "/purchases", icon: ShoppingCart, roles: Roles.purchasing },
+  { title: "cashReceipts", url: "/receipts", icon: Receipt, roles: Roles.finance },
+  { title: "cashPayments", url: "/payments", icon: Receipt, roles: Roles.finance },
+  { title: "expenses", url: "/expenses", icon: ReceiptText, roles: Roles.finance },
+  { title: "cashInHand", url: "/cash", icon: Wallet, roles: Roles.finance },
+  { title: "journalVoucher", url: "/journal", icon: FileText, roles: Roles.finance },
+  { title: "processing", url: "/processing", icon: Factory, roles: Roles.ops },
+  { title: "sales", url: "/sales", icon: TrendingUp, roles: Roles.sales },
 ];
 
 const accountsSubmenu = [
-  { title: "customers", url: "/accounts/customers" },
-  { title: "suppliers", url: "/accounts/suppliers" },
-  { title: "banks", url: "/accounts/banks" },
+  { title: "customers", url: "/accounts/customers", roles: readAccountsRoles },
+  { title: "suppliers", url: "/accounts/suppliers", roles: readAccountsRoles },
+  { title: "banks", url: "/accounts/banks", roles: readAccountsRoles },
 ];
 
 const reportsSubmenuGroups = [
   {
     label: "operations",
     items: [
-      { title: "stockReport", url: "/reports/stock" },
-      { title: "purchaseReport", url: "/reports/purchases" },
-      { title: "bardanaReport", url: "/reports/bardana" },
-      { title: "lessReport", url: "/reports/less" },
-      { title: "salesReport", url: "/reports/sales" },
-      { title: "periodPurchases", url: "/reports/period-purchases" },
-      { title: "periodSales", url: "/reports/period-sales" },
-      { title: "grossProfit", url: "/reports/gross-profit" },
+      { title: "stockReport", url: "/reports/stock", roles: Roles.purchasing },
+      { title: "purchaseReport", url: "/reports/purchases", roles: Roles.purchasing },
+      { title: "bardanaReport", url: "/reports/bardana", roles: Roles.purchasing },
+      { title: "lessReport", url: "/reports/less", roles: Roles.purchasing },
+      { title: "salesReport", url: "/reports/sales", roles: Roles.sales },
+      { title: "periodPurchases", url: "/reports/period-purchases", roles: Roles.finance },
+      { title: "periodSales", url: "/reports/period-sales", roles: Roles.finance },
+      { title: "grossProfit", url: "/reports/gross-profit", roles: Roles.finance },
     ],
   },
   {
     label: "dayBookGroup",
     items: [
-      { title: "dayBook", url: "/reports/day-book" },
-      { title: "dayBookSales", url: "/reports/day-book-sales" },
-      { title: "dayBookPurchases", url: "/reports/day-book-purchases" },
-      { title: "dayBookCash", url: "/reports/day-book-cash" },
-      { title: "dayBookSalesReturns", url: "/reports/day-book-sales-returns" },
-      { title: "dayBookPurchaseReturns", url: "/reports/day-book-purchase-returns" },
-      { title: "dayBookGeneralJournal", url: "/reports/day-book-general-journal" },
+      { title: "dayBook", url: "/reports/day-book", roles: Roles.finance },
+      { title: "dayBookSales", url: "/reports/day-book-sales", roles: Roles.finance },
+      { title: "dayBookPurchases", url: "/reports/day-book-purchases", roles: Roles.finance },
+      { title: "dayBookCash", url: "/reports/day-book-cash", roles: Roles.finance },
+      { title: "dayBookSalesReturns", url: "/reports/day-book-sales-returns", roles: Roles.finance },
+      { title: "dayBookPurchaseReturns", url: "/reports/day-book-purchase-returns", roles: Roles.finance },
+      { title: "dayBookGeneralJournal", url: "/reports/day-book-general-journal", roles: Roles.finance },
     ],
   },
   {
     label: "receivablesPayables",
     items: [
-      { title: "outstandingCustomers", url: "/reports/outstanding-customers" },
-      { title: "outstandingSuppliers", url: "/reports/outstanding-suppliers" },
+      { title: "outstandingCustomers", url: "/reports/outstanding-customers", roles: Roles.finance },
+      { title: "outstandingSuppliers", url: "/reports/outstanding-suppliers", roles: Roles.finance },
     ],
   },
   {
     label: "cashAndLedger",
     items: [
-      { title: "cashLedger", url: "/reports/cash-ledger" },
-      { title: "ledger", url: "/reports/ledger" },
+      { title: "cashLedger", url: "/reports/cash-ledger", roles: Roles.finance },
+      { title: "ledger", url: "/reports/ledger", roles: Roles.finance },
     ],
   },
   {
     label: "financialStatements",
     items: [
-      { title: "trialBalance", url: "/reports/trial-balance" },
-      { title: "profitLoss", url: "/reports/profit-loss" },
-      { title: "incomeStatement", url: "/reports/income-statement" },
-      { title: "balanceSheet", url: "/reports/balance-sheet" },
-      { title: "capitalAccount", url: "/reports/capital" },
+      { title: "trialBalance", url: "/reports/trial-balance", roles: Roles.finance },
+      { title: "profitLoss", url: "/reports/profit-loss", roles: Roles.finance },
+      { title: "incomeStatement", url: "/reports/income-statement", roles: Roles.finance },
+      { title: "balanceSheet", url: "/reports/balance-sheet", roles: Roles.finance },
+      { title: "capitalAccount", url: "/reports/capital", roles: Roles.finance },
     ],
   },
   {
     label: "payroll",
-    items: [{ title: "salaryAccount", url: "/reports/salary" }],
+    items: [{ title: "salaryAccount", url: "/reports/salary", roles: Roles.finance }],
   },
 ];
 
 const hrSubmenu = [
-  { title: "employees", url: "/hr/employees" },
-  { title: "payroll", url: "/hr/payroll" },
+  { title: "employees", url: "/hr/employees", roles: Roles.all },
+  { title: "payroll", url: "/hr/payroll", roles: readPayrollRoles },
 ];
 
 export function AppSidebar() {
   const [location, setLocation] = useLocation();
   const { t, isRTL } = useLanguage();
   const user = useAuthStore((state) => state.user);
-  const isAdmin = user?.role === "admin";
+  const isAdmin = can(user?.role, Roles.adminOnly);
   const clearSession = useAuthStore((state) => state.logout);
   const [reportsOpen, setReportsOpen] = useState(false);
+
+  const visibleMainMenu = mainMenuItems.filter((item) => can(user?.role, item.roles));
+  const visibleAccountsSubmenu = accountsSubmenu.filter((item) => can(user?.role, item.roles));
+  const visibleReportsGroups = reportsSubmenuGroups
+    .map((group) => ({ ...group, items: group.items.filter((item) => can(user?.role, item.roles)) }))
+    .filter((group) => group.items.length > 0);
+  const visibleHrSubmenu = hrSubmenu.filter((item) => can(user?.role, item.roles));
 
   const initials = (() => {
     const name = user?.fullName || user?.username || "";
@@ -146,7 +154,7 @@ export function AppSidebar() {
     return location === url || location.startsWith(`${url}/`);
   };
 
-  const isReportsRoute = reportsSubmenuGroups.some((group) =>
+  const isReportsRoute = visibleReportsGroups.some((group) =>
     group.items.some((item) => isActive(item.url))
   );
 
@@ -176,7 +184,7 @@ export function AppSidebar() {
             <SidebarGroupLabel className={isRTL ? "font-urdu text-right" : ""}>{t("menu")}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {mainMenuItems.map((item) => (
+                {visibleMainMenu.map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild isActive={isActive(item.url)} data-testid={`nav-${item.title}`}>
                       <Link href={item.url} className={isRTL ? "flex-row-reverse" : ""}>
@@ -187,108 +195,116 @@ export function AppSidebar() {
                   </SidebarMenuItem>
                 ))}
 
-                <Collapsible defaultOpen className="group/collapsible">
-                  <SidebarMenuItem>
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
-                        <Users className="h-4 w-4" />
-                        <span className={isRTL ? "font-urdu" : ""}>{t("accounts")}</span>
-                        <ChevronDown className={`${isRTL ? "mr-auto" : "ml-auto"} h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180`} />
-                      </SidebarMenuButton>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarMenuSub>
-                        {accountsSubmenu.map((subItem) => (
-                          <SidebarMenuSubItem key={subItem.title}>
-                            <SidebarMenuSubButton asChild isActive={isActive(subItem.url)} data-testid={`nav-${subItem.title}`}>
-                              <Link
-                                href={subItem.url}
-                                title={t(subItem.title as any)}
-                                className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
-                              >
-                                <span>{t(subItem.title as any)}</span>
-                              </Link>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        ))}
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
-                  </SidebarMenuItem>
-                </Collapsible>
+                {visibleAccountsSubmenu.length > 0 && (
+                  <Collapsible defaultOpen className="group/collapsible">
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
+                          <Users className="h-4 w-4" />
+                          <span className={isRTL ? "font-urdu" : ""}>{t("accounts")}</span>
+                          <ChevronDown className={`${isRTL ? "mr-auto" : "ml-auto"} h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180`} />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {visibleAccountsSubmenu.map((subItem) => (
+                            <SidebarMenuSubItem key={subItem.title}>
+                              <SidebarMenuSubButton asChild isActive={isActive(subItem.url)} data-testid={`nav-${subItem.title}`}>
+                                <Link
+                                  href={subItem.url}
+                                  title={t(subItem.title as any)}
+                                  className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
+                                >
+                                  <span>{t(subItem.title as any)}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </SidebarMenuItem>
+                  </Collapsible>
+                )}
 
-                <Collapsible className="group/collapsible" open={isReportsRoute || reportsOpen} onOpenChange={setReportsOpen}>
-                  <SidebarMenuItem>
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
-                        <FileText className="h-4 w-4" />
-                        <span className={isRTL ? "font-urdu" : ""}>{t("reports")}</span>
-                        <ChevronDown className={`${isRTL ? "mr-auto" : "ml-auto"} h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180`} />
-                      </SidebarMenuButton>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarMenuSub>
-                        {reportsSubmenuGroups.map((group) => (
-                          <div key={group.label} className="space-y-1">
-                            <div className={`px-2 pt-2 text-xs font-semibold text-muted-foreground ${isRTL ? "text-right" : ""}`}>
-                              {t(group.label as any)}
+                {visibleReportsGroups.length > 0 && (
+                  <Collapsible className="group/collapsible" open={isReportsRoute || reportsOpen} onOpenChange={setReportsOpen}>
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
+                          <FileText className="h-4 w-4" />
+                          <span className={isRTL ? "font-urdu" : ""}>{t("reports")}</span>
+                          <ChevronDown className={`${isRTL ? "mr-auto" : "ml-auto"} h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180`} />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {visibleReportsGroups.map((group) => (
+                            <div key={group.label} className="space-y-1">
+                              <div className={`px-2 pt-2 text-xs font-semibold text-muted-foreground ${isRTL ? "text-right" : ""}`}>
+                                {t(group.label as any)}
+                              </div>
+                              {group.items.map((subItem) => (
+                                <SidebarMenuSubItem key={subItem.title}>
+                                  <SidebarMenuSubButton asChild isActive={isActive(subItem.url)} data-testid={`nav-${subItem.title}`}>
+                                    <Link
+                                      href={subItem.url}
+                                      title={t(subItem.title as any)}
+                                      className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
+                                    >
+                                      <span>{t(subItem.title as any)}</span>
+                                    </Link>
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              ))}
                             </div>
-                            {group.items.map((subItem) => (
-                              <SidebarMenuSubItem key={subItem.title}>
-                                <SidebarMenuSubButton asChild isActive={isActive(subItem.url)} data-testid={`nav-${subItem.title}`}>
-                                  <Link
-                                    href={subItem.url}
-                                    title={t(subItem.title as any)}
-                                    className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
-                                  >
-                                    <span>{t(subItem.title as any)}</span>
-                                  </Link>
-                                </SidebarMenuSubButton>
-                              </SidebarMenuSubItem>
-                            ))}
-                          </div>
-                        ))}
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
-                  </SidebarMenuItem>
-                </Collapsible>
+                          ))}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </SidebarMenuItem>
+                  </Collapsible>
+                )}
 
-                <Collapsible className="group/collapsible">
+                {visibleHrSubmenu.length > 0 && (
+                  <Collapsible className="group/collapsible">
+                    <SidebarMenuItem>
+                      <CollapsibleTrigger asChild>
+                        <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
+                          <UserRound className="h-4 w-4" />
+                          <span className={isRTL ? "font-urdu" : ""}>{t("hrPayroll")}</span>
+                          <ChevronDown className={`${isRTL ? "mr-auto" : "ml-auto"} h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180`} />
+                        </SidebarMenuButton>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {visibleHrSubmenu.map((subItem) => (
+                            <SidebarMenuSubItem key={subItem.title}>
+                              <SidebarMenuSubButton asChild isActive={isActive(subItem.url)} data-testid={`nav-${subItem.title}`}>
+                                <Link
+                                  href={subItem.url}
+                                  title={t(subItem.title as any)}
+                                  className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
+                                >
+                                  <span>{t(subItem.title as any)}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          ))}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </SidebarMenuItem>
+                  </Collapsible>
+                )}
+
+                {can(user?.role, Roles.settings) && (
                   <SidebarMenuItem>
-                    <CollapsibleTrigger asChild>
-                      <SidebarMenuButton className={isRTL ? "flex-row-reverse" : ""}>
-                        <UserRound className="h-4 w-4" />
-                        <span className={isRTL ? "font-urdu" : ""}>{t("hrPayroll")}</span>
-                        <ChevronDown className={`${isRTL ? "mr-auto" : "ml-auto"} h-4 w-4 transition-transform group-data-[state=open]/collapsible:rotate-180`} />
-                      </SidebarMenuButton>
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <SidebarMenuSub>
-                        {hrSubmenu.map((subItem) => (
-                          <SidebarMenuSubItem key={subItem.title}>
-                            <SidebarMenuSubButton asChild isActive={isActive(subItem.url)} data-testid={`nav-${subItem.title}`}>
-                              <Link
-                                href={subItem.url}
-                                title={t(subItem.title as any)}
-                                className={isRTL ? "flex-row-reverse font-urdu min-w-0" : "min-w-0"}
-                              >
-                                <span>{t(subItem.title as any)}</span>
-                              </Link>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        ))}
-                      </SidebarMenuSub>
-                    </CollapsibleContent>
+                    <SidebarMenuButton asChild isActive={isActive("/settings")} data-testid="nav-settings">
+                      <Link href="/settings" className={isRTL ? "flex-row-reverse" : ""}>
+                        <Cog className="h-4 w-4" />
+                        <span className={isRTL ? "font-urdu" : ""}>{t("settings")}</span>
+                      </Link>
+                    </SidebarMenuButton>
                   </SidebarMenuItem>
-                </Collapsible>
-
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={isActive("/settings")} data-testid="nav-settings">
-                    <Link href="/settings" className={isRTL ? "flex-row-reverse" : ""}>
-                      <Cog className="h-4 w-4" />
-                      <span className={isRTL ? "font-urdu" : ""}>{t("settings")}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                )}
                 {isAdmin && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={isActive("/admin/users")} data-testid="nav-users">

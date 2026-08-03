@@ -1,4 +1,5 @@
 import type { PrintableDocumentPayload } from "../../types/print";
+import { Roles } from "../../utils/roles";
 import {
   mapBardanaReport,
   mapBalanceSheet,
@@ -40,29 +41,29 @@ type DocConfig = {
 };
 
 export const docRegistry: DocConfig[] = [
-  { key: "invoice.sales", mapper: mapSalesInvoice },
-  { key: "invoice.purchase", mapper: mapPurchaseInvoice },
-  { key: "voucher.cashReceipt", mapper: mapCashVoucher },
-  { key: "voucher.cashPayment", mapper: mapCashVoucher },
-  { key: "voucher.journal", mapper: mapJournalVoucher },
-  { key: "report.stock", mapper: mapStockReport },
-  { key: "report.purchases", mapper: mapPurchaseReport },
-  { key: "report.sales", mapper: mapSalesReport },
-  { key: "report.bardana", mapper: mapBardanaReport },
-  { key: "report.less", mapper: mapLessReport },
-  { key: "report.periodPurchases", mapper: mapPeriodPurchases },
-  { key: "report.periodSales", mapper: mapPeriodSales },
-  { key: "report.grossProfit", mapper: mapGrossProfit },
-  { key: "report.dayBook", mapper: mapDayBook },
-  { key: "report.outstandingCustomers", mapper: mapOutstandingCustomers },
-  { key: "report.outstandingSuppliers", mapper: mapOutstandingSuppliers },
-  { key: "report.ledger", mapper: mapLedgerReport, cache: true },
-  { key: "report.trialBalance", mapper: mapTrialBalance, cache: true },
-  { key: "statement.balanceSheet", mapper: mapBalanceSheet, cache: true },
-  { key: "statement.incomeStatement", mapper: mapIncomeStatement },
-  { key: "statement.profitLoss", mapper: mapProfitLoss },
-  { key: "statement.capital", mapper: mapCapital },
-  { key: "report.salary", mapper: mapSalary },
+  { key: "invoice.sales", mapper: mapSalesInvoice, roles: Roles.sales },
+  { key: "invoice.purchase", mapper: mapPurchaseInvoice, roles: Roles.purchasing },
+  { key: "voucher.cashReceipt", mapper: mapCashVoucher, roles: Roles.finance },
+  { key: "voucher.cashPayment", mapper: mapCashVoucher, roles: Roles.finance },
+  { key: "voucher.journal", mapper: mapJournalVoucher, roles: Roles.finance },
+  { key: "report.stock", mapper: mapStockReport, roles: Roles.ops },
+  { key: "report.purchases", mapper: mapPurchaseReport, roles: Roles.finance },
+  { key: "report.sales", mapper: mapSalesReport, roles: Roles.finance },
+  { key: "report.bardana", mapper: mapBardanaReport, roles: Roles.finance },
+  { key: "report.less", mapper: mapLessReport, roles: Roles.finance },
+  { key: "report.periodPurchases", mapper: mapPeriodPurchases, roles: Roles.finance },
+  { key: "report.periodSales", mapper: mapPeriodSales, roles: Roles.finance },
+  { key: "report.grossProfit", mapper: mapGrossProfit, roles: Roles.finance },
+  { key: "report.dayBook", mapper: mapDayBook, roles: Roles.finance },
+  { key: "report.outstandingCustomers", mapper: mapOutstandingCustomers, roles: Roles.finance },
+  { key: "report.outstandingSuppliers", mapper: mapOutstandingSuppliers, roles: Roles.finance },
+  { key: "report.ledger", mapper: mapLedgerReport, roles: Roles.finance, cache: true },
+  { key: "report.trialBalance", mapper: mapTrialBalance, roles: Roles.finance, cache: true },
+  { key: "statement.balanceSheet", mapper: mapBalanceSheet, roles: Roles.finance, cache: true },
+  { key: "statement.incomeStatement", mapper: mapIncomeStatement, roles: Roles.finance },
+  { key: "statement.profitLoss", mapper: mapProfitLoss, roles: Roles.finance },
+  { key: "statement.capital", mapper: mapCapital, roles: Roles.finance },
+  { key: "report.salary", mapper: mapSalary, roles: Roles.hr },
 ];
 
 export function getDocConfig(docKey: string) {
