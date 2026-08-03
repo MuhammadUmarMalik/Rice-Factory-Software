@@ -32,6 +32,14 @@ function parseAmount(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// Query-string paging values arrive unvalidated; a non-numeric `limit`/`offset`
+// used to produce NaN and make better-sqlite3 throw (500 instead of a sane page).
+function clampInt(value: unknown, fallback: number, min: number, max: number) {
+  const n = Math.trunc(Number(value));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
+}
+
 function normalizeEpochMs(value: unknown) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
@@ -60,6 +68,25 @@ function toEndOfDayMs(value?: Date | string | number | null) {
   const d = new Date(ms);
   d.setHours(23, 59, 59, 999);
   return d.getTime();
+}
+
+function columnExists(tableName: string, columnName: string) {
+  try {
+    const cols = sqlite.prepare(`PRAGMA table_info(${tableName})`).all() as any[];
+    return cols.some((c) => c.name === columnName);
+  } catch {
+    return false;
+  }
+}
+
+function addColumnIfMissing(tableName: string, columnName: string, ddlType: string) {
+  if (!tableExists(tableName)) return;
+  if (columnExists(tableName, columnName)) return;
+  try {
+    sqlite.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${ddlType}`);
+  } catch (error) {
+    console.error(`Failed to add ${tableName}.${columnName}`, error);
+  }
 }
 
 function tableExists(tableName: string) {
@@ -101,6 +128,21 @@ function sumLines(lines: JournalLineInput[]) {
     },
     { debit: 0, credit: 0 },
   );
+}
+
+/**
+ * Pagination is opt-in. The sales/purchases daybooks previously defaulted to
+ * `LIMIT 100`, so any period with more than 100 invoices was silently truncated
+ * — the on-screen "Total:" row, the print document and the CSV export all
+ * reported the first 100 rows only, with no indication that anything was
+ * missing. Every other daybook list already returns the full set, so this
+ * matches them: a limit is applied only when the caller explicitly asks for one.
+ */
+function pageClause(filters: ListFilters) {
+  if (filters.limit == null || filters.limit === ("" as any)) return "";
+  const limit = clampInt(filters.limit, 100, 1, 500);
+  const offset = clampInt(filters.offset ?? 0, 0, 0, Number.MAX_SAFE_INTEGER);
+  return ` LIMIT ${limit} OFFSET ${offset}`;
 }
 
 function safeSort(sortBy: string | undefined, fallback: string, allowed: string[]) {
@@ -382,17 +424,242 @@ function dedupeCashBookRows() {
 
 dedupeCashBookRows();
 
+/**
+ * The daybook tables are a denormalized *projection* of the transactional
+ * tables (sales, purchases, ...), not an independent ledger. They used to be
+ * populated by a single "seed if empty" migration which:
+ *   - never wrote the sale_id / purchase_id link column, so rows could not be
+ *     matched back to their source;
+ *   - never ran again once any daybook row existed, so sales created after the
+ *     first seed never appeared in the Sales Daybook at all;
+ *   - never updated or removed a row when the underlying invoice was edited or
+ *     deleted, leaving stale rows reporting superseded amounts.
+ *
+ * Reconciliation below replaces that. Every read syncs the projection against
+ * its source: insert missing, update changed, soft-delete orphaned. Rows with a
+ * NULL source id are hand-entered daybook records and are never touched.
+ */
+function ensureDaybookLinkColumns() {
+  addColumnIfMissing("sales_daybook", "sale_id", "INTEGER");
+  addColumnIfMissing("purchases_daybook", "purchase_id", "INTEGER");
+
+  // Pre-existing migrated rows have no link id — recover it from the invoice
+  // number, which the old migration did copy across verbatim.
+  try {
+    if (tableExists("sales")) {
+      sqlite.exec(`
+        UPDATE sales_daybook
+        SET sale_id = (SELECT s.id FROM sales s WHERE s.invoice_number = sales_daybook.invoice_number)
+        WHERE sale_id IS NULL
+          AND EXISTS (SELECT 1 FROM sales s WHERE s.invoice_number = sales_daybook.invoice_number)
+      `);
+    }
+    if (tableExists("purchases")) {
+      sqlite.exec(`
+        UPDATE purchases_daybook
+        SET purchase_id = (SELECT p.id FROM purchases p WHERE p.invoice_number = purchases_daybook.invoice_number)
+        WHERE purchase_id IS NULL
+          AND EXISTS (SELECT 1 FROM purchases p WHERE p.invoice_number = purchases_daybook.invoice_number)
+      `);
+    }
+  } catch (error) {
+    console.error("Daybook link backfill failed", error);
+  }
+}
+
+ensureDaybookLinkColumns();
+
+function paymentStatus(total: unknown, paid: unknown) {
+  const t = parseAmount(total as any);
+  const p = parseAmount(paid as any);
+  if (p <= 0) return "Pending";
+  return p >= t ? "Fully Paid" : "Partially Paid";
+}
+
+function syncSalesDaybook(): number {
+  if (!tableExists("sales")) return 0;
+  const rows = sqlite
+    .prepare(`SELECT s.*, a.name as customer_name FROM sales s LEFT JOIN accounts a ON a.id = s.customer_id`)
+    .all() as any[];
+  const liveIds = new Set<number>();
+
+  const upsert = sqlite.transaction(() => {
+    for (const row of rows) {
+      liveIds.add(Number(row.id));
+      const values = {
+        sale_id: Number(row.id),
+        transaction_date: toMs(row.sale_date),
+        invoice_number: row.invoice_number,
+        customer_id: row.customer_id ?? null,
+        customer_name: row.customer_name || "Unknown Customer",
+        description: row.notes ?? null,
+        quantity: "1",
+        unit_price: row.subtotal || "0",
+        subtotal_amount: row.subtotal || "0",
+        tax_amount: row.tax_amount || "0",
+        total_amount: row.total_amount || "0",
+        due_date: toMs(row.due_date ?? null),
+        paid_amount: row.paid_amount || "0",
+        status: paymentStatus(row.total_amount, row.paid_amount),
+        notes: row.notes ?? null,
+      };
+      const existing = sqlite.prepare(`SELECT * FROM sales_daybook WHERE sale_id = ?`).get(row.id) as any;
+      if (existing) {
+        sqlite
+          .prepare(
+            `UPDATE sales_daybook SET transaction_date=?, invoice_number=?, customer_id=?, customer_name=?,
+               description=?, quantity=?, unit_price=?, subtotal_amount=?, tax_amount=?, total_amount=?,
+               due_date=?, paid_amount=?, status=?, notes=?, is_deleted=0, updated_at=?
+             WHERE id=?`,
+          )
+          .run(
+            values.transaction_date, values.invoice_number, values.customer_id, values.customer_name,
+            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
+            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes, nowMs(),
+            existing.id,
+          );
+      } else {
+        sqlite
+          .prepare(
+            `INSERT INTO sales_daybook(
+               sale_id, transaction_date, invoice_number, customer_id, customer_name, description, quantity,
+               unit_price, subtotal_amount, tax_amount, total_amount, payment_terms, due_date, paid_amount,
+               status, notes, created_by, created_at, updated_at, is_deleted
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Net 30', ?, ?, ?, ?, ?, ?, ?, 0)`,
+          )
+          .run(
+            values.sale_id, values.transaction_date, values.invoice_number, values.customer_id, values.customer_name,
+            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
+            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes,
+            row.created_by ?? null, nowMs(), nowMs(),
+          );
+      }
+    }
+
+    // Source invoice deleted → retire its projection instead of leaving a
+    // phantom row that inflates Sales Daybook totals.
+    const orphans = sqlite
+      .prepare(`SELECT id, sale_id FROM sales_daybook WHERE sale_id IS NOT NULL AND is_deleted = 0`)
+      .all() as any[];
+    for (const o of orphans) {
+      if (!liveIds.has(Number(o.sale_id))) {
+        sqlite.prepare(`UPDATE sales_daybook SET is_deleted = 1, updated_at = ? WHERE id = ?`).run(nowMs(), o.id);
+      }
+    }
+  });
+  upsert();
+  return rows.length;
+}
+
+/** Bags where the purchase is bagged, otherwise net kg; never zero. */
+function purchaseQuantity(row: any) {
+  const bags = parseAmount(row.total_bags);
+  if (bags > 0) return bags;
+  const netKg = parseAmount(row.total_net_weight_kg);
+  if (netKg > 0) return netKg;
+  return 1;
+}
+
+function syncPurchasesDaybook(): number {
+  if (!tableExists("purchases")) return 0;
+  const deletedAware = columnExists("purchases", "deleted_at");
+  const rows = sqlite
+    .prepare(
+      `SELECT p.*, a.name as supplier_name FROM purchases p LEFT JOIN accounts a ON a.id = p.supplier_id
+       ${deletedAware ? "WHERE p.deleted_at IS NULL" : ""}`,
+    )
+    .all() as any[];
+  const liveIds = new Set<number>();
+
+  const upsert = sqlite.transaction(() => {
+    for (const row of rows) {
+      liveIds.add(Number(row.id));
+      // Bags are only populated for bag-based purchases; weight-based ones carry
+      // their quantity in net kg. Taking `total_bags` verbatim wrote quantity 0
+      // against a non-zero subtotal, so the exported quantity x unit price did
+      // not reconstruct the line value.
+      const quantity = purchaseQuantity(row);
+      const subtotal = parseAmount(row.subtotal);
+      const values = {
+        transaction_date: toMs(row.purchase_date),
+        invoice_number: row.invoice_number,
+        supplier_id: row.supplier_id ?? null,
+        supplier_name: row.supplier_name || "Unknown Supplier",
+        description: row.notes ?? null,
+        quantity: String(quantity),
+        unit_price: String(subtotal / quantity),
+        subtotal_amount: row.subtotal || "0",
+        tax_amount: row.tax_amount || "0",
+        total_amount: row.total_amount || "0",
+        due_date: toMs(row.due_date ?? null),
+        paid_amount: row.paid_amount || "0",
+        status: paymentStatus(row.total_amount, row.paid_amount),
+        notes: row.notes ?? null,
+      };
+      const existing = sqlite.prepare(`SELECT * FROM purchases_daybook WHERE purchase_id = ?`).get(row.id) as any;
+      if (existing) {
+        sqlite
+          .prepare(
+            `UPDATE purchases_daybook SET transaction_date=?, invoice_number=?, supplier_id=?, supplier_name=?,
+               description=?, quantity=?, unit_price=?, subtotal_amount=?, tax_amount=?, total_amount=?,
+               due_date=?, paid_amount=?, status=?, notes=?, is_deleted=0, updated_at=?
+             WHERE id=?`,
+          )
+          .run(
+            values.transaction_date, values.invoice_number, values.supplier_id, values.supplier_name,
+            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
+            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes, nowMs(),
+            existing.id,
+          );
+      } else {
+        sqlite
+          .prepare(
+            `INSERT INTO purchases_daybook(
+               purchase_id, transaction_date, invoice_number, supplier_id, supplier_name, description, quantity,
+               unit_price, subtotal_amount, tax_amount, total_amount, payment_terms, due_date, paid_amount,
+               status, notes, created_by, created_at, updated_at, is_deleted
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Net 30', ?, ?, ?, ?, ?, ?, ?, 0)`,
+          )
+          .run(
+            Number(row.id), values.transaction_date, values.invoice_number, values.supplier_id, values.supplier_name,
+            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
+            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes,
+            row.created_by ?? null, nowMs(), nowMs(),
+          );
+      }
+    }
+
+    const orphans = sqlite
+      .prepare(`SELECT id, purchase_id FROM purchases_daybook WHERE purchase_id IS NOT NULL AND is_deleted = 0`)
+      .all() as any[];
+    for (const o of orphans) {
+      if (!liveIds.has(Number(o.purchase_id))) {
+        sqlite.prepare(`UPDATE purchases_daybook SET is_deleted = 1, updated_at = ? WHERE id = ?`).run(nowMs(), o.id);
+      }
+    }
+  });
+  upsert();
+  return rows.length;
+}
+
 function ensureDaybookSeededFromLegacy() {
+  try {
+    syncSalesDaybook();
+    syncPurchasesDaybook();
+  } catch (error) {
+    console.error("Daybook sync failed", error);
+  }
+
+  // The remaining projections (cash book, journals, returns) still rely on the
+  // one-shot legacy seed; only run it while they are completely empty.
   if (autoMigrationAttempted) return;
   autoMigrationAttempted = true;
   try {
-    const daybookTotal = Number(
+    const remainingTotal = Number(
       (
         sqlite
           .prepare(
             `SELECT
-               (SELECT COUNT(*) FROM sales_daybook) +
-               (SELECT COUNT(*) FROM purchases_daybook) +
                (SELECT COUNT(*) FROM cash_book) +
                (SELECT COUNT(*) FROM sales_returns_daybook) +
                (SELECT COUNT(*) FROM purchase_returns_daybook) +
@@ -401,7 +668,7 @@ function ensureDaybookSeededFromLegacy() {
           .get() as any
       )?.c ?? 0,
     );
-    if (daybookTotal > 0) return;
+    if (remainingTotal > 0) return;
 
     const countIfExists = (tableName: string) => {
       if (!tableExists(tableName)) return 0;
@@ -413,11 +680,7 @@ function ensureDaybookSeededFromLegacy() {
       }
     };
 
-    const legacyTotal =
-      countIfExists("sales") +
-      countIfExists("purchases") +
-      countIfExists("cash_transactions") +
-      countIfExists("journal_vouchers");
+    const legacyTotal = countIfExists("cash_transactions") + countIfExists("journal_vouchers");
     if (legacyTotal === 0) return;
 
     migrateLegacyDayBook(new Date());
@@ -442,12 +705,10 @@ export function listSalesDaybook(filters: ListFilters = {}) {
   ensureDaybookSeededFromLegacy();
   const sortBy = safeSort(filters.sortBy, "transaction_date", ["transaction_date", "invoice_number", "customer_name", "total_amount", "status", "created_at"]);
   const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
-  const limit = Math.min(Math.max(Number(filters.limit ?? 100), 1), 500);
-  const offset = Math.max(Number(filters.offset ?? 0), 0);
   const { whereSql, params } = buildCommonFilters(filters, "customer_name", "total_amount", "transaction_date");
   return sqlite
-    .prepare(`SELECT * FROM sales_daybook WHERE ${whereSql} ORDER BY ${sortBy} ${sortDir}, id DESC LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset);
+    .prepare(`SELECT * FROM sales_daybook WHERE ${whereSql} ORDER BY ${sortBy} ${sortDir}, id DESC${pageClause(filters)}`)
+    .all(...params);
 }
 
 export function getSalesDaybook(id: number) {
@@ -543,6 +804,7 @@ export function deleteSalesDaybook(id: number, userId?: number) {
 }
 
 export function getSalesCustomerSummary(filters: ListFilters = {}) {
+  ensureDaybookSeededFromLegacy();
   const { whereSql, params } = buildCommonFilters(filters, "customer_name", "total_amount", "transaction_date");
   return sqlite
     .prepare(
@@ -579,12 +841,10 @@ export function listPurchasesDaybook(filters: ListFilters = {}) {
   ensureDaybookSeededFromLegacy();
   const sortBy = safeSort(filters.sortBy, "transaction_date", ["transaction_date", "invoice_number", "supplier_name", "total_amount", "status", "created_at"]);
   const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
-  const limit = Math.min(Math.max(Number(filters.limit ?? 100), 1), 500);
-  const offset = Math.max(Number(filters.offset ?? 0), 0);
   const { whereSql, params } = buildCommonFilters(filters, "supplier_name", "total_amount", "transaction_date");
   return sqlite
-    .prepare(`SELECT * FROM purchases_daybook WHERE ${whereSql} ORDER BY ${sortBy} ${sortDir}, id DESC LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset);
+    .prepare(`SELECT * FROM purchases_daybook WHERE ${whereSql} ORDER BY ${sortBy} ${sortDir}, id DESC${pageClause(filters)}`)
+    .all(...params);
 }
 
 export function getPurchasesDaybook(id: number) {
@@ -680,6 +940,7 @@ export function deletePurchasesDaybook(id: number, userId?: number) {
 }
 
 export function getPurchasesSupplierSummary(filters: ListFilters = {}) {
+  ensureDaybookSeededFromLegacy();
   const { whereSql, params } = buildCommonFilters(filters, "supplier_name", "total_amount", "transaction_date");
   return sqlite
     .prepare(
@@ -694,6 +955,10 @@ export function getPurchasesSupplierSummary(filters: ListFilters = {}) {
 }
 
 export function getOutstandingPayables(filters: ListFilters = {}) {
+  // Without this the payables list is served straight off a projection that may
+  // predate the latest purchase/payment, so it disagreed with the Purchases
+  // Daybook and the supplier ledger.
+  ensureDaybookSeededFromLegacy();
   const { whereSql, params } = buildCommonFilters(filters, "supplier_name", "total_amount", "transaction_date");
   return sqlite
     .prepare(
@@ -1206,7 +1471,7 @@ export function listGeneralJournal(filters: ListFilters & { account?: string; en
   }
   const sortBy = safeSort(filters.sortBy, "gj.transaction_date", ["gj.transaction_date", "gj.journal_entry_number", "gj.total_debits", "gj.status", "gj.created_at"]);
   const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
-  const limit = filters.limit ? ` LIMIT ${Math.max(1, Math.min(500, Number(filters.limit)))}` : "";
+  const limit = filters.limit == null ? "" : ` LIMIT ${clampInt(filters.limit, 100, 1, 500)}`;
   const rows = sqlite.prepare(`SELECT gj.* FROM general_journal gj WHERE ${where.join(" AND ")} ORDER BY ${sortBy} ${sortDir}, gj.id DESC${limit}`).all(...params) as any[];
   const lineStmt = sqlite.prepare(`SELECT * FROM journal_lines WHERE journal_id = ? AND is_deleted = 0 ORDER BY id ASC`);
   return rows.map((row) => ({ ...row, lines: lineStmt.all(row.id) }));
@@ -1444,76 +1709,12 @@ export function getDaybookDashboardSummary() {
 export function migrateLegacyDayBook(migrationDate?: Date, userId?: number) {
   const mig = toMs(migrationDate ?? new Date()) ?? nowMs();
   const trx = sqlite.transaction(() => {
-    const salesRows = sqlite.prepare(`SELECT s.*, a.name as customer_name FROM sales s LEFT JOIN accounts a ON a.id = s.customer_id`).all() as any[];
-    for (const row of salesRows) {
-      const exists = sqlite.prepare(`SELECT id FROM sales_daybook WHERE invoice_number = ? AND is_deleted = 0`).get(row.invoice_number) as any;
-      if (exists) continue;
-      sqlite
-        .prepare(
-          `INSERT INTO sales_daybook(
-            transaction_date, invoice_number, customer_id, customer_name, description, quantity, unit_price,
-            subtotal_amount, tax_amount, total_amount, payment_terms, paid_amount, status, notes,
-            created_by, updated_by, created_at, updated_at, is_deleted, migration_date
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-        )
-        .run(
-          toMs(row.sale_date),
-          row.invoice_number,
-          row.customer_id,
-          row.customer_name || "Unknown Customer",
-          row.notes ?? null,
-          "1",
-          row.subtotal || "0",
-          row.subtotal || "0",
-          row.tax_amount || "0",
-          row.total_amount || "0",
-          "Net 30",
-          row.paid_amount || "0",
-          parseAmount(row.total_amount) <= parseAmount(row.paid_amount) ? "Fully Paid" : parseAmount(row.paid_amount) > 0 ? "Partially Paid" : "Pending",
-          row.notes ?? null,
-          row.created_by ?? userId ?? null,
-          userId ?? null,
-          nowMs(),
-          nowMs(),
-          mig,
-        );
-    }
+    // Sales and purchases are reconciled continuously by syncSalesDaybook /
+    // syncPurchasesDaybook, which key on sale_id / purchase_id. Re-inserting
+    // them here matched on invoice_number only and produced unlinked duplicates.
+    const salesSynced = syncSalesDaybook();
+    const purchasesSynced = syncPurchasesDaybook();
 
-    const purchaseRows = sqlite.prepare(`SELECT p.*, a.name as supplier_name FROM purchases p LEFT JOIN accounts a ON a.id = p.supplier_id`).all() as any[];
-    for (const row of purchaseRows) {
-      const exists = sqlite.prepare(`SELECT id FROM purchases_daybook WHERE invoice_number = ? AND is_deleted = 0`).get(row.invoice_number) as any;
-      if (exists) continue;
-      sqlite
-        .prepare(
-          `INSERT INTO purchases_daybook(
-            transaction_date, invoice_number, supplier_id, supplier_name, description, quantity, unit_price,
-            subtotal_amount, tax_amount, total_amount, payment_terms, due_date, paid_amount, status, notes,
-            created_by, updated_by, created_at, updated_at, is_deleted, migration_date
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-        )
-        .run(
-          toMs(row.purchase_date),
-          row.invoice_number,
-          row.supplier_id,
-          row.supplier_name || "Unknown Supplier",
-          row.notes ?? null,
-          row.total_bags || "1",
-          row.subtotal || "0",
-          row.subtotal || "0",
-          row.tax_amount || "0",
-          row.total_amount || "0",
-          "Net 30",
-          toMs(row.due_date ?? null),
-          row.paid_amount || "0",
-          parseAmount(row.total_amount) <= parseAmount(row.paid_amount) ? "Fully Paid" : parseAmount(row.paid_amount) > 0 ? "Partially Paid" : "Pending",
-          row.notes ?? null,
-          row.created_by ?? userId ?? null,
-          userId ?? null,
-          nowMs(),
-          nowMs(),
-          mig,
-        );
-    }
 
     const cashRows = sqlite.prepare(`SELECT ct.*, a.name as account_name FROM cash_transactions ct LEFT JOIN accounts a ON a.id = ct.account_id WHERE ct.deleted_at IS NULL`).all() as any[];
     for (const row of cashRows) {
@@ -1603,8 +1804,8 @@ export function migrateLegacyDayBook(migrationDate?: Date, userId?: number) {
 
     return {
       migrationDate: mig,
-      salesMigrated: salesRows.length,
-      purchasesMigrated: purchaseRows.length,
+      salesMigrated: salesSynced,
+      purchasesMigrated: purchasesSynced,
       cashMigrated: cashRows.length,
       journalsMigrated: journalRows.length,
     };

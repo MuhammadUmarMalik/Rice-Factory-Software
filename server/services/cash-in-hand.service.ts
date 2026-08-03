@@ -42,16 +42,27 @@ const toDateValue = (value: string | number | Date | null | undefined, fieldName
   return dt;
 };
 
-function getNextVoucherNo(prefix: string, table: typeof cashReceipts | typeof cashPayments | typeof cashJournalVouchers): string {
+const VOUCHER_TABLES = {
+  "CR": "cash_receipts",
+  "CP": "cash_payments",
+  "JV": "cash_journal_vouchers",
+} as const;
+
+function getNextVoucherNo(prefix: "CR" | "CP" | "JV"): string {
   const year = new Date().getFullYear();
-  const rows = db.select({ id: table.id })
-    .from(table)
-    .orderBy(desc(table.id))
-    .limit(1)
-    .all();
-  const lastId = rows[0]?.id ?? 0;
-  const next = lastId + 1;
-  return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
+  const name = `${prefix}:${year}`;
+  // Single-statement atomic allocation: the initial value is seeded from the
+  // maximum existing id, and subsequent calls increment under SQLite's
+  // per-statement serialization so concurrent requests cannot collide.
+  const row = sqlite
+    .prepare(
+      `INSERT INTO sequences (name, value)
+       VALUES (?, (SELECT COALESCE(MAX(id), 0) + 1 FROM ${VOUCHER_TABLES[prefix]}))
+       ON CONFLICT(name) DO UPDATE SET value = value + 1
+       RETURNING value`,
+    )
+    .get(name) as { value: number };
+  return `${prefix}-${year}-${String(row.value).padStart(4, "0")}`;
 }
 
 async function ensureCashAccount(cashAccountId = 1) {
@@ -136,7 +147,7 @@ export async function getReceiptById(id: number): Promise<CashReceipt | null> {
 }
 
 export async function createReceipt(data: Omit<InsertCashReceipt, "voucherNo" | "createdAt"> & { voucherNo?: string }): Promise<CashReceipt> {
-  const voucherNo = data.voucherNo ?? getNextVoucherNo("CR", cashReceipts);
+  const voucherNo = data.voucherNo ?? getNextVoucherNo("CR");
   const amount = parseNum(data.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
   if (!data.receivedFrom || !String(data.receivedFrom).trim()) throw new Error("Received from is required");
@@ -211,7 +222,7 @@ export async function getPaymentById(id: number): Promise<CashPayment | null> {
 }
 
 export async function createPayment(data: Omit<InsertCashPayment, "voucherNo" | "createdAt"> & { voucherNo?: string }): Promise<CashPayment> {
-  const voucherNo = data.voucherNo ?? getNextVoucherNo("CP", cashPayments);
+  const voucherNo = data.voucherNo ?? getNextVoucherNo("CP");
   const amount = parseNum(data.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
   if (!data.paidTo || !String(data.paidTo).trim()) throw new Error("Paid to is required");
@@ -408,7 +419,7 @@ export async function createJournalVoucher(data: {
   if (Math.abs(totalDebit - totalCredit) > 0.001) {
     throw new Error("Total debit must equal total credit");
   }
-  const voucherNo = getNextVoucherNo("JV", cashJournalVouchers);
+  const voucherNo = getNextVoucherNo("JV");
   const [v] = db.insert(cashJournalVouchers).values({
     voucherNo,
     voucherDate: toDateValue(data.voucherDate as any, "voucher date"),

@@ -13,6 +13,7 @@ import {
 import * as service from "../services/daybooks.service";
 import { getUserId } from "../utils/auth";
 import { parseRequiredInt } from "../utils/parse";
+import { isBusinessRuleError } from "../utils/errors";
 
 function sendZodError(error: unknown, res: Response) {
   if (error instanceof z.ZodError) {
@@ -63,7 +64,7 @@ async function createHandler(req: Request, res: Response, schema: z.ZodTypeAny, 
   } catch (error) {
     const handled = sendZodError(error, res);
     if (handled) return handled;
-    if (error instanceof Error) return res.status(400).json({ error: error.message });
+    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
     console.error(error);
     return res.status(500).json({ error: "Failed to create entry" });
   }
@@ -80,7 +81,7 @@ async function updateHandler(req: Request, res: Response, schema: z.ZodTypeAny, 
   } catch (error) {
     const handled = sendZodError(error, res);
     if (handled) return handled;
-    if (error instanceof Error) return res.status(400).json({ error: error.message });
+    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
     console.error(error);
     return res.status(500).json({ error: "Failed to update entry" });
   }
@@ -193,7 +194,7 @@ export async function reverseGeneralJournal(req: Request, res: Response) {
     if (!row) return res.status(404).json({ error: "Entry not found" });
     return res.json(row);
   } catch (error) {
-    if (error instanceof Error) return res.status(400).json({ error: error.message });
+    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
     console.error(error);
     return res.status(500).json({ error: "Failed to reverse entry" });
   }
@@ -207,7 +208,7 @@ export async function cancelGeneralJournal(req: Request, res: Response) {
     if (!row) return res.status(404).json({ error: "Entry not found" });
     return res.json(row);
   } catch (error) {
-    if (error instanceof Error) return res.status(400).json({ error: error.message });
+    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
     console.error(error);
     return res.status(500).json({ error: "Failed to cancel entry" });
   }
@@ -222,7 +223,7 @@ export async function exportDaybook(req: Request, res: Response) {
     res.setHeader("Content-Disposition", `attachment; filename="${safeKind}_daybook_export.csv"`);
     return res.send(csv);
   } catch (error) {
-    if (error instanceof Error) return res.status(400).json({ error: error.message });
+    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
     console.error(error);
     return res.status(500).json({ error: "Failed to export daybook" });
   }
@@ -256,7 +257,7 @@ export async function migrateLegacyDaybook(req: Request, res: Response) {
   } catch (error) {
     const handled = sendZodError(error, res);
     if (handled) return handled;
-    if (error instanceof Error) return res.status(400).json({ error: error.message });
+    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
     console.error(error);
     return res.status(500).json({ error: "Failed to migrate data" });
   }
