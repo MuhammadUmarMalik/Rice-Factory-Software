@@ -57,3 +57,10 @@ Thumbs.db
 agents.md
 vite.config.ts.*
 *.log
+.audit
+.claude
+.local
+
+CODEBASE_AUDIT.md
+CODEBASE_REAUDIT.md
+prompt.md

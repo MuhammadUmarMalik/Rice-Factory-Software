@@ -14,6 +14,16 @@ type PdfOptions = {
 
 let browserPromise: Promise<import("playwright").Browser> | null = null;
 
+/** Allows integration tests and graceful shutdown hooks to release Chromium. */
+export async function closePdfBrowser(): Promise<void> {
+  const pending = browserPromise;
+  browserPromise = null;
+  if (pending) {
+    const browser = await pending;
+    await browser.close();
+  }
+}
+
 async function getBrowser() {
   if (!browserPromise) {
     const { chromium } = await import("playwright");

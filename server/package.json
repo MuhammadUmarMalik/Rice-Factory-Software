@@ -12,9 +12,13 @@
     "test:print-layout": "tsx scripts/test-print-layout.ts",
     "db:seed": "tsx ../script/seed-admin.ts"
   },
+  "trustedDependencies": [
+    "better-sqlite3",
+    "esbuild"
+  ],
   "dependencies": {
     "@sentry/node": "^10.69.0",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^12.11.1",
     "compression": "^1.7.5",
     "cors": "^2.8.5",
     "date-fns": "^3.6.0",

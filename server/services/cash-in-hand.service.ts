@@ -17,6 +17,16 @@ import {
 } from "../db/schema";
 import { eq, and, gte, lte, desc, inArray } from "drizzle-orm";
 import type { InsertCashReceipt, InsertCashPayment, CashReceipt, CashPayment } from "../db/schema";
+import {
+  buildCashJournalVoucherNarration,
+  buildCashPaymentNarration,
+  buildCashReceiptNarration,
+  cleanNarrationSegment,
+  displayNarration,
+  joinNarration,
+  preferManualNarration,
+  summarizeNarrationValues,
+} from "../utils/narration";
 
 const parseNum = (v: string | number | null | undefined): number => {
   if (v == null || v === "") return 0;
@@ -152,12 +162,27 @@ export async function createReceipt(data: Omit<InsertCashReceipt, "voucherNo" | 
   if (amount <= 0) throw new Error("Amount must be greater than 0");
   if (!data.receivedFrom || !String(data.receivedFrom).trim()) throw new Error("Received from is required");
   await ensureCashAccount(data.cashAccountId ?? 1);
+  const linkedSale = data.referenceType === "sale" && data.referenceId
+    ? db
+        .select({ invoiceNumber: sales.invoiceNumber, customerName: accounts.name })
+        .from(sales)
+        .leftJoin(accounts, eq(sales.customerId, accounts.id))
+        .where(eq(sales.id, data.referenceId))
+        .limit(1)
+        .all()[0]
+    : undefined;
+  const description = buildCashReceiptNarration({
+    description: data.description,
+    partyName: linkedSale?.customerName || data.receivedFrom,
+    invoiceNumber: linkedSale?.invoiceNumber,
+    reference: data.referenceId || voucherNo,
+  });
   const [inserted] = db.insert(cashReceipts).values({
     voucherNo,
     receiptDate: toDateValue(data.receiptDate as any, "receipt date"),
     receivedFrom: data.receivedFrom,
     amount: String(amount),
-    description: data.description ?? null,
+    description,
     paymentMode: data.paymentMode ?? "cash",
     referenceType: data.referenceType ?? null,
     referenceId: data.referenceId ?? null,
@@ -174,11 +199,18 @@ export async function updateReceipt(id: number, data: Partial<Omit<InsertCashRec
   }
   const amount = data.amount != null ? parseNum(data.amount) : parseNum(existing.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
+  const description = data.description === undefined
+    ? existing.description
+    : buildCashReceiptNarration({
+        description: data.description,
+        partyName: data.receivedFrom ?? existing.receivedFrom,
+        reference: existing.referenceId || existing.voucherNo,
+      });
   const [updated] = db.update(cashReceipts).set({
     ...(data.receiptDate != null && { receiptDate: toDateValue(data.receiptDate as any, "receipt date") }),
     ...(data.receivedFrom != null && { receivedFrom: data.receivedFrom }),
     ...(data.amount != null && { amount: String(amount) }),
-    ...(data.description !== undefined && { description: data.description }),
+    ...(data.description !== undefined && { description }),
   }).where(eq(cashReceipts.id, id)).returning().all();
   return updated ?? null;
 }
@@ -227,12 +259,27 @@ export async function createPayment(data: Omit<InsertCashPayment, "voucherNo" | 
   if (amount <= 0) throw new Error("Amount must be greater than 0");
   if (!data.paidTo || !String(data.paidTo).trim()) throw new Error("Paid to is required");
   await ensureCashAccount(data.cashAccountId ?? 1);
+  const linkedPurchase = data.referenceType === "purchase" && data.referenceId
+    ? db
+        .select({ invoiceNumber: purchases.invoiceNumber, supplierName: accounts.name })
+        .from(purchases)
+        .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
+        .where(eq(purchases.id, data.referenceId))
+        .limit(1)
+        .all()[0]
+    : undefined;
+  const description = buildCashPaymentNarration({
+    description: data.description,
+    partyName: linkedPurchase?.supplierName || data.paidTo,
+    invoiceNumber: linkedPurchase?.invoiceNumber,
+    reference: data.referenceId || voucherNo,
+  });
   const [inserted] = db.insert(cashPayments).values({
     voucherNo,
     paymentDate: toDateValue(data.paymentDate as any, "payment date"),
     paidTo: data.paidTo,
     amount: String(amount),
-    description: data.description ?? null,
+    description,
     paymentMode: data.paymentMode ?? "cash",
     referenceType: data.referenceType ?? null,
     referenceId: data.referenceId ?? null,
@@ -249,11 +296,18 @@ export async function updatePayment(id: number, data: Partial<Omit<InsertCashPay
   }
   const amount = data.amount != null ? parseNum(data.amount) : parseNum(existing.amount);
   if (amount <= 0) throw new Error("Amount must be greater than 0");
+  const description = data.description === undefined
+    ? existing.description
+    : buildCashPaymentNarration({
+        description: data.description,
+        partyName: data.paidTo ?? existing.paidTo,
+        reference: existing.referenceId || existing.voucherNo,
+      });
   const [updated] = db.update(cashPayments).set({
     ...(data.paymentDate != null && { paymentDate: toDateValue(data.paymentDate as any, "payment date") }),
     ...(data.paidTo != null && { paidTo: data.paidTo }),
     ...(data.amount != null && { amount: String(amount) }),
-    ...(data.description !== undefined && { description: data.description }),
+    ...(data.description !== undefined && { description }),
   }).where(eq(cashPayments.id, id)).returning().all();
   return updated ?? null;
 }
@@ -300,7 +354,7 @@ export async function getLedger(filters?: { from?: string; to?: string; cashAcco
       date: typeof r.receiptDate === "number" ? r.receiptDate : new Date(r.receiptDate).getTime(),
       type: "receipt",
       voucherNo: r.voucherNo,
-      desc: r.description || `Received from ${r.receivedFrom}`,
+      desc: displayNarration(r.description),
       ref: r.referenceType === "sale" && r.referenceId ? `Sale #${r.referenceId}` : (r.referenceType || ""),
       refType: r.referenceType ?? undefined,
       refId: r.referenceId ?? undefined,
@@ -313,7 +367,7 @@ export async function getLedger(filters?: { from?: string; to?: string; cashAcco
       date: typeof p.paymentDate === "number" ? p.paymentDate : new Date(p.paymentDate).getTime(),
       type: "payment",
       voucherNo: p.voucherNo,
-      desc: p.description || `Paid to ${p.paidTo}`,
+      desc: displayNarration(p.description),
       ref: p.referenceType === "purchase" && p.referenceId ? `Purchase #${p.referenceId}` : (p.referenceType || ""),
       refType: p.referenceType ?? undefined,
       refId: p.referenceId ?? undefined,
@@ -420,10 +474,23 @@ export async function createJournalVoucher(data: {
     throw new Error("Total debit must equal total credit");
   }
   const voucherNo = getNextVoucherNo("JV");
+  const debitSummary = summarizeNarrationValues(
+    data.items.filter((item) => parseNum(item.debitAmount) > 0).map((item) => item.accountHead),
+  );
+  const creditSummary = summarizeNarrationValues(
+    data.items.filter((item) => parseNum(item.creditAmount) > 0).map((item) => item.accountHead),
+  );
+  const transactionSummary = joinNarration([debitSummary, creditSummary], " to ");
+  const resolvedNarration = buildCashJournalVoucherNarration({
+    headerNarration: data.narration,
+    itemNarrations: data.items.map((item) => item.narration),
+    voucherNumber: voucherNo,
+    summary: transactionSummary,
+  });
   const [v] = db.insert(cashJournalVouchers).values({
     voucherNo,
     voucherDate: toDateValue(data.voucherDate as any, "voucher date"),
-    narration: data.narration ?? null,
+    narration: resolvedNarration,
     totalDebit: String(totalDebit),
     totalCredit: String(totalCredit),
   }).returning().all();
@@ -434,7 +501,7 @@ export async function createJournalVoucher(data: {
       accountHead: it.accountHead,
       debitAmount: it.debitAmount || "0",
       creditAmount: it.creditAmount || "0",
-      narration: it.narration ?? null,
+      narration: preferManualNarration(it.narration, resolvedNarration),
     }).run();
   }
   // Auto-create cash receipt/payment if Cash is in account heads
@@ -447,9 +514,9 @@ export async function createJournalVoucher(data: {
       if (debit > 0) {
         await createReceipt({
           receiptDate: toDateValue(data.voucherDate as any, "receipt date"),
-          receivedFrom: data.narration || "Journal Entry",
+          receivedFrom: resolvedNarration,
           amount: String(debit),
-          description: `JV ${voucherNo}`,
+          description: resolvedNarration,
           referenceType: "journal",
           referenceId: v.id,
           cashAccountId,
@@ -458,9 +525,9 @@ export async function createJournalVoucher(data: {
       if (credit > 0) {
         await createPayment({
           paymentDate: toDateValue(data.voucherDate as any, "payment date"),
-          paidTo: data.narration || "Journal Entry",
+          paidTo: resolvedNarration,
           amount: String(credit),
-          description: `JV ${voucherNo}`,
+          description: resolvedNarration,
           referenceType: "journal",
           referenceId: v.id,
           cashAccountId,
@@ -485,7 +552,7 @@ export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
     .where(and(eq(accounts.name, "Cash in Hand"), eq(accounts.isSystemAccount, true))).all();
   if (!cashAccount) return;
   const receiptDate = toDateValue(voucher.voucherDate as any, "receipt date");
-  const narration = voucher.narration || `JV ${voucher.voucherNo}`;
+  const narration = cleanNarrationSegment(voucher.narration) || `Journal Voucher #${voucher.voucherNo}`;
   for (const e of entries) {
     if (e.accountId !== cashAccount.id) continue;
     const amt = parseNum(e.amount);
@@ -495,7 +562,7 @@ export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
         receiptDate,
         receivedFrom: narration,
         amount: String(amt),
-        description: `JV ${voucher.voucherNo}`,
+        description: narration,
         referenceType: "journal",
         referenceId: jvId,
         cashAccountId: 1,
@@ -505,7 +572,7 @@ export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
         paymentDate: receiptDate,
         paidTo: narration,
         amount: String(amt),
-        description: `JV ${voucher.voucherNo}`,
+        description: narration,
         referenceType: "journal",
         referenceId: jvId,
         cashAccountId: 1,
@@ -545,7 +612,6 @@ export async function createReceiptForSale(params: {
     receiptDate: toDateValue(params.receiptDate as any, "receipt date"),
     receivedFrom: params.receivedFrom,
     amount: String(params.paidAmount),
-    description: `Sale ${params.invoiceNumber}`,
     referenceType: "sale",
     referenceId: params.saleId,
     cashAccountId: 1,
@@ -567,9 +633,15 @@ export async function updateOrCreateReceiptForSale(params: {
   if (params.paidAmount <= 0) return null;
   const receiptDate = toDateValue(params.receiptDate as any, "receipt date");
   const amountStr = String(params.paidAmount);
-  const description = `Sale ${params.invoiceNumber}`;
 
   if (params.existingCashReceiptId) {
+    const [existing] = db.select().from(cashReceipts).where(eq(cashReceipts.id, params.existingCashReceiptId)).all();
+    const description = buildCashReceiptNarration({
+      description: existing?.description,
+      partyName: params.receivedFrom,
+      invoiceNumber: params.invoiceNumber,
+      reference: params.saleId,
+    });
     db.update(cashReceipts).set({
       receiptDate,
       receivedFrom: params.receivedFrom,
@@ -583,7 +655,6 @@ export async function updateOrCreateReceiptForSale(params: {
     receiptDate,
     receivedFrom: params.receivedFrom,
     amount: amountStr,
-    description,
     referenceType: "sale",
     referenceId: params.saleId,
     cashAccountId: 1,
@@ -652,7 +723,6 @@ export async function createPaymentForPurchase(params: {
     paymentDate: toDateValue(params.paymentDate as any, "payment date"),
     paidTo: params.paidTo,
     amount: String(params.paidAmount),
-    description: `Purchase ${params.invoiceNumber}`,
     referenceType: "purchase",
     referenceId: params.purchaseId,
     cashAccountId: 1,
@@ -673,9 +743,15 @@ export async function updateOrCreatePaymentForPurchase(params: {
   if (params.paidAmount <= 0) return null;
   const paymentDate = toDateValue(params.paymentDate as any, "payment date");
   const amountStr = String(params.paidAmount);
-  const description = `Purchase ${params.invoiceNumber}`;
 
   if (params.existingCashPaymentId) {
+    const [existing] = db.select().from(cashPayments).where(eq(cashPayments.id, params.existingCashPaymentId)).all();
+    const description = buildCashPaymentNarration({
+      description: existing?.description,
+      partyName: params.paidTo,
+      invoiceNumber: params.invoiceNumber,
+      reference: params.purchaseId,
+    });
     db.update(cashPayments).set({
       paymentDate,
       paidTo: params.paidTo,
@@ -688,7 +764,6 @@ export async function updateOrCreatePaymentForPurchase(params: {
     paymentDate,
     paidTo: params.paidTo,
     amount: amountStr,
-    description,
     referenceType: "purchase",
     referenceId: params.purchaseId,
     cashAccountId: 1,

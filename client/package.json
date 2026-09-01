@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "check": "tsc --noEmit"
   },
+  "trustedDependencies": [
+    "esbuild"
+  ],
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.4",

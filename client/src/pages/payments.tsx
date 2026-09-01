@@ -65,6 +65,7 @@ type Payment = {
   totalCredit: string;
   amountInWords: string;
   narration?: string;
+  settlementAccountId?: number;
   primaryAccountName?: string;
   lines?: { id: number; accountId: number; narration?: string; debit: string; credit: string }[];
 };
@@ -267,7 +268,7 @@ export default function PaymentsPage() {
     };
     // Exclude settlement lines (auto-generated); including them would double the amount on save
     const paymentLines = (voucher.lines || []).filter(
-      (l: { narration?: string }) => !(l.narration || "").toLowerCase().includes("settlement")
+      (line) => line.accountId !== voucher.settlementAccountId
     );
     const firstLinePurchaseId = (paymentLines[0] as { purchaseId?: number })?.purchaseId;
     form.reset({

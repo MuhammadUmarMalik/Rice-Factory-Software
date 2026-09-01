@@ -22,9 +22,17 @@
     "electron:build": "node script/clean-desktop.js && npm rebuild better-sqlite3 && tsx script/prepare-seed-db.ts && electron-rebuild -f -w better-sqlite3 && npm run build && electron-builder",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
+  "overrides": {
+    "yargs": "^17.7.3"
+  },
+  "trustedDependencies": [
+    "better-sqlite3",
+    "electron",
+    "esbuild"
+  ],
   "dependencies": {
     "@sentry/node": "^10.69.0",
-    "better-sqlite3": "^11.10.0"
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",

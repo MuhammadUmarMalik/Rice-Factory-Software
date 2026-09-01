@@ -1,4 +1,5 @@
 import { sqlite } from "../models/db";
+import { buildPurchaseReturnNarration, buildSalesReturnNarration } from "../utils/narration";
 
 type ListFilters = {
   dateFrom?: string;
@@ -1270,6 +1271,14 @@ export function createSalesReturnsDaybook(input: any, userId?: number) {
     .get(input.creditNoteNumber) as any;
   if (dup) throw new Error("Duplicate credit note number");
   const now = nowMs();
+  const narration = buildSalesReturnNarration({
+    description: input.description,
+    reason: input.reason,
+    notes: input.notes,
+    customerName: input.customerName,
+    returnNumber: input.creditNoteNumber,
+    invoiceNumber: input.originalInvoiceReference,
+  });
   const result = sqlite
     .prepare(
       `INSERT INTO sales_returns_daybook(
@@ -1283,7 +1292,7 @@ export function createSalesReturnsDaybook(input: any, userId?: number) {
       input.originalInvoiceReference ?? null,
       input.customerId ?? null,
       input.customerName,
-      input.description ?? null,
+      narration,
       input.quantityReturned,
       input.reason ?? null,
       input.returnAmount,
@@ -1360,6 +1369,14 @@ export function createPurchaseReturnsDaybook(input: any, userId?: number) {
     .get(input.debitNoteNumber) as any;
   if (dup) throw new Error("Duplicate debit note number");
   const now = nowMs();
+  const narration = buildPurchaseReturnNarration({
+    description: input.description,
+    reason: input.reason,
+    notes: input.notes,
+    supplierName: input.supplierName,
+    returnNumber: input.debitNoteNumber,
+    invoiceNumber: input.originalPurchaseReference,
+  });
   const result = sqlite
     .prepare(
       `INSERT INTO purchase_returns_daybook(
@@ -1373,7 +1390,7 @@ export function createPurchaseReturnsDaybook(input: any, userId?: number) {
       input.originalPurchaseReference ?? null,
       input.supplierId ?? null,
       input.supplierName,
-      input.description ?? null,
+      narration,
       input.quantityReturned,
       input.reason ?? null,
       input.returnAmount,

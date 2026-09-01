@@ -46,6 +46,19 @@ import {
   type ExpenseEntry, type InsertExpenseEntry, insertExpenseEntrySchema,
 } from "../db/schema";
 import { cashOrBankAccountIds, isCashOrBankAccount } from "../utils/cash-accounts";
+import {
+  buildJournalVoucherNarration as buildJournalVoucherNarrationText,
+  buildExpenseNarration as buildExpenseNarrationText,
+  buildPaymentVoucherNarration as buildPaymentVoucherNarrationText,
+  buildProcessingNarration as buildProcessingNarrationText,
+  buildPurchaseNarration as buildPurchaseNarrationText,
+  buildReceiptVoucherNarration as buildReceiptVoucherNarrationText,
+  buildSaleNarration as buildSaleNarrationText,
+  cleanNarrationSegment,
+  firstMeaningfulNarration,
+  joinNarration,
+  preferManualNarration,
+} from "../utils/narration";
 
 type DbClient = typeof db;
 type PurchaseItemInput = Omit<
@@ -1342,9 +1355,16 @@ export class DatabaseStorage implements IStorage {
       const voucherNo = this.nextExpenseNumber(client);
       const amount = parseAmount(expense.amount || "0");
       if (amount <= 0) throw new Error("Amount must be greater than zero");
+      const narration = buildExpenseNarrationText({
+        description: expense.description,
+        expenseAccount: expAcc.name,
+        voucherNumber: voucherNo,
+        purpose: (expense as any).purpose,
+      });
 
       const created = client.insert(expenseEntries).values({
         ...expense,
+        description: narration,
         voucherNo,
         amount: amount.toString(),
         expenseDate: postingDate,
@@ -1357,7 +1377,7 @@ export class DatabaseStorage implements IStorage {
         accountId: expense.expenseAccountId,
         transactionType: "debit",
         amount: amount.toString(),
-        description: `Expense ${voucherNo}`,
+        description: narration,
         expenseEntryId: created.id,
         entryDate: postingDate,
       });
@@ -1365,7 +1385,7 @@ export class DatabaseStorage implements IStorage {
         accountId: expense.payFromAccountId,
         transactionType: "credit",
         amount: amount.toString(),
-        description: `Expense ${voucherNo}`,
+        description: narration,
         expenseEntryId: created.id,
         entryDate: postingDate,
       });
@@ -1397,6 +1417,14 @@ export class DatabaseStorage implements IStorage {
 
       const amount = parseAmount(expense.amount ?? existing.amount ?? "0");
       if (amount <= 0) throw new Error("Amount must be greater than zero");
+      const narration = expense.description === undefined
+        ? existing.description
+        : buildExpenseNarrationText({
+            description: expense.description,
+            expenseAccount: expAcc.name,
+            voucherNumber: existing.voucherNo,
+            purpose: (expense as any).purpose,
+          });
 
       const priorEntries = tx
         .select()
@@ -1414,6 +1442,7 @@ export class DatabaseStorage implements IStorage {
 
       const updated = tx.update(expenseEntries).set({
         ...expense,
+        description: narration,
         expenseAccountId,
         payFromAccountId,
         amount: amount.toString(),
@@ -1425,7 +1454,7 @@ export class DatabaseStorage implements IStorage {
         accountId: expenseAccountId,
         transactionType: "debit",
         amount: amount.toString(),
-        description: `Expense ${existing.voucherNo}`,
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
         expenseEntryId: id,
         entryDate: postingDate,
       });
@@ -1433,7 +1462,7 @@ export class DatabaseStorage implements IStorage {
         accountId: payFromAccountId,
         transactionType: "credit",
         amount: amount.toString(),
-        description: `Expense ${existing.voucherNo}`,
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
         expenseEntryId: id,
         entryDate: postingDate,
       });
@@ -2711,8 +2740,20 @@ export class DatabaseStorage implements IStorage {
       if (grandAmount < 0) throw new Error("Purchase total cannot be negative");
       const paidAmount = roundMoney(Math.min(Math.max(0, parseAmount((purchase as any).paidAmount || "0")), grandAmount));
       const balanceDue = roundMoney(grandAmount - paidAmount);
+      const [supplier] = client
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.id, purchase.supplierId))
+        .limit(1)
+        .all();
+      const narration = buildPurchaseNarrationText({
+        notes: purchase.notes,
+        supplierName: supplier?.name,
+        invoiceNumber,
+      });
       const newPurchase = tx.insert(purchases).values({
         ...purchase,
+        notes: narration,
         invoiceNumber,
         billNo,
         subtotal: lineSubtotal.toString(),
@@ -3298,11 +3339,26 @@ export class DatabaseStorage implements IStorage {
 
       const client = tx as unknown as DbClient;
 
+      const productIds = [batch.sourceProductId, batch.outputProductId].filter((id): id is number => Boolean(id));
+      const productRows = productIds.length
+        ? client.select({ id: products.id, name: products.name }).from(products).where(inArray(products.id, productIds)).all()
+        : [];
+      const productNameById = new Map(productRows.map((product) => [product.id, product.name]));
+      const narration = buildProcessingNarrationText({
+        notes: batch.notes,
+        inputProduct: productNameById.get(batch.sourceProductId),
+        inputQuantity: batch.sourceQuantity,
+        outputProduct: batch.outputProductId ? productNameById.get(batch.outputProductId) : batch.outputCategory,
+        outputQuantity: batch.outputQuantity,
+        batchNumber,
+      });
+
       // Reduce stock for source product
       this.updateProductStockInternal(client, batch.sourceProductId, batch.sourceQuantity, "subtract");
 
       const insertResult = tx.insert(processing).values({
         ...batch,
+        notes: narration,
         batchNumber,
       }).run();
       const newId = Number(insertResult.lastInsertRowid);
@@ -3424,9 +3480,21 @@ export class DatabaseStorage implements IStorage {
       const requestedPaid = parseAmount((sale as any).paidAmount || "0");
       const paidAmount = roundMoney(Math.min(Math.max(0, requestedPaid), totalAmount));
       const balanceDue = roundMoney(Math.max(totalAmount - paidAmount, 0));
+      const [customer] = client
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.id, sale.customerId))
+        .limit(1)
+        .all();
+      const narration = buildSaleNarrationText({
+        notes: sale.notes,
+        customerName: customer?.name,
+        invoiceNumber,
+      });
 
       const newSale = tx.insert(sales).values({
         ...sale,
+        notes: narration,
         invoiceNumber,
         gatePassNumber,
         subtotal: subtotal.toString(),
@@ -4274,6 +4342,7 @@ export class DatabaseStorage implements IStorage {
         totalAmount?: string | null;
         partyName?: string | null;
         notes?: string | null;
+        supplierId?: number | null;
       }
     >(
       purchaseIds.length
@@ -4287,6 +4356,7 @@ export class DatabaseStorage implements IStorage {
               totalAmount: purchases.totalAmount,
               partyName: accounts.name,
               notes: purchases.notes,
+              supplierId: purchases.supplierId,
             })
             .from(purchases)
             .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
@@ -4503,21 +4573,6 @@ export class DatabaseStorage implements IStorage {
             .map((r) => [r.id, r.narration || ""])
         : [],
     );
-    const journalAccountNamesById = new Map<number, string[]>();
-    if (journalIds.length) {
-      const rows = db
-        .select({ journalId: journalVoucherEntries.journalVoucherId, accountName: accounts.name })
-        .from(journalVoucherEntries)
-        .leftJoin(accounts, eq(journalVoucherEntries.accountId, accounts.id))
-        .where(inArray(journalVoucherEntries.journalVoucherId, journalIds))
-        .all();
-      for (const row of rows) {
-        if (!row.accountName) continue;
-        const names = journalAccountNamesById.get(row.journalId) || [];
-        if (!names.includes(row.accountName)) names.push(row.accountName);
-        journalAccountNamesById.set(row.journalId, names);
-      }
-    }
     const contraMetaById = new Map<number, { no: string; narration: string }>(
       contraIds.length
         ? db
@@ -4586,24 +4641,6 @@ export class DatabaseStorage implements IStorage {
             .map((r) => [r.id, r.name])
         : [],
     );
-    const expenseAccountIds = Array.from(
-      new Set(
-        Array.from(expenseMetaById.values())
-          .map((m) => m.expenseAccountId)
-          .filter((id): id is number => Number.isFinite(id as number)),
-      ),
-    );
-    const expenseAccountNameById = new Map<number, string>(
-      expenseAccountIds.length
-        ? db
-            .select({ id: accounts.id, name: accounts.name })
-            .from(accounts)
-            .where(inArray(accounts.id, expenseAccountIds))
-            .all()
-            .map((r) => [r.id, r.name])
-        : [],
-    );
-
     const resolveVoucher = (refType?: string | null, refId?: number | null) => {
       if (!refType || !refId) return { vchType: "-", vchNo: "-" };
       if (refType === "purchase") return { vchType: "Purchase", vchNo: purchaseNoById.get(refId) || `PUR-${refId}` };
@@ -4675,16 +4712,20 @@ export class DatabaseStorage implements IStorage {
       const rawDescription = (entry.description || "").trim();
       const lowerDescription = rawDescription.toLowerCase();
       const meta = refId ? purchaseMetaById.get(refId) : undefined;
+      if (refId && meta && !cleanNarrationSegment(meta.notes)) return "-";
       const invoice = meta?.invoiceNumber || (refId ? purchaseNoById.get(refId) : "") || (refId ? `PUR-${refId}` : "");
-      const base = invoice ? `PURCHASE ${invoice}` : "PURCHASE";
-      const partyLabel = meta?.partyName ? `Supplier: ${meta.partyName}` : "";
+      const base = buildPurchaseNarrationText({
+        notes: meta?.notes,
+        supplierName: meta?.partyName,
+        invoiceNumber: invoice,
+      });
       const itemLabel = refId ? purchaseItemNameById.get(refId) : "";
       const itemTotals = refId ? purchaseItemTotals.get(refId) : undefined;
       const netKg = itemTotals?.netKg ?? parseAmount(meta?.totalNetWeightKg || "0");
       const moundQty = netKg > 0 ? netKg / 40 : (itemTotals?.moundQty ?? parseAmount(meta?.totalMoundQty || "0"));
       const subtotal = parseAmount(meta?.itemsSubtotal || meta?.subtotal || "0");
       const qtyParts = [];
-      const parts = [base, partyLabel].filter(Boolean);
+      const parts: unknown[] = [base];
       const amountLabel = parseAmount(entry.amount || "0");
       if (itemLabel) parts.push(itemLabel);
       if (netKg > 0) qtyParts.push(`${formatQty(netKg)}KG`);
@@ -4695,161 +4736,94 @@ export class DatabaseStorage implements IStorage {
       if (rateLabel) {
         parts.push(`RATE ${rateLabel} PER MUND`);
       }
-      const joinParts = () => parts.join(" | ");
       if (lowerDescription.includes("reversal")) {
         return rawDescription;
       }
       if (lowerDescription.includes("tax")) {
         parts.push(amountLabel > 0 ? `Tax: ${formatMoney(amountLabel)}` : "Tax");
-        return parts.join(" | ");
-      }
-      if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
+      } else if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
         const label = normalizeChargeLabel(rawDescription);
         parts.push(amountLabel > 0 ? `${label}: ${formatMoney(amountLabel)}` : label);
-        return parts.join(" | ");
-      }
-      if (lowerDescription.includes("broker commission") || lowerDescription.includes("brokerage")) {
+      } else if (lowerDescription.includes("broker commission") || lowerDescription.includes("brokerage")) {
         parts.push(amountLabel > 0 ? `Broker commission: ${formatMoney(amountLabel)}` : "Broker commission");
-        return parts.join(" | ");
-      }
-      if (rawDescription && !lowerDescription.includes("purchase")) {
+      } else if (lowerDescription.includes("purchase")) {
+        parts.push(entry.accountId === meta?.supplierId ? "Supplier Payable" : "Inventory");
+      } else if (rawDescription) {
         parts.push(rawDescription);
-        return parts.join(" | ");
       }
-      if (meta?.notes) parts.push(`Note: ${meta.notes}`);
-      return joinParts();
+      return joinNarration(parts);
     };
 
     const buildSaleNarration = (entry: LedgerEntry, refId?: number | null) => {
       const rawDescription = (entry.description || "").trim();
       const lowerDescription = rawDescription.toLowerCase();
       const meta = refId ? saleMetaById.get(refId) : undefined;
+      if (refId && meta && !cleanNarrationSegment(meta.notes)) return "-";
       const invoice = meta?.invoiceNumber || (refId ? saleNoById.get(refId) : "") || (refId ? `SAL-${refId}` : "");
-      const base = invoice ? `SALE ${invoice}` : "SALE";
-      const partyLabel = meta?.partyName ? `Customer: ${meta.partyName}` : "";
+      const base = buildSaleNarrationText({
+        notes: meta?.notes,
+        customerName: meta?.partyName,
+        invoiceNumber: invoice,
+      });
       const itemLabel = refId ? saleItemNameById.get(refId) : "";
       const qtyMeta = refId ? saleQtyById.get(refId) : undefined;
       const subtotal = parseAmount(meta?.subtotal || "0");
-      const parts = [base, partyLabel].filter(Boolean);
+      const parts: unknown[] = [base];
       const amountLabel = parseAmount(entry.amount || "0");
       if (itemLabel) parts.push(itemLabel);
-      const qtyParts = [];
       if (qtyMeta && qtyMeta.totalQty > 0) {
-        qtyParts.push(`${formatQty(qtyMeta.totalQty)} ${qtyMeta.unit || "units"}`.trim());
+        parts.push(`${formatQty(qtyMeta.totalQty)} ${qtyMeta.unit || "units"}`.trim());
         if (subtotal > 0) {
           const rateBase = subtotal / Math.max(qtyMeta.totalQty, 1);
           parts.push(`RATE ${formatRate(rateBase)}`);
         }
       }
-      if (qtyParts.length > 0) parts.push(...qtyParts);
-      const joinParts = () => parts.join(" | ");
       if (lowerDescription.includes("reversal")) {
         return rawDescription;
       }
       if (lowerDescription.includes("tax")) {
         parts.push(amountLabel > 0 ? `Tax: ${formatMoney(amountLabel)}` : "Tax");
-        return parts.join(" | ");
-      }
-      if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
+      } else if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
         const label = normalizeChargeLabel(rawDescription);
         parts.push(amountLabel > 0 ? `${label}: ${formatMoney(amountLabel)}` : label);
-        return parts.join(" | ");
-      }
-      if (rawDescription && !lowerDescription.includes("sale")) {
+      } else if (lowerDescription.includes("cogs")) {
+        parts.push("COGS");
+      } else if (lowerDescription.includes("inventory")) {
+        parts.push("Inventory");
+      } else if (lowerDescription.includes("sale")) {
+        parts.push("Revenue");
+      } else if (rawDescription) {
         parts.push(rawDescription);
-        return parts.join(" | ");
       }
-      if (meta?.notes) parts.push(`Note: ${meta.notes}`);
-      return joinParts();
+      return joinNarration(parts);
     };
 
     const buildReceiptNarration = (refId?: number | null) => {
       if (!refId) return "RECEIPT";
       const meta = receiptMetaById.get(refId);
       const settlementId = meta?.settlementAccountId || undefined;
-      const settlementType = settlementId ? settlementTypeById.get(settlementId) : undefined;
-      const settlementName = settlementId ? settlementNameById.get(settlementId) : undefined;
-      const modeLabel = settlementType === "bank"
-        ? settlementName || "Bank"
-        : "Cash";
-      const vch = meta?.no || `CRV-${refId}`;
       const lines = (receiptLinesByVoucherId.get(refId) || []).filter((line) => line.accountId !== settlementId);
-      const parties = summarizeNames(lines.map((line) => line.accountName || "").filter(Boolean));
-      const saleRefs = summarizeNames(
-        lines
-          .map((line) => line.saleId ? saleNoById.get(line.saleId) || `Sale #${line.saleId}` : "")
-          .filter(Boolean),
-      );
-      const lineNotes = summarizeNames(
-        lines
-          .map((line) => (line.narration || "").trim())
-          .filter((note) => note && !note.toLowerCase().includes("settlement")),
-      );
-      return [
-        `Receipt ${vch}`,
-        parties ? `Received from: ${parties}` : "",
-        saleRefs ? `Against sale: ${saleRefs}` : "",
-        `Via: ${modeLabel}`,
-        meta?.narration ? `Note: ${meta.narration}` : lineNotes ? `Note: ${lineNotes}` : "",
-      ].filter(Boolean).join(" | ");
+      return firstMeaningfulNarration([meta?.narration, ...lines.map((line) => line.narration)]) || "-";
     };
 
     const buildPaymentNarration = (refId?: number | null) => {
       if (!refId) return "PAYMENT";
       const meta = receiptMetaById.get(refId);
       const settlementId = meta?.settlementAccountId || undefined;
-      const settlementType = settlementId ? settlementTypeById.get(settlementId) : undefined;
-      const settlementName = settlementId ? settlementNameById.get(settlementId) : undefined;
-      const modeLabel = settlementType === "bank"
-        ? settlementName || "Bank"
-        : "Cash";
-      const vch = meta?.no || `CPV-${refId}`;
-      const cleanVch = vch.replace(/\(\s*RS\s*\)/gi, "").replace(/\s{2,}/g, " ").trim();
       const lines = (receiptLinesByVoucherId.get(refId) || []).filter((line) => line.accountId !== settlementId);
-      const parties = summarizeNames(lines.map((line) => line.accountName || "").filter(Boolean));
-      const purchaseRefs = summarizeNames(
-        lines
-          .map((line) => line.purchaseId ? purchaseNoById.get(line.purchaseId) || `Purchase #${line.purchaseId}` : "")
-          .filter(Boolean),
-      );
-      const lineNotes = summarizeNames(
-        lines
-          .map((line) => (line.narration || "").trim())
-          .filter((note) => note && !note.toLowerCase().includes("settlement")),
-      );
-      return [
-        `Payment ${cleanVch}`,
-        parties ? `Paid to: ${parties}` : "",
-        purchaseRefs ? `Against purchase: ${purchaseRefs}` : "",
-        `Via: ${modeLabel}`,
-        meta?.narration ? `Note: ${meta.narration}` : lineNotes ? `Note: ${lineNotes}` : "",
-      ].filter(Boolean).join(" | ");
+      return firstMeaningfulNarration([meta?.narration, ...lines.map((line) => line.narration)]) || "-";
     };
 
     const buildJournalNarration = (refId?: number | null) => {
       if (!refId) return "JV";
-      const vch = journalNoById.get(refId) || `JV-${refId}`;
       const note = journalNarrationById.get(refId) || "";
-      const accountNames = journalAccountNamesById.get(refId) || [];
-      const accountFlow = accountNames.length ? accountNames.join(" ↔ ") : "";
-      return [
-        `Journal ${vch}`,
-        accountFlow ? `Accounts: ${accountFlow}` : "",
-        note ? `Note: ${note}` : "",
-      ].filter(Boolean).join(" | ");
+      return note || "-";
     };
 
     const buildExpenseNarration = (refId?: number | null) => {
       if (!refId) return "EXP";
       const meta = expenseMetaById.get(refId);
-      const vch = meta?.voucherNo || `EXP-${refId}`;
-      const accountName = meta?.expenseAccountId ? expenseAccountNameById.get(meta.expenseAccountId) : "";
-      const desc = meta?.description || "";
-      return [
-        `Expense ${vch}`,
-        accountName ? `Account: ${accountName}` : "",
-        desc ? `For: ${desc}` : "",
-      ].filter(Boolean).join(" | ");
+      return meta?.description || "-";
     };
 
     const buildContraNarration = (refId?: number | null) => {
@@ -4875,7 +4849,7 @@ export class DatabaseStorage implements IStorage {
       const ref = getLedgerReference(entry as any);
       const voucher = resolveVoucher(ref.referenceType, ref.referenceId);
 
-      let narration = entry.description || "";
+      let narration = cleanNarrationSegment(entry.description) || "-";
       if (ref.referenceType === "purchase") {
         narration = buildPurchaseNarration(entry, ref.referenceId as any);
       } else if (ref.referenceType === "sale") {
@@ -4892,6 +4866,7 @@ export class DatabaseStorage implements IStorage {
       } else if (ref.referenceType === "contra_voucher") {
         narration = buildContraNarration(ref.referenceId as any);
       }
+      narration = cleanNarrationSegment(narration) || "-";
 
       const matches = narrationTokens.length === 0
         || matchesNarration(narration || "")
@@ -5095,6 +5070,36 @@ export class DatabaseStorage implements IStorage {
     return { totalDebit, totalCredit };
   }
 
+  private resolveReceiptOrPaymentNarration(
+    client: DbClient,
+    voucherType: "CR" | "CP" | "BR" | "BP",
+    voucherNumber: string,
+    headerNarration: unknown,
+    lines: ReceiptLineInput[],
+  ): string {
+    const isReceipt = voucherType === "CR" || voucherType === "BR";
+    const linkedLine = lines.find((line) => isReceipt ? Boolean(line.saleId) : Boolean(line.purchaseId));
+    const primaryLine = linkedLine || lines[0];
+    const [party] = primaryLine
+      ? client.select({ name: accounts.name }).from(accounts).where(eq(accounts.id, primaryLine.accountId)).limit(1).all()
+      : [];
+    const invoiceNumber = isReceipt && linkedLine?.saleId
+      ? client.select({ invoiceNumber: sales.invoiceNumber }).from(sales).where(eq(sales.id, linkedLine.saleId)).limit(1).all()[0]?.invoiceNumber
+      : !isReceipt && linkedLine?.purchaseId
+        ? client.select({ invoiceNumber: purchases.invoiceNumber }).from(purchases).where(eq(purchases.id, linkedLine.purchaseId)).limit(1).all()[0]?.invoiceNumber
+        : undefined;
+    const common = {
+      headerNarration,
+      lineNarrations: lines.map((line) => line.narration),
+      partyName: party?.name,
+      invoiceNumber,
+      voucherNumber,
+    };
+    return isReceipt
+      ? buildReceiptVoucherNarrationText(common)
+      : buildPaymentVoucherNarrationText(common);
+  }
+
   async createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher> {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
@@ -5118,14 +5123,6 @@ export class DatabaseStorage implements IStorage {
         const total = cleanLines.reduce((sum, l) => sum + resolveReceiptLineAmount(l), 0);
         if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
-      // Append counter-entry for settlement account to enforce double-entry
-      const settlementLine: ReceiptLineInput = voucherType === "CR"
-        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: "Settlement (Cash/Bank)" }
-        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: "Settlement (Cash/Bank)" };
-
-      const normalizedLines = [...cleanLines, settlementLine];
-      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
-
       const year = new Date().getFullYear();
       const [last] = tx.select().from(receiptVouchers)
         .where(eq(receiptVouchers.voucherType, normalizeReceiptVoucherType(data.voucherType || "CR")))
@@ -5137,9 +5134,29 @@ export class DatabaseStorage implements IStorage {
       const voucherNumber = (data.voucherNumber && data.voucherNumber.trim() !== "")
         ? data.voucherNumber
         : generatedNumber;
+      const resolvedNarration = this.resolveReceiptOrPaymentNarration(
+        client,
+        voucherType,
+        voucherNumber,
+        data.narration,
+        cleanLines,
+      );
+      const narratedLines = cleanLines.map((line) => ({
+        ...line,
+        narration: preferManualNarration(line.narration, resolvedNarration),
+      }));
+
+      // Append counter-entry for the structurally identified settlement account.
+      const settlementLine: ReceiptLineInput = voucherType === "CR"
+        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: resolvedNarration }
+        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: resolvedNarration };
+
+      const normalizedLines = [...narratedLines, settlementLine];
+      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
 
       const voucher = tx.insert(receiptVouchers).values({
         ...data,
+        narration: resolvedNarration,
         settlementAccountId: settlementAccount,
         voucherNumber,
         totalDebit: totalDebit.toString(),
@@ -5163,7 +5180,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "debit",
             amount: debit.toString(),
-            description: `Receipt ${voucher.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", voucher.id),
             entryDate: postingDate,
           });
@@ -5173,7 +5190,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "credit",
             amount: credit.toString(),
-            description: `Receipt ${voucher.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", voucher.id),
             entryDate: postingDate,
           });
@@ -5304,7 +5321,7 @@ export class DatabaseStorage implements IStorage {
 
         // Exclude settlement lines - they are auto-generated; including them would double the amount
         const paymentLinesOnly = (lines || []).filter(
-          (line) => !(line.narration || "").toLowerCase().includes("settlement")
+          (line) => line.accountId !== settlementAccount
         );
 
         const cleanLines = paymentLinesOnly.map((line) => {
@@ -5319,15 +5336,27 @@ export class DatabaseStorage implements IStorage {
         const total = cleanLines.reduce((sum, l) => sum + resolveReceiptLineAmount(l), 0);
         if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
+      const resolvedNarration = this.resolveReceiptOrPaymentNarration(
+        client,
+        voucherType,
+        existing.voucherNumber,
+        data.narration === undefined ? existing.narration : data.narration,
+        cleanLines,
+      );
+      const narratedLines = cleanLines.map((line) => ({
+        ...line,
+        narration: preferManualNarration(line.narration, resolvedNarration),
+      }));
       const settlementLine: ReceiptLineInput = voucherType === "CR"
-        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: "Settlement (Cash/Bank)" }
-        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: "Settlement (Cash/Bank)" };
+        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: resolvedNarration }
+        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: resolvedNarration };
 
-      const normalizedLines = [...cleanLines, settlementLine];
+      const normalizedLines = [...narratedLines, settlementLine];
       const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
 
       const updated = tx.update(receiptVouchers).set({
         ...data,
+        narration: resolvedNarration,
         settlementAccountId: settlementAccount,
         totalDebit: totalDebit.toString(),
         totalCredit: totalCredit.toString(),
@@ -5350,7 +5379,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "debit",
             amount: debit.toString(),
-            description: `Receipt ${updated.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", id),
             entryDate: postingDate,
           });
@@ -5360,7 +5389,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "credit",
             amount: credit.toString(),
-            description: `Receipt ${updated.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", id),
             entryDate: postingDate,
           });
@@ -5545,7 +5574,7 @@ export class DatabaseStorage implements IStorage {
         accountId: entry.accountId,
         transactionType: entry.entryType === "DEBIT" ? "debit" : "credit",
         amount,
-        description: `Journal Voucher ${voucher.voucherNo}`,
+        description: voucher.narration || `Journal Voucher #${voucher.voucherNo}`,
         ...getLedgerReferenceColumns("journal_voucher", voucher.id),
         entryDate: voucher.voucherDate ? new Date(voucher.voucherDate as any) : new Date(),
       });
@@ -5567,10 +5596,26 @@ export class DatabaseStorage implements IStorage {
       const generatedNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
       const voucherNo = (data as any).voucherNo && (data as any).voucherNo !== "" ? (data as any).voucherNo : generatedNo;
 
+      const debitLine = normalized.find((entry) => entry.entryType === "DEBIT");
+      const creditLine = normalized.find((entry) => entry.entryType === "CREDIT");
+      const accountRows = client
+        .select({ id: accounts.id, name: accounts.name })
+        .from(accounts)
+        .where(inArray(accounts.id, [debitLine!.accountId, creditLine!.accountId]))
+        .all();
+      const accountNameById = new Map(accountRows.map((account) => [account.id, account.name]));
+      const resolvedNarration = buildJournalVoucherNarrationText({
+        narration: data.narration,
+        voucherNumber: voucherNo,
+        debitAccount: accountNameById.get(debitLine!.accountId),
+        creditAccount: accountNameById.get(creditLine!.accountId),
+      });
+
       const status = (data.status || "draft") as "draft" | "approved";
 
       const voucher = tx.insert(journalVouchers).values({
         ...data,
+        narration: resolvedNarration,
         voucherNo,
         voucherDate: postingDate,
         totalAmount: total.toString(),
@@ -7070,9 +7115,8 @@ export class DatabaseStorage implements IStorage {
     };
 
     const resolveMode = (group: Group) => {
-      const cashEntry = group.entries.find((e) => cashBankIdSet.has(e.accountId));
-      const raw = group.meta.narration || cashEntry?.accountName || group.entries[0]?.description || "";
-      return raw ? raw.toUpperCase() : "";
+      const raw = cleanNarrationSegment(group.meta.narration);
+      return raw ? raw.toUpperCase() : "-";
     };
 
     groups.forEach((group, index) => {
