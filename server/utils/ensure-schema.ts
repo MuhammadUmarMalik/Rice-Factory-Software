@@ -133,6 +133,31 @@ function ensureSequencesTable(): void {
   `);
 }
 
+/**
+ * Creates the processing_outputs table for batches that yield several products.
+ *
+ * Batches recorded before this table existed keep their single
+ * processing.output_product_id/output_quantity pair; those legacy columns are
+ * still read when a batch has no rows here, so no backfill is required.
+ */
+function ensureProcessingOutputsTable(): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS processing_outputs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      processing_id INTEGER NOT NULL REFERENCES processing(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      quantity TEXT NOT NULL,
+      output_type TEXT NOT NULL DEFAULT 'bio',
+      notes TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+  `);
+  sqlite.exec(
+    "CREATE INDEX IF NOT EXISTS idx_processing_outputs_processing_id ON processing_outputs(processing_id);",
+  );
+}
+
 function warnOrphanedCashLinks(): void {
   try {
     const orphanReceipts = sqlite
@@ -237,6 +262,7 @@ export function ensureSchema(): void {
   ensureProductColumns();
   ensureCashAccounts();
   ensureSequencesTable();
+  ensureProcessingOutputsTable();
   ensureIntegerTimestamps();
   warnOrphanedCashLinks();
 }

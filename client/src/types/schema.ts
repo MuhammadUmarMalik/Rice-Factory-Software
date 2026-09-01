@@ -130,6 +130,17 @@ export type Processing = {
   createdAt: Date | string;
 };
 
+export type ProcessingOutput = {
+  id: number;
+  processingId: number;
+  productId: number;
+  quantity: string;
+  outputType: "raw" | "bio";
+  notes: string | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+};
+
 export type Employee = {
   id: number;
   employeeCode: string;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Play, CheckCircle, Package, ArrowRight, Scale, Factory } from "lucide-react";
+import { Plus, Play, CheckCircle, Package, ArrowRight, Scale, Factory, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -33,10 +33,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Processing, Product } from "@/types/schema";
+import type { Processing, ProcessingOutput, Product } from "@/types/schema";
 import { format } from "date-fns";
 
 const processingFormSchema = z.object({
@@ -49,9 +49,16 @@ const processingFormSchema = z.object({
   notes: z.string().optional(),
 });
 
+const outputLineSchema = z.object({
+  productId: z.string().min(1, "Output product is required"),
+  quantity: z
+    .string()
+    .min(1, "Quantity is required")
+    .refine((val) => parseFloat(val) > 0, { message: "Quantity must be greater than 0" }),
+});
+
 const completeFormSchema = z.object({
-  outputProductId: z.string().min(1, "Output product is required"),
-  outputQuantity: z.string().min(1, "Output quantity is required"),
+  outputs: z.array(outputLineSchema).min(1, "At least one output is required"),
   wastageQuantity: z.string().default("0"),
   outputCategory: z.enum(["rice_head", "broken_rice", "rice_polish", "kacher_nakoo"]),
 });
@@ -65,7 +72,20 @@ const outputCategoryOptions: { value: CompleteFormData["outputCategory"]; label:
   { value: "rice_polish", label: "Rice Polish" },
   { value: "kacher_nakoo", label: "Kacher (Nakoo)" },
 ];
-type ProcessingWithProducts = Processing & { sourceProduct?: Product; outputProduct?: Product };
+type ProcessingOutputWithProduct = ProcessingOutput & { product?: Product };
+type ProcessingWithProducts = Processing & {
+  sourceProduct?: Product;
+  outputProduct?: Product;
+  outputs?: ProcessingOutputWithProduct[];
+};
+
+/** Total yield of a batch, from its outputs or its legacy single-output pair. */
+const totalOutputQuantity = (item: ProcessingWithProducts): number => {
+  if (item.outputs?.length) {
+    return item.outputs.reduce((sum, output) => sum + (parseFloat(output.quantity) || 0), 0);
+  }
+  return parseFloat(item.outputQuantity || "0") || 0;
+};
 
 export default function ProcessingPage() {
   const { t, isRTL, language } = useLanguage();
@@ -73,7 +93,7 @@ export default function ProcessingPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
   const [selectedProcessing, setSelectedProcessing] = useState<Processing | null>(null);
-  const [detailProcessing, setDetailProcessing] = useState<(Processing & { sourceProduct?: Product; outputProduct?: Product }) | null>(null);
+  const [detailProcessing, setDetailProcessing] = useState<ProcessingWithProducts | null>(null);
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
 
   const form = useForm<ProcessingFormData>({
@@ -89,14 +109,15 @@ export default function ProcessingPage() {
   const completeForm = useForm<CompleteFormData>({
     resolver: zodResolver(completeFormSchema),
     defaultValues: {
-      outputProductId: "",
-      outputQuantity: "",
+      outputs: [{ productId: "", quantity: "" }],
       wastageQuantity: "0",
       outputCategory: "rice_head",
     },
   });
 
-  const { data: processingList = [], isLoading } = useQuery<(Processing & { sourceProduct?: Product; outputProduct?: Product })[]>({
+  const outputFields = useFieldArray({ control: completeForm.control, name: "outputs" });
+
+  const { data: processingList = [], isLoading } = useQuery<ProcessingWithProducts[]>({
     queryKey: ["/api/processing"],
   });
 
@@ -125,8 +146,8 @@ export default function ProcessingPage() {
     if (!form.getValues("outputProductId") && bioProducts[0]) {
       form.setValue("outputProductId", bioProducts[0].id.toString(), { shouldDirty: false });
     }
-    if (!completeForm.getValues("outputProductId") && bioProducts[0]) {
-      completeForm.setValue("outputProductId", bioProducts[0].id.toString(), { shouldDirty: false });
+    if (!completeForm.getValues("outputs.0.productId") && bioProducts[0]) {
+      completeForm.setValue("outputs.0.productId", bioProducts[0].id.toString(), { shouldDirty: false });
     }
   }, [bioProducts, form, completeForm]);
 
@@ -178,8 +199,11 @@ export default function ProcessingPage() {
   const completeMutation = useMutation({
     mutationFn: (data: CompleteFormData & { id: number }) =>
       apiRequest("PATCH", `/api/processing/${data.id}/complete`, {
-        outputProductId: parseInt(data.outputProductId),
-        outputQuantity: data.outputQuantity,
+        outputs: data.outputs.map((output) => ({
+          productId: parseInt(output.productId),
+          quantity: output.quantity,
+          outputType: "bio",
+        })),
         wastageQuantity: data.wastageQuantity,
         outputCategory: data.outputCategory,
       }),
@@ -219,8 +243,12 @@ export default function ProcessingPage() {
       ? (processing.outputCategory as (typeof allowedCategories)[number])
       : "rice_head";
     completeForm.reset({
-      outputProductId: processing.outputProductId ? processing.outputProductId.toString() : defaultOutput,
-      outputQuantity: "",
+      outputs: [
+        {
+          productId: processing.outputProductId ? processing.outputProductId.toString() : defaultOutput,
+          quantity: "",
+        },
+      ],
       wastageQuantity: "0",
       outputCategory: category,
     });
@@ -273,7 +301,10 @@ export default function ProcessingPage() {
       key: "outputQuantity",
       title: "Output (kg)",
       align: "right",
-      render: (item) => item.outputQuantity ? <span className="font-mono">{parseFloat(item.outputQuantity).toLocaleString()}</span> : "—",
+      render: (item) => {
+        const total = totalOutputQuantity(item);
+        return total ? <span className="font-mono">{total.toLocaleString()}</span> : "—";
+      },
     },
     {
       key: "wastageQuantity",
@@ -355,10 +386,10 @@ export default function ProcessingPage() {
         <div className={`flex items-center gap-2 text-sm mb-3 ${isRTL ? "flex-row-reverse" : ""}`}>
           <Scale className="h-3 w-3 text-muted-foreground" />
           <span className="font-mono">{parseFloat(item.sourceQuantity).toLocaleString()} kg</span>
-          {item.outputQuantity && (
+          {totalOutputQuantity(item) > 0 && (
             <>
               <ArrowRight className="h-3 w-3 text-muted-foreground" />
-              <span className="font-mono text-primary">{parseFloat(item.outputQuantity).toLocaleString()} kg</span>
+              <span className="font-mono text-primary">{totalOutputQuantity(item).toLocaleString()} kg</span>
             </>
           )}
         </div>
@@ -639,34 +670,87 @@ export default function ProcessingPage() {
             <form onSubmit={completeForm.handleSubmit((data) => 
               completeMutation.mutate({ ...data, id: selectedProcessing!.id })
             )} className="space-y-4">
-              <FormField
-                control={completeForm.control}
-                name="outputProductId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("outputProduct")}</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-complete-output">
-                          <SelectValue placeholder={language === "ur" ? "????? ????" : "Select product"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {bioProducts.length === 0 ? (
-                          <SelectItem value="none" disabled>No bio products found. Add Bio products first.</SelectItem>
-                        ) : (
-                          bioProducts.map((p) => (
-                            <SelectItem key={p.id} value={p.id.toString()}>
-                              {p.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                </FormItem>
-              )}
-            />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <FormLabel>{t("outputProduct")}</FormLabel>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => outputFields.append({ productId: "", quantity: "" })}
+                    data-testid="button-add-output"
+                  >
+                    <Plus className="h-4 w-4" />
+                    {language === "ur" ? "?? ????? ????" : "Add output"}
+                  </Button>
+                </div>
+
+                {outputFields.fields.map((fieldItem, index) => (
+                  <div key={fieldItem.id} className="flex items-start gap-2">
+                    <FormField
+                      control={completeForm.control}
+                      name={`outputs.${index}.productId`}
+                      render={({ field }) => (
+                        <FormItem className="flex-1">
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger data-testid={`select-complete-output-${index}`}>
+                                <SelectValue placeholder={language === "ur" ? "????? ????" : "Select product"} />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {bioProducts.length === 0 ? (
+                                <SelectItem value="none" disabled>No bio products found. Add Bio products first.</SelectItem>
+                              ) : (
+                                bioProducts.map((p) => (
+                                  <SelectItem key={p.id} value={p.id.toString()}>
+                                    {p.name}
+                                  </SelectItem>
+                                ))
+                              )}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={completeForm.control}
+                      name={`outputs.${index}.quantity`}
+                      render={({ field }) => (
+                        <FormItem className="w-32">
+                          <FormControl>
+                            <Input
+                              {...field}
+                              type="number"
+                              step="0.01"
+                              placeholder="kg"
+                              data-testid={`input-output-quantity-${index}`}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      disabled={outputFields.fields.length === 1}
+                      onClick={() => outputFields.remove(index)}
+                      data-testid={`button-remove-output-${index}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+
+                {completeForm.formState.errors.outputs?.message && (
+                  <p className="text-sm font-medium text-destructive">
+                    {completeForm.formState.errors.outputs.message}
+                  </p>
+                )}
+              </div>
               <FormField
                 control={completeForm.control}
                 name="outputCategory"
@@ -687,19 +771,6 @@ export default function ProcessingPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={completeForm.control}
-                name="outputQuantity"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("outputQuantity")} (kg)</FormLabel>
-                    <FormControl>
-                      <Input {...field} type="number" step="0.01" data-testid="input-output-quantity" />
-                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -765,7 +836,20 @@ export default function ProcessingPage() {
                 </div>
                 <div>
                   <p className="text-muted-foreground">Output</p>
-                  <p className="font-medium">{detailProcessing.outputProduct?.name || "-"}</p>
+                  {detailProcessing.outputs?.length ? (
+                    <ul className="space-y-0.5">
+                      {detailProcessing.outputs.map((output) => (
+                        <li key={output.id} className="font-medium">
+                          {output.product?.name || `#${output.productId}`}{" "}
+                          <span className="font-mono text-muted-foreground">
+                            {parseFloat(output.quantity).toLocaleString()} kg
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="font-medium">{detailProcessing.outputProduct?.name || "-"}</p>
+                  )}
                   {detailProcessing.outputCategory && (
                     <p className="text-xs text-muted-foreground">
                       {outputCategoryOptions.find(opt => opt.value === detailProcessing.outputCategory)?.label || detailProcessing.outputCategory}
@@ -778,7 +862,11 @@ export default function ProcessingPage() {
                 </div>
                 <div>
                   <p className="text-muted-foreground">Output Qty (kg)</p>
-                  <p className="font-mono">{detailProcessing.outputQuantity ? parseFloat(detailProcessing.outputQuantity).toLocaleString() : "—"}</p>
+                  <p className="font-mono">
+                    {totalOutputQuantity(detailProcessing)
+                      ? totalOutputQuantity(detailProcessing).toLocaleString()
+                      : "—"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Wastage (kg)</p>

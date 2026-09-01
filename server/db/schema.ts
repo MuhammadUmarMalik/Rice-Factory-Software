@@ -453,6 +453,26 @@ export const insertProcessingSchema = createInsertSchema(processing).omit({
 export type InsertProcessing = z.infer<typeof insertProcessingSchema>;
 export type Processing = typeof processing.$inferSelect;
 
+// Processing outputs (one batch can yield several products)
+export const processingOutputs = sqliteTable("processing_outputs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  processingId: integer("processing_id").notNull().references(() => processing.id, { onDelete: "cascade" }),
+  productId: integer("product_id").notNull().references(() => products.id),
+  quantity: text("quantity").notNull(),
+  outputType: text("output_type", { enum: ["raw", "bio"] }).notNull().default("bio"),
+  notes: text("notes"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertProcessingOutputSchema = createInsertSchema(processingOutputs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertProcessingOutput = z.infer<typeof insertProcessingOutputSchema>;
+export type ProcessingOutput = typeof processingOutputs.$inferSelect;
+
 // FIXED: 9
 // Sales table
 export const sales = sqliteTable("sales", {

@@ -2,7 +2,11 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { insertProcessingSchema } from "../db/schema";
 import { numericString } from "../schemas/common";
-import { processingCompleteSchema } from "../schemas/processing.schema";
+import {
+  processingCompleteSchema,
+  processingOutputLineSchema,
+  processingOutputUpdateSchema,
+} from "../schemas/processing.schema";
 import * as processingService from "../services/processing.service";
 import { notifyLowStock, notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
@@ -21,7 +25,7 @@ export async function getProcessing(req: Request, res: Response) {
   try {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid processing id" });
-    const batch = await processingService.getProcessing(id);
+    const batch = await processingService.getProcessingWithOutputs(id);
     if (!batch) {
       return res.status(404).json({ error: "Processing batch not found" });
     }
@@ -151,10 +155,17 @@ export async function completeProcessing(req: Request, res: Response) {
       await processingService.updateProcessing(id, { status: "in_progress" });
     }
 
+    // Outputs are written while the batch is still in progress so that marking
+    // it completed is what adds the yield to stock, exactly once.
+    if (body.outputs?.length) {
+      await processingService.setProcessingOutputs(id, body.outputs);
+    }
+
     const batch = await processingService.updateProcessing(id, {
       status: "completed",
-      outputProductId: body.outputProductId,
-      outputQuantity: body.outputQuantity,
+      ...(body.outputs?.length
+        ? {}
+        : { outputProductId: body.outputProductId, outputQuantity: body.outputQuantity }),
       wastageQuantity: body.wastageQuantity,
       outputCategory: body.outputCategory,
     });
@@ -185,5 +196,85 @@ export async function completeProcessing(req: Request, res: Response) {
     }
     console.error(error);
     res.status(500).json({ error: "Failed to complete processing batch" });
+  }
+}
+
+export async function listProcessingOutputs(req: Request, res: Response) {
+  try {
+    const processingId = parseRequiredInt(req.params.id, "id");
+    if (processingId === undefined) return res.status(400).json({ error: "Invalid processing id" });
+    const batch = await processingService.getProcessing(processingId);
+    if (!batch) return res.status(404).json({ error: "Processing batch not found" });
+    res.json(await processingService.listProcessingOutputs(processingId));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch processing outputs" });
+  }
+}
+
+export async function replaceProcessingOutputs(req: Request, res: Response) {
+  try {
+    const processingId = parseRequiredInt(req.params.id, "id");
+    if (processingId === undefined) return res.status(400).json({ error: "Invalid processing id" });
+    const batch = await processingService.getProcessing(processingId);
+    if (!batch) return res.status(404).json({ error: "Processing batch not found" });
+
+    const outputs = z.array(processingOutputLineSchema).parse(req.body?.outputs ?? req.body);
+    res.json(await processingService.setProcessingOutputs(processingId, outputs));
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.errors });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to replace processing outputs" });
+  }
+}
+
+export async function addProcessingOutput(req: Request, res: Response) {
+  try {
+    const processingId = parseRequiredInt(req.params.id, "id");
+    if (processingId === undefined) return res.status(400).json({ error: "Invalid processing id" });
+    const batch = await processingService.getProcessing(processingId);
+    if (!batch) return res.status(404).json({ error: "Processing batch not found" });
+
+    const output = processingOutputLineSchema.parse(req.body);
+    res.status(201).json(await processingService.addProcessingOutput(processingId, output));
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.errors });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to add processing output" });
+  }
+}
+
+export async function updateProcessingOutput(req: Request, res: Response) {
+  try {
+    const outputId = parseRequiredInt(req.params.outputId, "outputId");
+    if (outputId === undefined) return res.status(400).json({ error: "Invalid output id" });
+
+    const data = processingOutputUpdateSchema.parse(req.body);
+    const updated = await processingService.updateProcessingOutput(outputId, data);
+    if (!updated) return res.status(404).json({ error: "Processing output not found" });
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.errors });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to update processing output" });
+  }
+}
+
+export async function deleteProcessingOutput(req: Request, res: Response) {
+  try {
+    const outputId = parseRequiredInt(req.params.outputId, "outputId");
+    if (outputId === undefined) return res.status(400).json({ error: "Invalid output id" });
+    const deleted = await processingService.deleteProcessingOutput(outputId);
+    if (!deleted) return res.status(404).json({ error: "Processing output not found" });
+    res.status(204).end();
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to delete processing output" });
   }
 }

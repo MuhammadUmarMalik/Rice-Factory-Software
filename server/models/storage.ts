@@ -10,7 +10,7 @@ import {
 } from "../services/reports/calculations";
 import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
-  processing, sales, saleItems, ledgerEntries,
+  processing, processingOutputs, sales, saleItems, ledgerEntries,
   type User, type InsertUser, type Account, type InsertAccount,
   notifications, type Notification, type InsertNotification,
   employees, employeeSalaryStructures, payrolls, payrollAuditLogs,
@@ -21,6 +21,7 @@ import {
   type Product, type InsertProduct, type Purchase, type InsertPurchase,
   type PurchaseItem, type InsertPurchaseItem, type PurchaseCharge, type InsertPurchaseCharge,
   type Processing, type InsertProcessing,
+  type ProcessingOutput, type InsertProcessingOutput,
   type Sale, type InsertSale, type SaleItem, type InsertSaleItem,
   type LedgerEntry, type InsertLedgerEntry,
   receiptVouchers, receiptVoucherLines,
@@ -68,6 +69,7 @@ type PurchaseItemInput = Omit<
   Partial<Pick<InsertPurchaseItem, "grossWeightKg" | "netWeightKg" | "moundQty" | "moundRemainderKg" | "amount">>;
 type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
 type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
+type ProcessingOutputInput = Omit<InsertProcessingOutput, "id" | "processingId">;
 type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
 type JournalEntryInput = Omit<InsertJournalVoucherEntry, "id" | "journalVoucherId">;
 type CashTxInput = Omit<InsertCashTransaction, "id" | "createdAt" | "referenceType" | "referenceId"> & Partial<Pick<InsertCashTransaction, "journalVoucherId" | "receiptVoucherId" | "contraVoucherId" | "expenseEntryId">>;
@@ -169,6 +171,11 @@ export interface IStorage {
   createProcessing(batch: InsertProcessing): Promise<Processing>;
   updateProcessing(id: number, batch: Partial<InsertProcessing>): Promise<Processing | undefined>;
   getNextBatchNumber(): Promise<string>;
+  getProcessingOutputs(processingId: number): Promise<ProcessingOutput[]>;
+  setProcessingOutputs(processingId: number, outputs: ProcessingOutputInput[]): Promise<ProcessingOutput[]>;
+  addProcessingOutput(processingId: number, output: ProcessingOutputInput): Promise<ProcessingOutput>;
+  updateProcessingOutput(id: number, output: Partial<ProcessingOutputInput>): Promise<ProcessingOutput | undefined>;
+  deleteProcessingOutput(id: number): Promise<boolean>;
 
   // Sales
   getSales(): Promise<Sale[]>;
@@ -3382,13 +3389,41 @@ export class DatabaseStorage implements IStorage {
       const nextOutputQuantity = batch.outputQuantity ?? existingBatch.outputQuantity;
       const nextStatus = batch.status ?? existingBatch.status;
 
+      // A batch's yield lives in processing_outputs; batches recorded before
+      // that table existed keep a single pair on the batch row. Read the rows
+      // once so the reverse and re-apply below agree on which path is in play.
+      const outputRows = client
+        .select()
+        .from(processingOutputs)
+        .where(eq(processingOutputs.processingId, id))
+        .all();
+
+      const existingOutputs = outputRows.length
+        ? outputRows.map((row) => ({ productId: row.productId, quantity: row.quantity }))
+        : existingBatch.outputProductId && existingBatch.outputQuantity
+          ? [{ productId: existingBatch.outputProductId, quantity: existingBatch.outputQuantity }]
+          : [];
+
+      // Output rows are edited through the processing-output methods, which
+      // adjust stock themselves, so they are unchanged here. Only the legacy
+      // pair can move as part of this update.
+      const nextOutputs = outputRows.length
+        ? existingOutputs
+        : nextOutputProductId && nextOutputQuantity
+          ? [{ productId: nextOutputProductId, quantity: nextOutputQuantity }]
+          : [];
+
       this.updateProductStockInternal(client, existingBatch.sourceProductId, existingBatch.sourceQuantity, "add");
-      if (existingBatch.status === "completed" && existingBatch.outputProductId && existingBatch.outputQuantity) {
-        this.updateProductStockInternal(client, existingBatch.outputProductId, existingBatch.outputQuantity, "subtract");
+      if (existingBatch.status === "completed") {
+        for (const output of existingOutputs) {
+          this.updateProductStockInternal(client, output.productId, output.quantity, "subtract");
+        }
       }
       this.updateProductStockInternal(client, nextSourceProductId, nextSourceQuantity, "subtract");
-      if (nextStatus === "completed" && nextOutputProductId && nextOutputQuantity) {
-        this.updateProductStockInternal(client, nextOutputProductId, nextOutputQuantity, "add");
+      if (nextStatus === "completed") {
+        for (const output of nextOutputs) {
+          this.updateProductStockInternal(client, output.productId, output.quantity, "add");
+        }
       }
 
       if (batch.status === "in_progress" && existingBatch.status === "pending") {
@@ -3405,6 +3440,148 @@ export class DatabaseStorage implements IStorage {
       const [updated] = tx.select().from(processing).where(eq(processing.id, id)).all();
       return updated;
     });
+  }
+
+  async getProcessingOutputs(processingId: number): Promise<ProcessingOutput[]> {
+    return db
+      .select()
+      .from(processingOutputs)
+      .where(eq(processingOutputs.processingId, processingId))
+      .orderBy(processingOutputs.id)
+      .all();
+  }
+
+  /**
+   * Replaces every output on a batch.
+   *
+   * Stock only moves for a completed batch: the yield of a pending or
+   * in-progress batch has not been added to inventory yet, so rewriting its
+   * outputs must not touch product stock.
+   */
+  async setProcessingOutputs(processingId: number, outputs: ProcessingOutputInput[]): Promise<ProcessingOutput[]> {
+    const batch = await this.getProcessingBatch(processingId);
+    if (!batch) throw new Error("Processing batch not found");
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const isCompleted = batch.status === "completed";
+
+      if (isCompleted) {
+        for (const effect of this.currentOutputEffects(client, processingId, batch)) {
+          this.updateProductStockInternal(client, effect.productId, effect.quantity, "subtract");
+        }
+      }
+
+      tx.delete(processingOutputs).where(eq(processingOutputs.processingId, processingId)).run();
+
+      for (const output of outputs) {
+        tx.insert(processingOutputs).values({ ...output, processingId }).run();
+        if (isCompleted) {
+          this.updateProductStockInternal(client, output.productId, output.quantity, "add");
+        }
+      }
+
+      // The legacy single-output columns are superseded once rows exist; clear
+      // them so the fallback in currentOutputEffects can never double-count.
+      if (outputs.length && (batch.outputProductId || batch.outputQuantity)) {
+        tx.update(processing)
+          .set({ outputProductId: null, outputQuantity: null })
+          .where(eq(processing.id, processingId))
+          .run();
+      }
+
+      return tx
+        .select()
+        .from(processingOutputs)
+        .where(eq(processingOutputs.processingId, processingId))
+        .orderBy(processingOutputs.id)
+        .all();
+    });
+  }
+
+  async addProcessingOutput(processingId: number, output: ProcessingOutputInput): Promise<ProcessingOutput> {
+    const batch = await this.getProcessingBatch(processingId);
+    if (!batch) throw new Error("Processing batch not found");
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const result = tx.insert(processingOutputs).values({ ...output, processingId }).run();
+      if (batch.status === "completed") {
+        this.updateProductStockInternal(client, output.productId, output.quantity, "add");
+      }
+      const [created] = tx
+        .select()
+        .from(processingOutputs)
+        .where(eq(processingOutputs.id, Number(result.lastInsertRowid)))
+        .all();
+      return created;
+    });
+  }
+
+  async updateProcessingOutput(
+    id: number,
+    output: Partial<ProcessingOutputInput>,
+  ): Promise<ProcessingOutput | undefined> {
+    const [existing] = db.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+    if (!existing) return undefined;
+    const batch = await this.getProcessingBatch(existing.processingId);
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const nextProductId = output.productId ?? existing.productId;
+      const nextQuantity = output.quantity ?? existing.quantity;
+
+      if (batch?.status === "completed") {
+        this.updateProductStockInternal(client, existing.productId, existing.quantity, "subtract");
+        this.updateProductStockInternal(client, nextProductId, nextQuantity, "add");
+      }
+
+      tx.update(processingOutputs)
+        .set({ ...output, updatedAt: new Date() })
+        .where(eq(processingOutputs.id, id))
+        .run();
+      const [updated] = tx.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+      return updated;
+    });
+  }
+
+  async deleteProcessingOutput(id: number): Promise<boolean> {
+    const [existing] = db.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+    if (!existing) return false;
+    const batch = await this.getProcessingBatch(existing.processingId);
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      if (batch?.status === "completed") {
+        this.updateProductStockInternal(client, existing.productId, existing.quantity, "subtract");
+      }
+      tx.delete(processingOutputs).where(eq(processingOutputs.id, id)).run();
+      return true;
+    });
+  }
+
+  /**
+   * The outputs currently reflected in stock for a batch: the rows in
+   * processing_outputs, or the batch's own single-output columns for batches
+   * recorded before that table existed.
+   */
+  private currentOutputEffects(
+    client: DbClient,
+    processingId: number,
+    batch: Pick<Processing, "outputProductId" | "outputQuantity">,
+  ): Array<{ productId: number; quantity: string }> {
+    const rows = client
+      .select()
+      .from(processingOutputs)
+      .where(eq(processingOutputs.processingId, processingId))
+      .all();
+    if (rows.length) {
+      return rows.map((row) => ({ productId: row.productId, quantity: row.quantity }));
+    }
+    if (batch.outputProductId && batch.outputQuantity) {
+      return [{ productId: batch.outputProductId, quantity: batch.outputQuantity }];
+    }
+    return [];
   }
 
   // Sales
