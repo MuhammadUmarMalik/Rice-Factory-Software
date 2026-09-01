@@ -1,103 +1,379 @@
-import { ShoppingCart, TrendingUp, Package, DollarSign, Plus, Factory, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ShoppingCart from "lucide-react/dist/esm/icons/shopping-cart";
+import TrendingUp from "lucide-react/dist/esm/icons/trending-up";
+import Package from "lucide-react/dist/esm/icons/package";
+import DollarSign from "lucide-react/dist/esm/icons/dollar-sign";
+import Factory from "lucide-react/dist/esm/icons/factory";
+import AlertTriangle from "lucide-react/dist/esm/icons/alert-triangle";
+import Banknote from "lucide-react/dist/esm/icons/banknote";
+import Landmark from "lucide-react/dist/esm/icons/landmark";
+import Users from "lucide-react/dist/esm/icons/users";
+import UserMinus from "lucide-react/dist/esm/icons/user-minus";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/contexts/language-context";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Skeleton } from "@/components/ui/skeleton";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
+import { SkeletonBox } from "@/components/ui/skeletons";
 import { format } from "date-fns";
+import { Label } from "@/components/ui/label";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useReportDetail } from "@/components/report-detail-hook";
+import { fetchWithAuth } from "@/lib/authFetch";
 
-type DashboardStats = {
-  totalPurchases: string;
-  totalSales: string;
-  stockValue: string;
-  totalProfit: string;
+const DashboardChartsSection = lazy(() =>
+  import("@/components/dashboard/DashboardChartsSection").then((mod) => ({
+    default: mod.DashboardChartsSection,
+  })),
+);
+const DashboardActivitySection = lazy(() =>
+  import("@/components/dashboard/DashboardActivitySection").then((mod) => ({
+    default: mod.DashboardActivitySection,
+  })),
+);
+const DashboardInsightsSection = lazy(() =>
+  import("@/components/dashboard/DashboardInsightsSection").then((mod) => ({
+    default: mod.DashboardInsightsSection,
+  })),
+);
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
+
+type DayBookRow = {
+  id: string;
+  type: string;
+  partyName: string;
+  mode: string;
+  receipt: string;
+  payment: string;
+  referenceType?: string | null;
+  referenceId?: number | null;
 };
 
-type ActivityItem = {
-  type: "purchase" | "sale" | "processing";
-  id: number;
-  amount: string;
-  date: string | Date;
-  reference: string;
+type DashboardSummaryCore = {
+  filters: { fromDate: string; toDate: string };
+  kpis: {
+    totalPurchases: number;
+    totalSales: number;
+    stockValue: number;
+    netProfit: number;
+    cashBalance: number;
+    bankBalance: number;
+    outstandingCustomers: number;
+    outstandingSuppliers: number;
+  };
+  trialBalance: { debitTotal: number; creditTotal: number; difference: number; balanced: boolean };
 };
+
+type DashboardSummaryDetails = {
+  charges: {
+    freight: number;
+    loading: number;
+    marketFee: number;
+    brokerage: number;
+    bardana: number;
+    processing: number;
+  };
+  stock: {
+    paddyQty: number;
+    riceQty: number;
+    brokenQty: number;
+    bardanaIn: number;
+    bardanaOut: number;
+    bardanaBalance: number;
+    valuation: number;
+    lowStock: Array<{ id: number; name: string; stock: number; unit: string }>;
+  };
+  dayBook: {
+    date: string;
+    rows: DayBookRow[];
+  };
+};
+
+type DashboardAlerts = {
+  alerts: Array<{ key: string; severity: "info" | "warning" | "critical"; message: string }>;
+};
+
+function useLazySection<T extends HTMLElement>(rootMargin = "200px") {
+  const ref = useRef<T | null>(null);
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    if (active) return;
+    const node = ref.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setActive(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setActive(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [active, rootMargin]);
+
+  return { ref, active };
+}
 
 export default function Dashboard() {
   const { t, isRTL, language } = useLanguage();
+  const { reference, detail, isLoading: detailLoading, openDetail, closeDetail } = useReportDetail();
 
-  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ["/api/dashboard/stats"],
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
+  const [godown, setGodown] = useState<string>("all");
+
+  const chartsSection = useLazySection<HTMLDivElement>("300px");
+  const detailsSection = useLazySection<HTMLDivElement>("300px");
+
+  const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummaryCore>({
+    queryKey: ["/api/dashboard/summary", "core", fromDate, toDate, godown],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("scope", "core");
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
+      const res = await fetchWithAuth(`/api/dashboard/summary?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.detail || body?.error || "Failed to fetch dashboard summary");
+      }
+      return res.json();
+    },
+    staleTime: 0,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
-  const { data: recentActivity = [], isLoading: activityLoading } = useQuery<ActivityItem[]>({
-    queryKey: ["/api/dashboard/recent"],
+  const { data: details, isLoading: detailsLoading } = useQuery<DashboardSummaryDetails>({
+    queryKey: ["/api/dashboard/summary", "details", fromDate, toDate, godown],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("scope", "details");
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
+      const res = await fetchWithAuth(`/api/dashboard/summary?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.detail || body?.error || "Failed to fetch dashboard details");
+      }
+      return res.json();
+    },
+    enabled: detailsSection.active,
+    staleTime: 0,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
-  const { data: chartData, isLoading: chartLoading } = useQuery<{
-    monthlyTotals: { name: string; purchases: number; sales: number }[];
-    productStock: { name: string; stock: number; unit: string }[];
-  }>({
-    queryKey: ["/api/dashboard/charts"],
+  const { data: alertsData, isLoading: alertsLoading } = useQuery<DashboardAlerts>({
+    queryKey: ["/api/dashboard/alerts", fromDate, toDate, godown],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
+      const res = await fetchWithAuth(`/api/dashboard/alerts?${params.toString()}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.detail || body?.error || "Failed to fetch dashboard alerts");
+      }
+      return res.json();
+    },
+    staleTime: 0,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 
-  const { data: processingBatches = [], isLoading: processingLoading } = useQuery<any[]>({
-    queryKey: ["/api/processing"],
-  });
+  const money = useCallback(
+    (value?: number) =>
+      `Rs. ${(value || 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`,
+    [],
+  );
 
-  const statCards = [
-    {
-      title: t("totalPurchases"),
-      value: stats?.totalPurchases ?? "Rs. 4,250,000",
-      change: "+12.5%",
-      trend: "up",
-      icon: ShoppingCart,
-      color: "text-chart-2",
-      bgColor: "bg-chart-2/10",
-    },
-    {
-      title: t("totalSales"),
-      value: stats?.totalSales ?? "Rs. 5,820,000",
-      change: "+18.2%",
-      trend: "up",
-      icon: TrendingUp,
-      color: "text-primary",
-      bgColor: "bg-primary/10",
-    },
-    {
-      title: t("stockValue"),
-      value: stats?.stockValue ?? "Rs. 2,450,000",
-      change: "-2.4%",
-      trend: "down",
-      icon: Package,
-      color: "text-chart-3",
-      bgColor: "bg-chart-3/10",
-    },
-    {
-      title: t("totalProfit"),
-      value: stats?.totalProfit ?? "Rs. 1,570,000",
-      change: "+8.7%",
-      trend: "up",
-      icon: DollarSign,
-      color: "text-chart-5",
-      bgColor: "bg-chart-5/10",
-    },
-  ];
+  const statCards = useMemo(
+    () => [
+      {
+        title: t("totalPurchases"),
+        value: money(summary?.kpis.totalPurchases),
+        icon: ShoppingCart,
+        color: "text-chart-2",
+        bgColor: "bg-chart-2/10",
+        href: `/reports/purchases?fromDate=${fromDate}&toDate=${toDate}`,
+      },
+      {
+        title: t("totalSales"),
+        value: money(summary?.kpis.totalSales),
+        icon: TrendingUp,
+        color: "text-primary",
+        bgColor: "bg-primary/10",
+        href: `/reports/sales?fromDate=${fromDate}&toDate=${toDate}`,
+      },
+      {
+        title: t("stockValue"),
+        value: money(summary?.kpis.stockValue),
+        icon: Package,
+        color: "text-chart-3",
+        bgColor: "bg-chart-3/10",
+        href: `/reports/stock?fromDate=${fromDate}&toDate=${toDate}`,
+      },
+      {
+        title: "Net Profit",
+        value: money(summary?.kpis.netProfit),
+        icon: DollarSign,
+        color: "text-chart-5",
+        bgColor: "bg-chart-5/10",
+        href: `/reports/profit-loss?startDate=${fromDate}&endDate=${toDate}`,
+      },
+    ],
+    [t, money, summary?.kpis, fromDate, toDate],
+  );
 
-  const quickActions = [
-    { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, color: "bg-chart-2 text-white" },
-    { title: t("newSale"), url: "/sales", icon: TrendingUp, color: "bg-primary text-primary-foreground" },
-    { title: t("processStock"), url: "/processing", icon: Factory, color: "bg-chart-3 text-white" },
-  ];
+  const kpiCards = useMemo(
+    () => [
+      {
+        title: "Cash Balance",
+        value: money(summary?.kpis.cashBalance),
+        icon: Banknote,
+        color: "text-emerald-600",
+        bgColor: "bg-emerald-500/10",
+        href: `/reports/ledger-cash?startDate=${fromDate}&endDate=${toDate}`,
+      },
+      {
+        title: "Bank Balance",
+        value: money(summary?.kpis.bankBalance),
+        icon: Landmark,
+        color: "text-sky-600",
+        bgColor: "bg-sky-500/10",
+        href: `/reports/ledger-bank?startDate=${fromDate}&endDate=${toDate}`,
+      },
+      {
+        title: "Outstanding Customers",
+        value: money(summary?.kpis.outstandingCustomers),
+        icon: Users,
+        color: "text-amber-600",
+        bgColor: "bg-amber-500/10",
+        href: `/reports/outstanding-customers?asOfDate=${toDate}`,
+      },
+      {
+        title: "Outstanding Suppliers",
+        value: money(summary?.kpis.outstandingSuppliers),
+        icon: UserMinus,
+        color: "text-rose-600",
+        bgColor: "bg-rose-500/10",
+        href: `/reports/outstanding-suppliers?asOfDate=${toDate}`,
+      },
+    ],
+    [money, summary?.kpis, fromDate, toDate],
+  );
+
+  const quickActions = useMemo(
+    () => [
+      { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, color: "bg-chart-2 text-white" },
+      { title: t("newSale"), url: "/sales", icon: TrendingUp, color: "bg-primary text-primary-foreground" },
+      { title: t("processStock"), url: "/processing", icon: Factory, color: "bg-chart-3 text-white" },
+    ],
+    [t],
+  );
+
+  const dayBookRows = useMemo(() => details?.dayBook.rows || [], [details?.dayBook.rows]);
+
+  const chartsFallback = (
+    <div className="grid gap-6">
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-48" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-[420px] w-full" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-32" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-96 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  const activityFallback = (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-40" />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <SkeletonBox key={i} className="h-14 w-full" />
+          ))}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-32" />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <SkeletonBox key={i} className="h-16 w-full" />
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  const insightsFallback = (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-36" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-24 w-full" />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <SkeletonBox className="h-5 w-44" />
+        </CardHeader>
+        <CardContent>
+          <SkeletonBox className="h-48 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  );
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
-      <div className={`flex items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
+      <div className={`flex min-h-[72px] items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("dashboard")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "آج کا خلاصہ" : "Today's overview"}
+            {language === "ur" ? "Accounting-grade overview" : "Accounting-grade overview"}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -112,273 +388,222 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <Card>
+        <CardContent className="pt-6">
+          <div className={`grid gap-4 md:grid-cols-3 ${isRTL ? "direction-rtl" : ""}`}>
+            <div className="md:col-span-2">
+              <Label className={isRTL ? "font-urdu" : ""}>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
+            </div>
+            <div>
+              <Label className={isRTL ? "font-urdu" : ""}>Godown</Label>
+              <Select value={godown} onValueChange={setGodown} disabled>
+                <SelectTrigger>
+                  <SelectValue placeholder="All godowns" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat, index) => (
-          <Card key={index} data-testid={`card-stat-${index}`}>
-            <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {stat.title}
-              </CardTitle>
-              <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bgColor}`}>
-                <stat.icon className={`h-4 w-4 ${stat.color}`} />
-              </div>
-            </CardHeader>
-            <CardContent>
-              {statsLoading ? (
-                <Skeleton className="h-8 w-32" />
-              ) : (
-                <>
+          <Link key={index} href={stat.href}>
+            <Card className="min-h-[120px] cursor-pointer hover:shadow-sm" data-testid={`card-stat-${index}`}>
+              <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  {stat.title}
+                </CardTitle>
+                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bgColor}`}>
+                  <stat.icon className={`h-4 w-4 ${stat.color}`} />
+                </div>
+              </CardHeader>
+              <CardContent>
+                {summaryLoading ? (
+                  <SkeletonBox className="h-8 w-32" />
+                ) : (
                   <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
                     {stat.value}
                   </div>
-                  <div className={`flex items-center gap-1 mt-1 ${isRTL ? "flex-row-reverse justify-end" : ""}`}>
-                    {stat.trend === "up" ? (
-                      <ArrowUpRight className="h-4 w-4 text-primary" />
-                    ) : (
-                      <ArrowDownRight className="h-4 w-4 text-destructive" />
-                    )}
-                    <span className={`text-xs font-medium ${stat.trend === "up" ? "text-primary" : "text-destructive"}`}>
-                      {stat.change}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {language === "ur" ? "پچھلے مہینے سے" : "from last month"}
-                    </span>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
+                )}
+              </CardContent>
+            </Card>
+          </Link>
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <div className={isRTL ? "text-right" : ""}>
-              <CardTitle className="text-base font-semibold">
-                {language === "ur" ? "خریداری بمقابلہ فروخت" : "Purchases vs Sales"}
-              </CardTitle>
-              <p className="text-sm text-muted-foreground">
-                {language === "ur" ? "ماہانہ موازنہ" : "Monthly comparison"}
-              </p>
-            </div>
-            <div className={`flex gap-4 text-sm ${isRTL ? "flex-row-reverse" : ""}`}>
-              <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                <div className="h-3 w-3 rounded-full bg-chart-2" />
-                <span className="text-muted-foreground">{t("purchases")}</span>
-              </div>
-              <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                <div className="h-3 w-3 rounded-full bg-primary" />
-                <span className="text-muted-foreground">{t("sales")}</span>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="h-80">
-              {chartLoading ? (
-                <div className="flex items-center justify-center h-full">
-                  <Skeleton className="h-16 w-1/2" />
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {kpiCards.map((stat, index) => (
+          <Link key={index} href={stat.href}>
+            <Card className="min-h-[120px] cursor-pointer hover:shadow-sm" data-testid={`card-kpi-${index}`}>
+              <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  {stat.title}
+                </CardTitle>
+                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bgColor}`}>
+                  <stat.icon className={`h-4 w-4 ${stat.color}`} />
                 </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData?.monthlyTotals || []}>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis dataKey="name" className="text-xs" />
-                    <YAxis className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: "hsl(var(--card))", 
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "6px"
-                      }}
-                      formatter={(value: number) => [`Rs. ${value.toLocaleString()}`, ""]}
-                    />
-                    <Line 
-                      type="monotone" 
-                      dataKey="purchases" 
-                      stroke="hsl(var(--chart-2))" 
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line 
-                      type="monotone" 
-                      dataKey="sales" 
-                      stroke="hsl(var(--primary))" 
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className={isRTL ? "text-right" : ""}>
-            <CardTitle className="text-base font-semibold">
-              {language === "ur" ? "مصنوعات کا سٹاک" : "Product Stock"}
-            </CardTitle>
-            <p className="text-sm text-muted-foreground">
-              {language === "ur" ? "کلوگرام میں" : "in kilograms"}
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div className="h-80">
-              {chartLoading ? (
-                <div className="flex items-center justify-center h-full">
-                  <Skeleton className="h-16 w-1/2" />
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData?.productStock || []} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
-                    <XAxis type="number" className="text-xs" tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`} />
-                    <YAxis type="category" dataKey="name" className="text-xs" width={80} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: "hsl(var(--card))", 
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: "6px"
-                      }}
-                      formatter={(value: number) => [`${value.toLocaleString()} kg`, ""]}
-                    />
-                    <Bar dataKey="stock" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+              </CardHeader>
+              <CardContent>
+                {summaryLoading ? (
+                  <SkeletonBox className="h-8 w-32" />
+                ) : (
+                  <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
+                    {stat.value}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </Link>
+        ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-base font-semibold">
-              {t("recentActivity")}
-            </CardTitle>
-            <Link href="/reports/ledger">
-              <Button variant="ghost" size="sm" data-testid="button-view-all-activity">
-                {language === "ur" ? "سب دیکھیں" : "View all"}
-              </Button>
-            </Link>
+            <CardTitle className="text-base font-semibold">Trial Balance Health</CardTitle>
+            {summaryLoading ? (
+              <SkeletonBox className="h-6 w-20" />
+            ) : (
+              <Badge variant={summary?.trialBalance.balanced ? "default" : "destructive"}>
+                {summary?.trialBalance.balanced ? "Balanced" : "Mismatch"}
+              </Badge>
+            )}
           </CardHeader>
-          <CardContent>
-            {activityLoading ? (
-              <div className="space-y-4">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <Skeleton className="h-10 w-10 rounded-full" />
-                    <div className="flex-1 space-y-2">
-                      <Skeleton className="h-4 w-3/4" />
-                      <Skeleton className="h-3 w-1/2" />
-                    </div>
-                  </div>
-                ))}
+          <CardContent className="space-y-2">
+            {summaryLoading ? (
+              <div className="space-y-2">
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-2/3" />
               </div>
             ) : (
-              <div className="space-y-4">
-                {(recentActivity || []).length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">
-                    {language === "ur" ? "No recent activity yet." : "No recent activity yet."}
-                  </p>
-                ) : (
-                  (recentActivity || []).map((item: any, index: number) => (
-                    <div 
-                      key={index} 
-                      className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}
-                      data-testid={`activity-item-${index}`}
-                    >
-                      <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                        item.type === "purchase" ? "bg-chart-2/10" : 
-                        item.type === "sale" ? "bg-primary/10" : "bg-chart-3/10"
-                      }`}>
-                        {item.type === "purchase" ? (
-                          <ShoppingCart className="h-4 w-4 text-chart-2" />
-                        ) : item.type === "sale" ? (
-                          <TrendingUp className="h-4 w-4 text-primary" />
-                        ) : (
-                          <Factory className="h-4 w-4 text-chart-3" />
-                        )}
-                      </div>
-                      <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
-                        <p className="text-sm font-medium">{item.reference}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {format(new Date(item.date), "dd MMM yyyy")}
-                        </p>
-                      </div>
-                      <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                        <p className="text-sm font-mono font-medium">
-                          {item.type === "processing" ? `${item.amount} kg` : `Rs. ${parseFloat(item.amount || 0).toLocaleString()}`}
-                        </p>
-                        <Badge variant="secondary" className="text-xs">
-                          {item.type === "purchase" ? t("purchases") : 
-                           item.type === "sale" ? t("sales") : t("processing")}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
+              <>
+                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-muted-foreground">Total Debit</span>
+                  <span className="font-mono">{money(summary?.trialBalance.debitTotal)}</span>
+                </div>
+                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-muted-foreground">Total Credit</span>
+                  <span className="font-mono">{money(summary?.trialBalance.creditTotal)}</span>
+                </div>
+                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-muted-foreground">Difference</span>
+                  <span
+                    className={`font-mono ${summary?.trialBalance.balanced ? "text-emerald-600" : "text-destructive"}`}
+                  >
+                    {money(summary?.trialBalance.difference)}
+                  </span>
+                </div>
+                <div className={`flex items-center justify-between pt-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                  <span className="text-sm text-muted-foreground">Profit is final</span>
+                  <Badge variant={summary?.trialBalance.balanced ? "default" : "secondary"}>
+                    {summary?.trialBalance.balanced ? "Enabled" : "Disabled"}
+                  </Badge>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-base font-semibold">
-              {language === "ur" ? "زیر التواء آئٹمز" : "Pending Items"}
-            </CardTitle>
-            <Link href="/processing">
-              <Button variant="ghost" size="sm" data-testid="button-view-all-pending">
-                {language === "ur" ? "سب دیکھیں" : "View all"}
-              </Button>
-            </Link>
+            <CardTitle className="text-base font-semibold">System Alerts</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-destructive" />
           </CardHeader>
-          <CardContent>
-              {processingLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 w-full" />)}
+          <CardContent className="space-y-3">
+            {alertsLoading ? (
+              <div className="space-y-2">
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-5/6" />
+                <SkeletonBox className="h-4 w-2/3" />
+              </div>
+            ) : (alertsData?.alerts || []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No alerts.</p>
+            ) : (
+              (alertsData?.alerts || []).map((alert) => (
+                <div key={alert.key} className="flex items-start gap-3">
+                  <Badge variant={alert.severity === "critical" ? "destructive" : "secondary"}>
+                    {alert.severity.toUpperCase()}
+                  </Badge>
+                  <p className="text-sm">{alert.message}</p>
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  {processingBatches.filter((p: any) => p.status !== "completed").slice(0, 3).map((item: any, index: number) => (
-                    <div 
-                      key={index} 
-                      className={`flex items-center gap-3 p-3 rounded-lg bg-muted/30 ${isRTL ? "flex-row-reverse" : ""}`}
-                      data-testid={`pending-item-${index}`}
-                    >
-                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-3/10">
-                        <Factory className="h-4 w-4 text-chart-3" />
-                      </div>
-                      <div className={`flex-1 ${isRTL ? "text-right" : ""}`}>
-                        <p className="text-sm font-medium">{item.sourceProduct?.name || "-"}</p>
-                        <p className="text-xs text-muted-foreground font-mono">{item.batchNumber}</p>
-                      </div>
-                      <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                        <p className="text-sm font-mono">
-                          {parseFloat(item.sourceQuantity || "0").toLocaleString()} kg
-                        </p>
-                        <Badge 
-                          variant={item.status === "in_progress" ? "default" : "secondary"}
-                          className="text-xs"
-                        >
-                          {item.status === "in_progress" ? t("inProgress") : t("pending")}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
-                  {processingBatches.filter((p: any) => p.status !== "completed").length === 0 && (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      {language === "ur" ? "No pending processing." : "No pending processing."}
-                    </p>
-                  )}
-                </div>
-              )}
+              ))
+            )}
           </CardContent>
         </Card>
       </div>
+
+      <div ref={chartsSection.ref}>
+        {/* Lazy-load chart code + data only when the charts are near the viewport. */}
+        {chartsSection.active ? (
+          <Suspense fallback={chartsFallback}>
+            <DashboardChartsSection
+              fromDate={fromDate}
+              toDate={toDate}
+              godown={godown}
+              isRTL={isRTL}
+              purchasesLabel={t("purchases")}
+              salesLabel={t("sales")}
+            />
+          </Suspense>
+        ) : (
+          chartsFallback
+        )}
+      </div>
+
+      <div ref={detailsSection.ref}>
+        {/* Defer lower dashboard panels to keep the initial bundle/data light. */}
+        {detailsSection.active ? (
+          <Suspense fallback={activityFallback}>
+            <DashboardActivitySection
+              dayBookRows={dayBookRows}
+              dayBookLoading={detailsLoading}
+              isRTL={isRTL}
+              money={money}
+              pendingLabel={t("pending")}
+              inProgressLabel={t("inProgress")}
+              completedLabel={t("completed")}
+              onOpenDetail={openDetail}
+            />
+          </Suspense>
+        ) : (
+          activityFallback
+        )}
+      </div>
+
+      <div>
+        {detailsSection.active ? (
+          <Suspense fallback={insightsFallback}>
+            <DashboardInsightsSection
+              charges={details?.charges}
+              stock={details?.stock}
+              isRTL={isRTL}
+              money={money}
+              loading={detailsLoading}
+            />
+          </Suspense>
+        ) : (
+          insightsFallback
+        )}
+      </div>
+
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={detailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

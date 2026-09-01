@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Edit, Building2, Wallet } from "lucide-react";
+import { Plus, Edit, Eye, Building2, Wallet, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
   Form,
   FormControl,
@@ -25,7 +26,7 @@ import { Input } from "@/components/ui/input";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 
 const bankFormSchema = z.object({
   name: z.string().min(1, "Bank name is required"),
@@ -41,6 +42,7 @@ export default function BanksPage() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingBank, setEditingBank] = useState<Account | null>(null);
+  const [viewingBank, setViewingBank] = useState<Account | null>(null);
 
   const form = useForm<BankFormData>({
     resolver: zodResolver(bankFormSchema),
@@ -53,7 +55,7 @@ export default function BanksPage() {
   });
 
   const { data: banks = [], isLoading } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=bank"],
+    queryKey: ["/api/accounts?type=bank&active=true"],
   });
 
   const createMutation = useMutation({
@@ -61,7 +63,7 @@ export default function BanksPage() {
       apiRequest("POST", "/api/accounts", { ...data, type: "bank" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank&active=true"] });
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -73,11 +75,26 @@ export default function BanksPage() {
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank&active=true"] });
       setIsDialogOpen(false);
       setEditingBank(null);
       form.reset();
       toast({ title: t("savedSuccessfully") });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/accounts/${id}`),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank&active=true"] });
+      if (viewingBank?.id === id) {
+        setViewingBank(null);
+      }
+      toast({ title: t("deletedSuccessfully") });
+    },
+    onError: (error: Error) => {
+      toast({ variant: "destructive", title: "Delete failed", description: error.message });
     },
   });
 
@@ -153,20 +170,67 @@ export default function BanksPage() {
     {
       key: "actions",
       title: "Actions",
-      titleUrdu: "ایکشنز",
+      titleUrdu: "",
       align: "center",
       render: (item) => (
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleEdit(item);
-          }}
-          data-testid={`button-edit-${item.id}`}
-        >
-          <Edit className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center justify-center gap-2">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              setViewingBank(item);
+            }}
+            data-testid={`button-view-${item.id}`}
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleEdit(item);
+            }}
+            data-testid={`button-edit-${item.id}`}
+          >
+            <Edit className="h-4 w-4" />
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`button-delete-${item.id}`}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader className={isRTL ? "text-right" : ""}>
+                <AlertDialogTitle>
+                  {t("delete")} {item.name}
+                </AlertDialogTitle>
+                <AlertDialogDescription className={isRTL ? "font-urdu text-right" : ""}>
+                  {t("confirmDelete")}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter className={isRTL ? "flex-row-reverse" : ""}>
+                <AlertDialogCancel disabled={deleteMutation.isPending}>
+                  {t("cancel")}
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteMutation.mutate(item.id)}
+                  disabled={deleteMutation.isPending}
+                  data-testid={`confirm-delete-${item.id}`}
+                >
+                  {t("delete")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
       ),
     },
   ];
@@ -272,6 +336,45 @@ export default function BanksPage() {
               </div>
             </form>
           </Form>
+        </DialogContent>
+      </Dialog>
+
+
+      <Dialog open={!!viewingBank} onOpenChange={(open) => !open && setViewingBank(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
+              Bank Details
+            </DialogTitle>
+          </DialogHeader>
+          {viewingBank && (
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Name</span>
+                <span className="text-right">{viewingBank.name}</span>
+              </div>
+              {viewingBank.nameUrdu && (
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Name (Urdu)</span>
+                  <span className="text-right font-urdu">{viewingBank.nameUrdu}</span>
+                </div>
+              )}
+              {viewingBank.address && (
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Branch/Account</span>
+                  <p>{viewingBank.address}</p>
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Opening Balance</span>
+                <span className="font-mono">Rs. {Number(viewingBank.openingBalance || 0).toLocaleString()}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Current Balance</span>
+                <span className="font-mono">Rs. {Number(viewingBank.currentBalance || 0).toLocaleString()}</span>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

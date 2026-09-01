@@ -1,0 +1,81 @@
+/* Global print defaults for app-level printing (non-iframe). */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 15mm;
+  }
+
+  /* Hide app chrome and interactive UI. */
+  header,
+  nav,
+  aside,
+  dialog,
+  [role="dialog"],
+  [data-testid*="button-export"],
+  [data-testid*="button-add"],
+  [data-testid*="button-add-purchase"],
+  [data-testid*="button-add-sale"],
+  button:not(.print-visible),
+  .screen-only {
+    display: none !important;
+  }
+
+  /* Ensure high-contrast print output. */
+  html,
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Page layout helpers. */
+  .print-only {
+    display: block !important;
+  }
+
+  .page-break {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  .no-break,
+  .no-break * {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep tables readable and avoid split rows. */
+  table {
+    width: 100% !important;
+    border-collapse: collapse;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  th,
+  td {
+    border: 1px solid #ccc;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  th {
+    background: #f5f5f5;
+  }
+
+  tbody tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Reduce visual noise in print. */
+  .card,
+  .print-area {
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+    border-radius: 8px !important;
+  }
+}

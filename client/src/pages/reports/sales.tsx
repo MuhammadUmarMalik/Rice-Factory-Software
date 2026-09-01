@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Download, TrendingUp, Truck, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,35 +6,122 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery } from "@tanstack/react-query";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { Sale, Account } from "@shared/schema";
+import type { Account, Product } from "@/types/schema";
 import { format } from "date-fns";
+import { useReportDetail } from "@/components/report-detail-hook";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
+import { apiRequest } from "@/lib/queryClient";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+const ReportDetailDialog = lazy(() =>
+  import("@/components/report-detail-dialog").then((mod) => ({
+    default: mod.ReportDetailDialog,
+  })),
+);
+
+type SalesReportRow = {
+  id: number;
+  invoiceNumber: string;
+  saleDate: string | number | Date;
+  customerId: number;
+  customerName: string;
+  subtotal: string;
+  discount: string;
+  tax: string;
+  otherCharges: string;
+  total: string;
+  received: string;
+  balance: string;
+};
+
+type SalesReport = {
+  rows: SalesReportRow[];
+  totals: {
+    subtotal: string;
+    discount: string;
+    tax: string;
+    otherCharges: string;
+    total: string;
+    received: string;
+    balance: string;
+  };
+};
+
+function formatSafeDate(value: string | number | Date) {
+  const date = new Date(value as any);
+  if (Number.isNaN(date.getTime())) return "-";
+  return format(date, "dd MMM yyyy");
+}
 
 export default function SalesReportPage() {
   const { t, isRTL, language } = useLanguage();
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
+  const [customerId, setCustomerId] = useState<string>("all");
+  const [productId, setProductId] = useState<string>("all");
+  const [status, setStatus] = useState<string>("all");
+  const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
-  const { data: sales = [], isLoading } = useQuery<(Sale & { customer?: Account })[]>({
-    queryKey: ["/api/reports/sales"],
+  const { data: customers = [] } = useQuery<Account[]>({
+    queryKey: ["/api/accounts?type=customer"],
   });
 
-  const filteredSales = sales.filter(sale => {
-    if (dateFrom && new Date(sale.saleDate) < new Date(dateFrom)) return false;
-    if (dateTo && new Date(sale.saleDate) > new Date(dateTo)) return false;
-    return true;
+  const { data: products = [] } = useQuery<Product[]>({
+    queryKey: ["/api/products"],
   });
 
-  const totalAmount = filteredSales.reduce((sum, s) => sum + parseFloat(s.totalAmount || "0"), 0);
-  const totalPaid = filteredSales.reduce((sum, s) => sum + parseFloat(s.paidAmount || "0"), 0);
-  const totalDue = totalAmount - totalPaid;
+  const { data, isLoading, error } = useQuery<SalesReport>({
+    queryKey: ["/api/reports/sales", fromDate, toDate, customerId, productId, status],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (fromDate) params.set("fromDate", fromDate);
+      if (toDate) params.set("toDate", toDate);
+      if (customerId !== "all") params.set("customerId", customerId);
+      if (productId !== "all") params.set("productId", productId);
+      if (status !== "all") params.set("paymentStatus", status);
+      const res = await apiRequest("GET", `/api/reports/sales?${params.toString()}`);
+      return res.json();
+    },
+  });
 
-  const columns: Column<Sale & { customer?: Account }>[] = [
+  useEffect(() => {
+    if (!error) return;
+    const message = error instanceof Error ? error.message : String(error);
+    window.electronLog?.write(`sales report error: ${message}`);
+  }, [error]);
+
+  const rows = data?.rows || [];
+  const totals = useMemo(
+    () =>
+      rows.reduce(
+        (acc, r) => {
+          acc.subtotal += parseFloat(r.subtotal || "0");
+          acc.discount += parseFloat(r.discount || "0");
+          acc.tax += parseFloat(r.tax || "0");
+          acc.otherCharges += parseFloat(r.otherCharges || "0");
+          acc.total += parseFloat(r.total || "0");
+          acc.received += parseFloat(r.received || "0");
+          acc.balance += parseFloat(r.balance || "0");
+          return acc;
+        },
+        { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, received: 0, balance: 0 },
+      ),
+    [rows],
+  );
+
+  const columns: Column<SalesReportRow>[] = [
     {
       key: "invoiceNumber",
-      title: "Invoice #",
-      titleUrdu: "انوائس نمبر",
+      title: "Sales No",
       render: (item) => (
         <span className="font-mono text-sm font-medium">{item.invoiceNumber}</span>
       ),
@@ -42,78 +129,101 @@ export default function SalesReportPage() {
     {
       key: "saleDate",
       title: "Date",
-      titleUrdu: "تاریخ",
       render: (item) => (
         <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
           <Calendar className="h-3 w-3 text-muted-foreground" />
           <span className="text-sm">
-            {format(new Date(item.saleDate), "dd MMM yyyy")}
+            {formatSafeDate(item.saleDate)}
           </span>
         </div>
       ),
     },
     {
-      key: "customer",
+      key: "customerName",
       title: "Customer",
-      titleUrdu: "گاہک",
-      render: (item) => (
-        <div>
-          <p className="font-medium">{item.customer?.name || "-"}</p>
-          {item.customer?.nameUrdu && (
-            <p className="text-sm text-muted-foreground font-urdu">{item.customer.nameUrdu}</p>
-          )}
-        </div>
-      ),
     },
     {
-      key: "vehicleNumber",
-      title: "Vehicle",
-      titleUrdu: "گاڑی",
-      render: (item) => (
-        <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          {item.vehicleNumber && (
-            <>
-              <Truck className="h-3 w-3 text-muted-foreground" />
-              <span className="font-mono text-sm">{item.vehicleNumber}</span>
-            </>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "totalAmount",
-      title: "Total",
-      titleUrdu: "کل رقم",
+      key: "subtotal",
+      title: "Subtotal",
       align: "right",
       render: (item) => (
-        <span className="font-mono font-medium text-primary">
-          Rs. {parseFloat(item.totalAmount || "0").toLocaleString()}
+        <span className="font-mono">
+          Rs. {parseFloat(item.subtotal || "0").toLocaleString()}
         </span>
       ),
     },
     {
-      key: "paidAmount",
-      title: "Paid",
-      titleUrdu: "ادائیگی",
+      key: "discount",
+      title: "Discount",
+      align: "right",
+      render: (item) => (
+        <span className="font-mono">
+          Rs. {parseFloat(item.discount || "0").toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      key: "tax",
+      title: "Tax",
+      align: "right",
+      render: (item) => (
+        <span className="font-mono">
+          Rs. {parseFloat(item.tax || "0").toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      key: "otherCharges",
+      title: "Other",
+      align: "right",
+      render: (item) => (
+        <span className="font-mono">
+          Rs. {parseFloat(item.otherCharges || "0").toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      key: "total",
+      title: "Total",
+      align: "right",
+      render: (item) => (
+        <span className="font-mono font-medium text-primary">
+          Rs. {parseFloat(item.total || "0").toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      key: "received",
+      title: "Received",
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm">
-          Rs. {parseFloat(item.paidAmount || "0").toLocaleString()}
+          Rs. {parseFloat(item.received || "0").toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      key: "balance",
+      title: "Balance",
+      align: "right",
+      render: (item) => (
+        <span className="font-mono text-sm text-destructive">
+          Rs. {parseFloat(item.balance || "0").toLocaleString()}
         </span>
       ),
     },
     {
       key: "status",
       title: "Status",
-      titleUrdu: "حیثیت",
       align: "center",
       render: (item) => {
-        const total = parseFloat(item.totalAmount || "0");
-        const paid = parseFloat(item.paidAmount || "0");
-        const isPaid = paid >= total;
+        const total = parseFloat(item.total || "0");
+        const received = parseFloat(item.received || "0");
+        const isPaid = received >= total && total > 0;
+        const isPartial = received > 0 && received < total;
         return (
-          <Badge variant={isPaid ? "default" : "secondary"} className="text-xs">
-            {isPaid ? (language === "ur" ? "مکمل" : "Paid") : (language === "ur" ? "باقی" : "Due")}
+          <Badge variant={isPaid ? "default" : isPartial ? "secondary" : "outline"} className="text-xs">
+            {isPaid ? "Paid" : isPartial ? "Partial" : "Unpaid"}
           </Badge>
         );
       },
@@ -126,41 +236,76 @@ export default function SalesReportPage() {
         <div className={isRTL ? "text-right" : ""}>
           <h1 className="text-2xl font-semibold">{t("salesReport")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "فروخت کی رپورٹ" : "Sales transaction report"}
+            {language === "ur" ? "Sales transaction report" : "Sales transaction report"}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button variant="outline" data-testid="button-export">
-            <Download className="h-4 w-4" />
-            {t("export")}
-          </Button>
+          <PrintActions
+            docKey={docKeys.salesReport}
+            params={{
+              fromDate: fromDate || undefined,
+              toDate: toDate || undefined,
+              customerId: customerId !== "all" ? customerId : undefined,
+              productId: productId !== "all" ? productId : undefined,
+              paymentStatus: status !== "all" ? status : undefined,
+            }}
+            title="Sales Report"
+          />
         </div>
       </div>
 
       <Card>
         <CardContent className="pt-6">
-          <div className={`grid gap-4 md:grid-cols-4 ${isRTL ? "direction-rtl" : ""}`}>
-            <div>
-              <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "تاریخ سے" : "From Date"}
-              </Label>
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                data-testid="input-date-from"
-              />
+          <div className={`grid gap-4 md:grid-cols-6 ${isRTL ? "direction-rtl" : ""}`}>
+            <div className="md:col-span-2">
+              <Label>Date Range</Label>
+              <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div>
-              <Label className={isRTL ? "font-urdu" : ""}>
-                {language === "ur" ? "تاریخ تک" : "To Date"}
-              </Label>
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                data-testid="input-date-to"
-              />
+              <Label>Customer</Label>
+              <Select value={customerId} onValueChange={setCustomerId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All customers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {customers.map((c) => (
+                    <SelectItem key={c.id} value={c.id.toString()}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Item</Label>
+              <Select value={productId} onValueChange={setProductId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All items" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {products.map((p) => (
+                    <SelectItem key={p.id} value={p.id.toString()}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Status</Label>
+              <Select value={status} onValueChange={setStatus}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="paid">Paid</SelectItem>
+                  <SelectItem value="partial">Partial</SelectItem>
+                  <SelectItem value="unpaid">Unpaid</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardContent>
@@ -169,45 +314,37 @@ export default function SalesReportPage() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {t("totalSales")}
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Sales</CardTitle>
             <TrendingUp className="h-4 w-4 text-primary" />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-primary ${isRTL ? "text-right" : ""}`}>
-              Rs. {totalAmount.toLocaleString()}
+              Rs. {totals.total.toLocaleString()}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {filteredSales.length} {language === "ur" ? "ٹرانزیکشنز" : "transactions"}
-            </p>
+            <p className="text-xs text-muted-foreground mt-1">{rows.length} transactions</p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "وصول شدہ" : "Amount Received"}
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Amount Received</CardTitle>
             <TrendingUp className="h-4 w-4 text-chart-5" />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
-              Rs. {totalPaid.toLocaleString()}
+              Rs. {totals.received.toLocaleString()}
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {language === "ur" ? "وصولی باقی" : "Receivable"}
-            </CardTitle>
-            <TrendingUp className="h-4 w-4 text-destructive" />
+            <CardTitle className="text-sm font-medium text-muted-foreground">Receivable</CardTitle>
+            <Truck className="h-4 w-4 text-destructive" />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-destructive ${isRTL ? "text-right" : ""}`}>
-              Rs. {totalDue.toLocaleString()}
+              Rs. {totals.balance.toLocaleString()}
             </div>
           </CardContent>
         </Card>
@@ -215,14 +352,32 @@ export default function SalesReportPage() {
 
       <Card>
         <CardContent className="pt-6">
+          {error ? (
+            <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error instanceof Error ? error.message : "Failed to load sales report"}
+            </div>
+          ) : null}
           <DataTable
             columns={columns}
-            data={filteredSales}
+            data={rows}
             isLoading={isLoading}
+            onRowClick={(row) => openDetail({ type: "sale", id: row.id })}
             testIdPrefix="sales-report"
           />
         </CardContent>
       </Card>
+
+      {reference ? (
+        <Suspense fallback={null}>
+          <ReportDetailDialog
+            reference={reference}
+            open={!!reference}
+            onOpenChange={(open) => (!open ? closeDetail() : null)}
+            detail={detail || null}
+            isLoading={isDetailLoading}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

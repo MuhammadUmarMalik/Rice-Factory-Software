@@ -1,19 +1,32 @@
-
-import { useEffect, useMemo, useState } from "react";
-import { Plus, Eye, Truck, Calculator, ArrowLeft } from "lucide-react";
+
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
+import { Plus, Calculator, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import {
+  usePurchases,
+  useNextBillNumber,
+  useCreatePurchase,
+  useUpdatePurchase,
+  useDeletePurchase,
+} from "@/hooks/use-purchases";
+import { useAccounts, useProducts } from "@/hooks";
+import { productsApi } from "@/api/products.api";
+import { purchasesApi } from "@/api/purchases.api";
+import { PurchasesList } from "@/pages/purchases/PurchasesList";
 import { useToast } from "@/hooks/use-toast";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Form,
@@ -35,21 +48,70 @@ import {
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Purchase, Account, Product } from "@shared/schema";
+import type { Purchase, Account, Product } from "@/types/schema";
 import { format } from "date-fns";
-import { useQuery as useRQQuery } from "@tanstack/react-query";
+import { useUIStore } from "@/stores/ui.store";
+import { usePurchaseStore } from "@/stores/purchase/store";
+import type { PurchaseMode } from "@/stores/purchase/types";
+
+const formatDateInput = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const parseLocalDate = (value: string) => {
+  const [y, m, d] = value.split("-").map((v) => Number(v));
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
+const isFutureDateString = (value: string) => {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const selected = parseLocalDate(value);
+  return selected.getTime() > todayStart.getTime();
+};
+
+const parseApiErrorMessage = (error: unknown) => {
+  if (!(error instanceof Error)) return "Unknown error";
+  const message = error.message || "Unknown error";
+  const colonIndex = message.indexOf(":");
+  if (colonIndex === -1) return message;
+  const raw = message.slice(colonIndex + 1).trim();
+  if (!raw) return message;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "string") return parsed;
+    if (parsed?.error) {
+      if (Array.isArray(parsed.error)) {
+        return parsed.error.map((e: any) => e?.message).filter(Boolean).join(", ") || message;
+      }
+      if (typeof parsed.error === "string") return parsed.error;
+    }
+  } catch {
+    return raw;
+  }
+  return message;
+};
+
+const lessLabel = "Watta Kaat (Moisture + Quality)";
+const bardanaLabel = "Bardana (Kaat)";
+const qualityLessPerBagLabel = "Watta Kaat (Moisture + Quality) / Bag";
 
 const purchaseFormSchema = z.object({
-  purchaseDate: z.string().optional(),
-  dueDate: z.string().optional(),
+  purchaseDate: z.string().optional().refine((val) => !val || !isFutureDateString(val), {
+    message: "Date cannot be in the future",
+  }),
+  moundBaseKg: z.enum(["40", "60"]).default("40"),
   billNo: z.string().optional(),
   bookNo: z.string().optional(),
   supplierId: z.string().min(1, "Supplier is required"),
-  expenseAccountId: z.string().min(1, "Expense account is required"),
   vehicleNumber: z.string().optional(),
   brokerId: z.string().optional(),
   brokerCommissionPercent: z.string().default("0"),
   paidAmount: z.string().default("0"),
+  paymentMode: z.enum(["cash", "credit", "bank"]).default("cash"),
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
@@ -75,6 +137,7 @@ const purchaseFormSchema = z.object({
       "commission",
       "bardana",
       "broken_allowance",
+      "accountant_clerk",
     ]),
     mode: z.enum(["add", "less"]).default("add"),
     amount: z.string().default("0"),
@@ -87,9 +150,27 @@ type PurchaseFormData = z.infer<typeof purchaseFormSchema>;
 export default function PurchasesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [location] = useLocation();
+  const todayString = formatDateInput(new Date());
+  const purchaseMode = useUIStore((state) => state.viewModes.purchase ?? null);
+  const setViewMode = useUIStore((state) => state.setViewMode);
+  const isDialogOpen = useUIStore((state) => state.modals.purchaseForm?.open ?? false);
+  const openDialog = useUIStore((state) => state.openModal);
+  const closeDialog = useUIStore((state) => state.closeModal);
+  const setPurchaseStateMode = usePurchaseStore((state) => state.setMode);
+  const setCurrentPurchase = usePurchaseStore((state) => state.setCurrent);
+  const setCurrentPurchaseId = usePurchaseStore((state) => state.setCurrentId);
+  const resetPurchaseState = usePurchaseStore((state) => state.resetPurchase);
+  const syncPurchaseList = usePurchaseStore((state) => state.setList);
+  const currentPurchase = usePurchaseStore((state) => state.current);
+  const activePurchaseId = usePurchaseStore((state) => state.currentId);
   const [customProductDrafts, setCustomProductDrafts] = useState<Record<number, { name: string; unit: string }>>({});
   const [creatingProductIndex, setCreatingProductIndex] = useState<number | null>(null);
+  const consumedEditId = useRef<number | null>(null);
+  const setMode = (mode: PurchaseMode) => {
+    setViewMode("purchase", mode);
+    setPurchaseStateMode(mode);
+  };
 
   const defaultCharges = useMemo(() => ([
     "weight",
@@ -103,21 +184,22 @@ export default function PurchasesPage() {
     "commission",
     "bardana",
     "broken_allowance",
+    "accountant_clerk",
   ] as const).map((type) => ({ type, mode: "add" as const, amount: "0", accountId: "none" })), []);
 
   const form = useForm<PurchaseFormData>({
     resolver: zodResolver(purchaseFormSchema),
     defaultValues: {
-      purchaseDate: new Date().toISOString().slice(0, 10),
-      dueDate: new Date().toISOString().slice(0, 10),
+      purchaseDate: formatDateInput(new Date()),
+      moundBaseKg: "40",
       billNo: "",
       bookNo: "",
       supplierId: "",
-      expenseAccountId: "",
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
       paidAmount: "0",
+      paymentMode: "cash",
       notes: "",
       items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
       charges: defaultCharges,
@@ -134,45 +216,14 @@ export default function PurchasesPage() {
     name: "charges",
   });
 
-  const { data: purchases = [], isLoading } = useQuery<(Purchase & { supplier?: Account })[]>({
-    // Use report endpoint to include supplier/charges details for display
-    queryKey: ["/api/reports/purchases"],
-  });
+  const { data: purchasesData, isLoading } = usePurchases();
+  const purchases = Array.isArray(purchasesData) ? purchasesData : [];
 
-  const { data: suppliers = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=supplier"],
-  });
+  const { data: suppliers = [] } = useAccounts({ type: "supplier" });
+  const { data: accounts = [] } = useAccounts();
+  const { data: products = [] } = useProducts();
 
-  const { data: expenseAccounts = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=expense"],
-  });
-
-  const { data: accounts = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts"],
-  });
-
-  const { data: products = [] } = useQuery<Product[]>({
-    queryKey: ["/api/products"],
-  });
-
-  const { data: settings } = useRQQuery<{ businessName?: string; businessNameUrdu?: string }>({
-    queryKey: ["/api/settings"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/settings");
-      return res.json();
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const { data: nextBill, refetch: refetchBillNo } = useQuery<{ billNo: string }>({
-    queryKey: ["/api/purchases/next-bill-number"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/purchases/next-bill-number");
-      return res.json();
-    },
-    enabled: isDialogOpen,
-    refetchOnWindowFocus: false,
-  });
+  const { data: nextBill, refetch: refetchBillNo } = useNextBillNumber(isDialogOpen);
 
   useEffect(() => {
     if (isDialogOpen && nextBill?.billNo) {
@@ -188,6 +239,18 @@ export default function PurchasesPage() {
     }));
   }, [purchases, suppliers]);
 
+  useEffect(() => {
+    syncPurchaseList(purchasesWithSupplier);
+  }, [purchasesWithSupplier, syncPurchaseList]);
+
+  useEffect(() => {
+    return () => {
+      resetPurchaseState();
+      setViewMode("purchase", null);
+      closeDialog("purchaseForm");
+    };
+  }, [closeDialog, resetPurchaseState, setViewMode]);
+
   const getUnitForProduct = (productId?: string) =>
     products.find((p) => p.id.toString() === productId)?.unit;
   const createInlineProduct = async (index: number) => {
@@ -198,14 +261,13 @@ export default function PurchasesPage() {
     }
     try {
       setCreatingProductIndex(index);
-      const res = await apiRequest("POST", "/api/products", {
+      const product = await productsApi.create({
         name: draft.name.trim(),
         unit: draft.unit,
         salePrice: "0",
         currentStock: "0",
         avgPurchasePrice: "0",
       });
-      const product: Product = await res.json();
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
       form.setValue(`items.${index}.productId`, product.id.toString(), { shouldDirty: true, shouldValidate: true });
       setCustomProductDrafts((prev) => {
@@ -214,73 +276,230 @@ export default function PurchasesPage() {
         return copy;
       });
       toast({ title: "Product added", description: `${product.name} (${product.unit})` });
-    } catch (err: any) {
-      toast({ title: "Failed to add product", description: err?.message || "Unknown error", variant: "destructive" });
+    } catch (err: unknown) {
+      toast({ title: "Failed to add product", description: (err as Error)?.message || "Unknown error", variant: "destructive" });
     } finally {
       setCreatingProductIndex(null);
     }
   };
 
-  const createMutation = useMutation({
-    mutationFn: (data: PurchaseFormData) =>
-      apiRequest("POST", "/api/purchases", {
-        ...data,
-        billNo: data.billNo || undefined,
-        supplierId: parseInt(data.supplierId),
-        expenseAccountId: parseInt(data.expenseAccountId),
-        purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
-        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
-        brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
-        items: data.items.map((item, idx) => ({
-          productId: parseInt(item.productId),
-          marka: item.marka,
-          serialNo: idx + 1,
-          bags: item.bags,
-          fillingPerBagKg: item.fillingPerBagKg,
-          looseKgs: item.looseKgs,
-          lessKg: item.lessKg,
-          bardanaKatKg: item.bardanaKatKg,
-          rate: item.rate,
-          rateUnit: item.rateUnit,
-        })),
-        charges: data.charges.map((c) => ({
-          ...c,
-          amount: c.amount || "0",
-          accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
-        })),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      setIsDialogOpen(false);
-      form.reset();
-      toast({ title: t("savedSuccessfully") });
-    },
+  const createMutation = useCreatePurchase();
+  const updateMutation = useUpdatePurchase();
+  const deleteMutation = useDeletePurchase();
+
+  const buildPurchasePayload = (data: PurchaseFormData) => ({
+    billNo: data.billNo || nextBill?.billNo || undefined,
+    bookNo: data.bookNo,
+    supplierId: parseInt(data.supplierId),
+    purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
+    brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
+    paidAmount: data.paidAmount || "0",
+    paymentMode: data.paymentMode || "cash",
+    moundBaseKg: moundBaseKg.toString(),
+    items: data.items.map((item, idx) => ({
+      productId: parseInt(item.productId),
+      marka: item.marka,
+      serialNo: idx + 1,
+      bags: item.bags || "0",
+      fillingPerBagKg: item.fillingPerBagKg || "0",
+      looseKgs: item.looseKgs || "0",
+      lessKg: item.lessKg || "0",
+      bardanaKatKg: item.bardanaKatKg || "0",
+      rate: item.rate || "0",
+      rateUnit: item.rateUnit,
+    })),
+    charges: data.charges.map((c) => ({
+      ...c,
+      amount: c.amount || "0",
+      accountId: c.accountId && c.accountId !== "none" ? parseInt(c.accountId) : undefined,
+    })),
   });
 
   const handleSubmit = (data: PurchaseFormData) => {
-    createMutation.mutate(data);
+    const payload = buildPurchasePayload(data);
+    const onSuccess = () => {
+      closeDialog("purchaseForm");
+      setMode(null);
+      resetPurchaseState();
+      form.reset();
+      toast({ title: t("savedSuccessfully") });
+    };
+    const onError = (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to save purchase",
+        description: parseApiErrorMessage(error),
+      });
+    };
+    if (purchaseMode === "edit" && activePurchaseId) {
+      updateMutation.mutate({ id: activePurchaseId, data: payload }, { onSuccess, onError });
+    } else {
+      createMutation.mutate(payload as Parameters<typeof createMutation.mutate>[0], { onSuccess, onError });
+    }
+  };
+
+  const handleDelete = (purchase: Purchase) => {
+    deleteMutation.mutate({ id: purchase.id, force: true }, {
+      onError: (err) =>
+        toast({
+          title: `Delete failed for purchase ${purchase.id}`,
+          description: parseApiErrorMessage(err),
+          variant: "destructive",
+        }),
+      onSuccess: () => toast({ title: t("deletedSuccessfully") }),
+    });
   };
 
   const handleAddNew = () => {
+    resetPurchaseState();
+    setMode("create");
     form.reset({
-      purchaseDate: new Date().toISOString().slice(0, 10),
-      dueDate: new Date().toISOString().slice(0, 10),
+      purchaseDate: formatDateInput(new Date()),
+      moundBaseKg: "40",
       billNo: nextBill?.billNo || "",
       bookNo: "",
       supplierId: "",
-      expenseAccountId: "",
       vehicleNumber: "",
       brokerId: "none",
       brokerCommissionPercent: "0",
       paidAmount: "0",
+      paymentMode: "cash",
       notes: "",
       items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
       charges: defaultCharges,
     });
-    setIsDialogOpen(true);
+    openDialog("purchaseForm");
     refetchBillNo();
+    setCustomProductDrafts({});
+    setCreatingProductIndex(null);
+  };
+
+  const populateFormFromPurchase = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
+    const items = (purchase as any).items || [];
+    const charges = (purchase as any).charges || [];
+    const normalizedItems =
+      items.length > 0
+        ? items.map((item: any) => ({
+            productId: String(item.productId ?? ""),
+            marka: item.marka || "",
+            bags: item.bags || "0",
+            fillingPerBagKg: item.fillingPerBagKg || "0",
+            looseKgs: item.looseKgs || "0",
+            lessKg: item.lessKg || "0",
+            bardanaKatKg: item.bardanaKatKg || "0",
+            rate: item.rate || "0",
+            rateUnit: (item.rateUnit as PurchaseFormData["items"][number]["rateUnit"]) || "kg",
+          }))
+        : [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }];
+    const chargesByType = new Map(
+      charges.map((c: any) => [
+        c.type,
+        {
+          type: c.type,
+          mode: "add",
+          amount: c.amount || "0",
+          accountId: c.accountId ? String(c.accountId) : "none",
+        },
+      ]),
+    );
+    const normalizedCharges =
+      charges.length > 0
+        ? defaultCharges.map((base) => chargesByType.get(base.type) || base)
+        : defaultCharges;
+
+    form.reset({
+      purchaseDate: purchase.purchaseDate ? format(new Date(purchase.purchaseDate), "yyyy-MM-dd") : formatDateInput(new Date()),
+      moundBaseKg: "40",
+      billNo: purchase.billNo || "",
+      bookNo: purchase.bookNo || "",
+      supplierId: purchase.supplierId ? String(purchase.supplierId) : "",
+      vehicleNumber: purchase.vehicleNumber || "",
+      brokerId: purchase.brokerId ? String(purchase.brokerId) : "none",
+      brokerCommissionPercent: purchase.brokerCommissionPercent || "0",
+      paidAmount: (purchase as any).paidAmount ?? "0",
+      paymentMode: ((purchase as any).paymentMode as "cash" | "credit" | "bank") ?? "cash",
+      notes: purchase.notes || "",
+      items: normalizedItems,
+      charges: normalizedCharges,
+    });
+  };
+
+  const loadPurchaseDetail = async (purchaseId: number) => {
+    return purchasesApi.get(purchaseId);
+  };
+
+  const handleEditById = async (purchaseId: number) => {
+    try {
+      const detail = await loadPurchaseDetail(purchaseId);
+      setMode("edit");
+      setCurrentPurchase(detail as any);
+      setCurrentPurchaseId(purchaseId);
+      populateFormFromPurchase(detail);
+      openDialog("purchaseForm");
+    } catch (err: any) {
+      toast({ title: "Failed to load purchase detail", description: err?.message || "Unknown error", variant: "destructive" });
+    }
+  };
+
+  const handleEdit = async (purchase: Purchase) => {
+    try {
+      const detail = await loadPurchaseDetail(purchase.id);
+      setMode("edit");
+      setCurrentPurchase(detail as any);
+      setCurrentPurchaseId(purchase.id);
+      populateFormFromPurchase(detail);
+      openDialog("purchaseForm");
+    } catch (err: any) {
+      toast({ title: "Failed to load purchase detail", description: err?.message || "Unknown error", variant: "destructive" });
+    }
+  };
+
+  const handleView = async (purchase: Purchase) => {
+    try {
+      const detail = await loadPurchaseDetail(purchase.id);
+      setMode("view");
+      setCurrentPurchase(detail as any);
+      setCurrentPurchaseId(purchase.id);
+      populateFormFromPurchase(detail);
+      openDialog("purchaseForm");
+    } catch (err: any) {
+      toast({ title: "Failed to load purchase detail", description: err?.message || "Unknown error", variant: "destructive" });
+    }
+  };
+
+  const consumedOpenId = useRef<number | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+    const editParam = params.get("editId");
+    if (editParam) {
+      const id = Number(editParam);
+      if (Number.isFinite(id) && consumedEditId.current !== id) {
+        consumedEditId.current = id;
+        handleEditById(id);
+      }
+      return;
+    }
+    const openParam = params.get("open");
+    if (openParam) {
+      const id = Number(openParam);
+      if (Number.isFinite(id) && consumedOpenId.current !== id) {
+        consumedOpenId.current = id;
+        loadPurchaseDetail(id).then((detail) => {
+          setMode("view");
+          setCurrentPurchase(detail as any);
+          setCurrentPurchaseId(id);
+          populateFormFromPurchase(detail);
+          openDialog("purchaseForm");
+          window.history.replaceState({}, "", "/purchases");
+        }).catch(() => {});
+      }
+    }
+  }, [location]);
+  const handleCloseDialog = () => {
+    closeDialog("purchaseForm");
+    setMode(null);
+    resetPurchaseState();
+    form.reset();
     setCustomProductDrafts({});
     setCreatingProductIndex(null);
   };
@@ -325,8 +544,8 @@ export default function PurchasesPage() {
   const watchItems = form.watch("items");
   const watchCharges = form.watch("charges");
   const watchCommission = form.watch("brokerCommissionPercent");
-  const watchPaidAmount = form.watch("paidAmount");
-
+  const watchMoundBase = form.watch("moundBaseKg");
+  const moundBaseKg = watchMoundBase === "60" ? 60 : 40;
   const computedItems = watchItems.map((item) => {
     const bags = parseFloat(item.bags) || 0;
     const filling = parseFloat(item.fillingPerBagKg) || 0;
@@ -336,11 +555,11 @@ export default function PurchasesPage() {
     const rate = parseFloat(item.rate) || 0;
     const grossWeight = bags * filling + loose;
     const netWeight = Math.max(grossWeight - less - bardana, 0);
-    const moundQtyFloat = netWeight / 40;
-    const moundQty = Math.floor(moundQtyFloat);
-    const moundRemainderKg = Math.max(netWeight - moundQty * 40, 0);
+    const moundQty = netWeight / moundBaseKg;
+    const moundWhole = Math.floor(moundQty);
+    const moundRemainderKg = Math.max(netWeight - moundWhole * moundBaseKg, 0);
     let billingQty = netWeight;
-    if (item.rateUnit === "mound") billingQty = netWeight / 40;
+    if (item.rateUnit === "mound") billingQty = netWeight / moundBaseKg;
     if (item.rateUnit === "bag") billingQty = bags;
     if (item.rateUnit === "quintal") billingQty = netWeight / 100;
     if (item.rateUnit === "ton") billingQty = netWeight / 1000;
@@ -367,147 +586,104 @@ export default function PurchasesPage() {
     { chargesAdd: 0, chargesLess: 0 }
   );
   const grandAmount = lineSubtotal + chargesAdd - chargesLess;
-  const balanceDue = grandAmount - (parseFloat(watchPaidAmount || "0") || 0);
   const totalBags = watchItems.reduce((sum, i) => sum + (parseFloat(i.bags) || 0), 0);
   const totalGross = computedItems.reduce((sum, i) => sum + i.grossWeight, 0);
   const totalNet = computedItems.reduce((sum, i) => sum + i.netWeight, 0);
-  const totalMound = Math.floor(totalNet / 40);
-  const totalMoundRemainder = Math.max(totalNet - totalMound * 40, 0);
-  const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
-  const columns: Column<Purchase & { supplier?: Account }>[] = [
-    {
-      key: "invoiceNumber",
-      title: "Invoice #",
-      render: (item) => (
-        <span className="font-mono text-sm font-medium">{item.invoiceNumber}</span>
-      ),
-    },
-    {
-      key: "supplier",
-      title: "Supplier",
-      render: (item) => (
-        <div>
-          <p className="font-medium">{item.supplier?.name || "-"}</p>
-          {item.supplier?.nameUrdu && (
-            <p className="text-sm text-muted-foreground font-urdu">{item.supplier.nameUrdu}</p>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "vehicleNumber",
-      title: "Vehicle",
-      render: (item) => (
-        <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          {item.vehicleNumber && (
-            <>
-              <Truck className="h-3 w-3 text-muted-foreground" />
-              <span className="font-mono text-sm">{item.vehicleNumber}</span>
-            </>
-          )}
-        </div>
-      ),
-    },
-    {
-      key: "purchaseDate",
-      title: "Date",
-      render: (item) => (
-        <span className="text-sm">
-          {format(new Date(item.purchaseDate), "dd MMM yyyy")}
-        </span>
-      ),
-    },
-    {
-      key: "totalAmount",
-      title: "Total",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono font-medium">
-          Rs. {parseFloat(item.totalAmount || "0").toLocaleString()}
-        </span>
-      ),
-    },
-    {
-      key: "paidAmount",
-      title: "Paid",
-      align: "right",
-      render: (item) => {
-        const total = parseFloat(item.totalAmount || "0");
-        const paid = parseFloat(item.paidAmount || "0");
-        const isPaid = paid >= total;
-        return (
-          <div className={`flex items-center gap-2 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
-            <span className="font-mono text-sm">Rs. {paid.toLocaleString()}</span>
-            <Badge variant={isPaid ? "default" : "secondary"} className="text-xs">
-              {isPaid ? (language === "ur" ? "Paid" : "Paid") : (language === "ur" ? "Due" : "Due")}
-            </Badge>
-          </div>
-        );
-      },
-    },
-    {
-      key: "actions",
-      title: "Actions",
-      align: "center",
-      render: (item) => (
-        <div className={`flex gap-1 justify-center ${isRTL ? "flex-row-reverse" : ""}`}>
-          <Button size="icon" variant="ghost" data-testid={`button-view-${item.id}`}>
-            <Eye className="h-4 w-4" />
-          </Button>
-        </div>
-      ),
-    },
-  ];
+  const totalBardana = watchItems.reduce((sum, i) => sum + (parseFloat(i.bardanaKatKg) || 0), 0);
+  const totalLess = watchItems.reduce((sum, i) => sum + (parseFloat(i.lessKg) || 0), 0);
+  const totalWeightPerBag = totalBags > 0 ? totalNet / totalBags : 0;
+  const totalMound = Math.floor(totalNet / moundBaseKg);
+  const totalMoundRemainder = Math.max(totalNet - totalMound * moundBaseKg, 0);
+  const qualityLessPerBag = totalBags > 0 ? totalLess / totalBags : 0;
+  const accountantClerkCharges = watchCharges.reduce((sum, c) => {
+    if (c.type !== "accountant_clerk") return sum;
+    const amt = parseFloat(c.amount || "0") || 0;
+    return sum + (c.mode === "less" ? -Math.abs(amt) : amt);
+  }, 0);
+  const chargeLabelMap: Record<string, string> = {
+    weight: "Weight Charges",
+    freight: "Freight",
+    loading_filling: "Loading / Filling",
+    market_fee: "Market Fee",
+    mitha_sukri: "Mitha Sukri",
+    other: "Other Charges",
+    phone_analysis: "Phone / Analysis",
+    brokerage: "Brokerage",
+    commission: "Commission",
+    bardana: bardanaLabel,
+    broken_allowance: "Broken Allowance",
+    accountant_clerk: "Accountant / Clerk",
+  };
+  const chargeBreakdown = watchCharges
+    .map((c) => {
+      const amt = parseFloat(c.amount || "0") || 0;
+      return {
+        label: chargeLabelMap[c.type] || c.type,
+        mode: c.mode,
+        amount: amt,
+      };
+    })
+    .filter((c) => c.amount !== 0);
+  const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
+  const isViewMode = purchaseMode === "view";
 
   return (
     <>
-      <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""} screen-only`}>
-        <div className={`flex items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <div className={isRTL ? "text-right" : ""}>
-            <h1 className="text-2xl font-semibold">{t("purchases")}</h1>
-            <p className="text-sm text-muted-foreground">
-              {language === "ur" ? "Manage purchase orders" : "Manage purchase orders"}
-            </p>
-          </div>
-          <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <Button onClick={handleAddNew} data-testid="button-add-purchase">
-              <Plus className="h-4 w-4" />
-              {t("newPurchase")}
-            </Button>
-          </div>
-        </div>
+      <PurchasesList
+        purchases={purchasesWithSupplier}
+        isLoading={isLoading}
+        onAddNew={handleAddNew}
+        onView={handleView}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        isDeleting={deleteMutation.isPending}
+        t={t as (key: string) => string}
+      />
 
-        <Card>
-          <CardContent className="pt-6">
-            <DataTable
-              columns={columns}
-              data={purchasesWithSupplier}
-              isLoading={isLoading}
-              testIdPrefix="purchases"
-            />
-          </CardContent>
-        </Card>
-
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogContent className="sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh] overflow-y-auto">
-            <DialogHeader>
-              <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
+      <Dialog
+        open={isDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            handleCloseDialog();
+          }
+        }}
+      >
+        <DialogContent
+          className={`${isViewMode ? "sm:max-w-3xl w-full max-h-[80vh]" : "sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh]"} overflow-y-auto`}
+        >
+          <DialogHeader>
+            <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+              <div className="flex items-center gap-2">
+                {purchaseMode !== "view" && (
+                  <Button variant="ghost" size="icon" onClick={handleCloseDialog} aria-label="Back">
                     <ArrowLeft className="h-4 w-4" />
                   </Button>
-                  <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-                    {language === "ur" ? "New Purchase" : "New Purchase"}
-                  </DialogTitle>
-                </div>
-                <Button variant="ghost" onClick={() => setIsDialogOpen(false)}>
-                  {language === "ur" ? "Close" : "Close"}
-                </Button>
+                )}
+                <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
+                  {purchaseMode === "view"
+                    ? (language === "ur" ? "Purchase View" : "Purchase View")
+                    : purchaseMode === "edit"
+                      ? (language === "ur" ? "Edit Purchase" : "Edit Purchase")
+                      : (language === "ur" ? "New Purchase" : "New Purchase")}
+                </DialogTitle>
               </div>
-            </DialogHeader>
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+              {purchaseMode === "view" && currentPurchase?.id && (
+                <PrintActions
+                  docKey={docKeys.purchaseInvoice}
+                  params={{ purchaseId: currentPurchase.id }}
+                  title="Purchase Invoice"
+                />
+              )}
+            </div>
+            <DialogDescription className="sr-only">
+              Create or edit a purchase by selecting supplier, entering items, charges, and notes.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+              {purchaseMode !== "view" && (
+                <fieldset>
+                <div className="grid grid-cols-1 gap-4">
                 <FormField
                   control={form.control}
                   name="supplierId"
@@ -532,32 +708,9 @@ export default function PurchasesPage() {
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="expenseAccountId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Expense A/C</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || undefined}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select expense" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {expenseAccounts.map((acc) => (
-                            <SelectItem key={acc.id} value={acc.id.toString()}>
-                              {acc.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-4">
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <FormField
                   control={form.control}
                   name="purchaseDate"
@@ -565,20 +718,7 @@ export default function PurchasesPage() {
                     <FormItem>
                       <FormLabel>{t("purchaseDate")}</FormLabel>
                       <FormControl>
-                        <Input {...field} type="date" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="dueDate"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Due Date</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="date" />
+                        <Input {...field} type="date" max={todayString} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -592,35 +732,6 @@ export default function PurchasesPage() {
                       <FormLabel>{t("vehicleNumber")}</FormLabel>
                       <FormControl>
                         <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <FormField
-                  control={form.control}
-                  name="billNo"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Bill No</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="Bill#" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="bookNo"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Book No</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="Book#" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -653,7 +764,33 @@ export default function PurchasesPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField
+                  control={form.control}
+                  name="billNo"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Bill No</FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder={nextBill?.billNo || "Auto"} readOnly />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="bookNo"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Book No</FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder="Book#" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
                 <FormField
                   control={form.control}
                   name="brokerCommissionPercent"
@@ -682,18 +819,42 @@ export default function PurchasesPage() {
                 />
                 <FormField
                   control={form.control}
-                  name="notes"
+                  name="paymentMode"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Notes</FormLabel>
-                      <FormControl>
-                        <Textarea {...field} rows={1} data-testid="input-notes" />
-                      </FormControl>
+                      <FormLabel>Payment Mode</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Payment mode" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="cash">Cash</SelectItem>
+                          <SelectItem value="credit">Credit</SelectItem>
+                          <SelectItem value="bank">Bank Transfer</SelectItem>
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
-              </div>
+              </div>
+
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Notes</FormLabel>
+                    <FormControl>
+                      <Textarea {...field} rows={2} data-testid="input-notes" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               <div className="space-y-4">
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
                   <h3 className="font-medium">Items</h3>
@@ -701,7 +862,8 @@ export default function PurchasesPage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => append({ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" })}
+                    disabled={isViewMode}
+                    onClick={() => !isViewMode && append({ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" })}
                     data-testid="button-add-item"
                   >
                     <Plus className="h-4 w-4" />
@@ -726,7 +888,7 @@ export default function PurchasesPage() {
                             render={({ field }) => (
                               <FormItem>
                                 {index === 0 && <FormLabel>Product</FormLabel>}
-                                <Select onValueChange={field.onChange} value={field.value}>
+                                <Select onValueChange={field.onChange} value={field.value ?? ""}>
                                   <FormControl>
                                     <SelectTrigger data-testid={`select-product-${index}`}>
                                       <SelectValue placeholder="Select" />
@@ -735,7 +897,7 @@ export default function PurchasesPage() {
                                   <SelectContent>
                                     {products.map((p) => (
                                       <SelectItem key={p.id} value={p.id.toString()}>
-                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""} � {p.unit}
+                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""} - {p.unit}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
@@ -811,7 +973,7 @@ export default function PurchasesPage() {
                             name={`items.${index}.lessKg`}
                             render={({ field }) => (
                               <FormItem>
-                                {index === 0 && <FormLabel>Less</FormLabel>}
+                                {index === 0 && <FormLabel>{lessLabel}</FormLabel>}
                                 <FormControl>
                                   <Input {...field} type="number" step="0.01" />
                                 </FormControl>
@@ -826,7 +988,7 @@ export default function PurchasesPage() {
                             name={`items.${index}.bardanaKatKg`}
                             render={({ field }) => (
                               <FormItem>
-                                {index === 0 && <FormLabel>Bardana</FormLabel>}
+                                {index === 0 && <FormLabel>{bardanaLabel}</FormLabel>}
                                 <FormControl>
                                   <Input {...field} type="number" step="0.01" />
                                 </FormControl>
@@ -857,7 +1019,7 @@ export default function PurchasesPage() {
                             render={({ field }) => (
                               <FormItem>
                                 {index === 0 && <FormLabel>Unit</FormLabel>}
-                                <Select onValueChange={field.onChange} value={field.value}>
+                                <Select onValueChange={field.onChange} value={field.value ?? "kg"}>
                                   <FormControl>
                                     <SelectTrigger>
                                       <SelectValue />
@@ -865,7 +1027,7 @@ export default function PurchasesPage() {
                                   </FormControl>
                                   <SelectContent>
                                     <SelectItem value="kg">Kg</SelectItem>
-                                    <SelectItem value="mound">Mound</SelectItem>
+                                    <SelectItem value="mound">Maund</SelectItem>
                                     <SelectItem value="bag">Bag</SelectItem>
                                     <SelectItem value="quintal">Quintal</SelectItem>
                                     <SelectItem value="ton">Ton</SelectItem>
@@ -885,7 +1047,7 @@ export default function PurchasesPage() {
                           <Input value={computed?.amount?.toFixed(2) ?? "0"} disabled />
                         </div>
                         <div className="col-span-1">
-                          {fields.length > 1 && (
+                          {!isViewMode && fields.length > 1 && (
                             <Button
                               type="button"
                               variant="ghost"
@@ -912,15 +1074,16 @@ export default function PurchasesPage() {
                         const labelMap: Record<string, string> = {
                           weight: "Weight Charges",
                           freight: "Freight",
-                          loading_filling: "Loading / Filling",
+                          loading_filling: "Loading / Unloading / Filling",
                           market_fee: "Market Fee",
                           mitha_sukri: "Mitha Sukri",
                           other: "Other Charges",
                           phone_analysis: "Phone / Analysis",
                           brokerage: "Brokerage",
                           commission: "Commission",
-                          bardana: "Bardana",
+                          bardana: bardanaLabel,
                           broken_allowance: "Broken Allowance",
+                          accountant_clerk: "Accountant / Clerk",
                         };
                         return (
                           <div key={charge.id} className="grid grid-cols-5 gap-2 items-center">
@@ -955,19 +1118,19 @@ export default function PurchasesPage() {
                                 </FormItem>
                               )}
                             />
-                            <FormField
-                              control={form.control}
-                              name={`charges.${idx}.accountId`}
-                              render={({ field }) => (
-                                <FormItem className="col-span-1">
-                                  <Select onValueChange={field.onChange} value={field.value || undefined}>
-                                    <FormControl>
-                                      <SelectTrigger>
-                                        <SelectValue placeholder="A/C" />
-                                      </SelectTrigger>
-                                    </FormControl>
+                          <FormField
+                            control={form.control}
+                            name={`charges.${idx}.accountId`}
+                            render={({ field }) => (
+                              <FormItem className="col-span-1">
+                                <Select onValueChange={field.onChange} value={field.value ?? "none"}>
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="A/C" />
+                                    </SelectTrigger>
+                                  </FormControl>
                                     <SelectContent>
-                                      <SelectItem value="none">�</SelectItem>
+                                      <SelectItem value="none">None</SelectItem>
                                       {accounts.map((acc) => (
                                         <SelectItem key={acc.id} value={acc.id.toString()}>
                                           {acc.name}
@@ -989,40 +1152,140 @@ export default function PurchasesPage() {
                       <div className="flex justify-between"><span>Total Bags</span><span className="font-mono">{totalBags.toFixed(2)}</span></div>
                       <div className="flex justify-between"><span>Total Weight</span><span className="font-mono">{totalGross.toFixed(2)} kg</span></div>
                       <div className="flex justify-between"><span>Net Weight</span><span className="font-mono">{totalNet.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Mound</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
-                      <div className="flex justify-between"><span>Line Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span>{bardanaLabel}</span><span className="font-mono">{totalBardana.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>{lessLabel}</span><span className="font-mono">{totalLess.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>{qualityLessPerBagLabel}</span><span className="font-mono">{qualityLessPerBag.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>Weight per Bag</span><span className="font-mono">{totalWeightPerBag.toFixed(2)} kg</span></div>
+                      <div className="flex justify-between"><span>Maund ({moundBaseKg} kg)</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
+                      <div className="flex justify-between"><span>Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Commission</span><span className="font-mono">Rs. {commissionAmount.toLocaleString()}</span></div>
+                      <div className="flex justify-between"><span>Accountant / Clerk</span><span className="font-mono">Rs. {accountantClerkCharges.toLocaleString()}</span></div>
+                      {chargeBreakdown.length > 0 ? (
+                        <>
+                          {chargeBreakdown.map((charge, index) => (
+                            <div key={`${charge.label}-${index}`} className="flex justify-between">
+                              <span>{charge.label} ({charge.mode === "less" ? lessLabel : "Add"})</span>
+                              <span className="font-mono">Rs. {charge.amount.toLocaleString()}</span>
+                            </div>
+                          ))}
+                        </>
+                      ) : null}
                       <div className="flex justify-between"><span>Charges +</span><span className="font-mono">Rs. {chargesAdd.toLocaleString()}</span></div>
                       <div className="flex justify-between"><span>Charges -</span><span className="font-mono">Rs. {chargesLess.toLocaleString()}</span></div>
                       <div className="flex justify-between text-lg font-semibold pt-1 border-t">
                         <span>Grand Amount</span>
                         <span className="font-mono">Rs. {grandAmount.toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Balance Due</span>
-                        <span className="font-mono">Rs. {balanceDue.toLocaleString()}</span>
-                      </div>
                       <div className="text-muted-foreground text-xs">In words: {amountInWords}</div>
                     </div>
                   </div>
                 </CardContent>
               </Card>
+                </fieldset>
+              )}
+
+              {purchaseMode === "view" && currentPurchase && (
+                <Card className="border bg-muted/40">
+                  <CardContent className="pt-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Invoice #</p>
+                        <p className="font-mono font-medium">{currentPurchase.invoiceNumber}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Date</p>
+                        <p className="font-medium">
+                          {currentPurchase.purchaseDate ? format(new Date(currentPurchase.purchaseDate), "dd MMM yyyy") : "-"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Supplier</p>
+                        <p className="font-medium">{(currentPurchase as any).supplier?.name || "-"}</p>
+                        {(currentPurchase as any).supplier?.nameUrdu && (
+                          <p className="text-sm text-muted-foreground font-urdu">{(currentPurchase as any).supplier?.nameUrdu}</p>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Vehicle</p>
+                        <p className="font-mono">{currentPurchase.vehicleNumber || "-"}</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Bags</p>
+                        <p className="font-mono font-semibold">{Number(currentPurchase.totalBags || 0).toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Gross Wt (kg)</p>
+                        <p className="font-mono font-semibold">{Number(currentPurchase.totalGrossWeightKg || 0).toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Net Wt (kg)</p>
+                        <p className="font-mono font-semibold">{Number(currentPurchase.totalNetWeightKg || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
+                    {currentPurchase.items && currentPurchase.items.length > 0 && (
+                      <div className="border rounded-md p-3 bg-white">
+                        <p className="text-xs uppercase text-muted-foreground mb-2">Item details</p>
+                        <div className="grid grid-cols-3 gap-3 text-sm">
+                          <div>
+                            <p className="text-muted-foreground text-xs">Bags</p>
+                            <p className="font-mono">{currentPurchase.items[0].bags}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Filling (kg)</p>
+                            <p className="font-mono">{currentPurchase.items[0].fillingPerBagKg}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Loose (kg)</p>
+                            <p className="font-mono">{currentPurchase.items[0].looseKgs}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">{lessLabel} (kg)</p>
+                            <p className="font-mono">{currentPurchase.items[0].lessKg}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">{bardanaLabel} (kg)</p>
+                            <p className="font-mono">{currentPurchase.items[0].bardanaKatKg}</p>
+                          </div>
+                          <div>
+                            <p className="text-muted-foreground text-xs">Rate</p>
+                            <p className="font-mono">
+                              {currentPurchase.items[0].rate} / {currentPurchase.items[0].rateUnit}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total Amount</p>
+                        <p className="font-mono font-semibold">Rs. {Number(currentPurchase.totalAmount || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
-                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  {t("cancel")}
-                </Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  <Calculator className="h-4 w-4" />
-                  {createMutation.isPending ? t("loading") : t("save")}
-                </Button>
+                {purchaseMode !== "view" && (
+                  <>
+                    <Button type="button" variant="outline" onClick={handleCloseDialog}>
+                      {t("cancel")}
+                    </Button>
+                    <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                      <Calculator className="h-4 w-4" />
+                      {createMutation.isPending || updateMutation.isPending ? t("loading") : t("save")}
+                    </Button>
+                  </>
+                )}
               </div>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
-    </div>
-
     </>
   );
 }

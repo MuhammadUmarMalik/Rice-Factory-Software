@@ -1,10 +1,30 @@
+import "./config/sentry";
+import { captureException, isSentryEnabled, logger } from "./config/sentry";
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import createMemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
-import { serveStatic } from "./static";
+import { ensureDesktopAdmin } from "./utils/bootstrap";
+import { ensureSchema } from "./utils/ensure-schema";
+import { ensureDesktopSecret } from "./utils/desktop-secret";
+import { serveStatic } from "./config/static";
 import { createServer } from "http";
+import helmet from "helmet";
+import cors from "cors";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
 
 const app = express();
 const httpServer = createServer(app);
+const MemoryStore = createMemoryStore(session);
+ensureDesktopSecret();
+const isProduction = process.env.NODE_ENV === "production";
+const sessionSecret = process.env.SESSION_SECRET || process.env.JWT_SECRET;
+const forceHttps = process.env.FORCE_HTTPS === "true";
+
+if (isProduction && !sessionSecret) {
+  throw new Error("SESSION_SECRET or JWT_SECRET must be set in production.");
+}
 
 declare module "http" {
   interface IncomingMessage {
@@ -12,15 +32,85 @@ declare module "http" {
   }
 }
 
+app.disable("x-powered-by");
+app.use(compression());
+app.set("etag", "weak");
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  }),
+);
+
+if (isProduction && forceHttps) {
+  app.use((req, res, next) => {
+    const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
+    if (proto === "https") return next();
+    const host = req.headers.host;
+    if (!host) return res.status(400).json({ message: "Invalid host" });
+    return res.redirect(301, `https://${host}${req.originalUrl}`);
+  });
+}
+
+const corsOrigins = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+if (corsOrigins.length > 0) {
+  app.use(
+    cors({
+      origin: corsOrigins,
+      credentials: true,
+    }),
+  );
+}
+
 app.use(
   express.json({
+    limit: "100mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "100mb" }));
+
+app.set("trust proxy", 1);
+app.use(
+  session({
+    secret: sessionSecret || "dev-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isProduction,
+      maxAge: 1000 * 60 * 60 * 8,
+    },
+    store: new MemoryStore({
+      checkPeriod: 1000 * 60 * 60,
+    }),
+  }),
+);
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts, please try again later." },
+});
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/bootstrap", authLimiter);
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api", apiLimiter);
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -31,35 +121,41 @@ export function log(message: string, source = "express") {
   });
 
   console.log(`${formattedTime} [${source}] ${message}`);
+  if (isSentryEnabled()) logger.info(message, { source });
 }
 
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
-
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
 
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
-      log(logLine);
+      log(`${req.method} ${path} ${res.statusCode} in ${duration}ms`);
     }
   });
 
   next();
 });
 
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api")) return next();
+  if (req.method === "GET") {
+    if (req.path.startsWith("/api/auth")) {
+      res.setHeader("Cache-Control", "no-store");
+      return next();
+    }
+    res.setHeader("Cache-Control", "private, max-age=60, stale-while-revalidate=30");
+    res.setHeader("Vary", "Authorization, Accept-Encoding");
+    return next();
+  }
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 (async () => {
+  ensureSchema();
+  await ensureDesktopAdmin();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -67,7 +163,11 @@ app.use((req, res, next) => {
     const message = err.message || "Internal Server Error";
 
     console.error(err);
-    res.status(status).json({ message });
+    if (status >= 500) captureException(err);
+    if (isProduction && status >= 500) {
+      return res.status(status).json({ message: "Internal Server Error" });
+    }
+    return res.status(status).json({ message });
   });
 
   // importantly only setup vite in development and after
@@ -76,7 +176,7 @@ app.use((req, res, next) => {
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
-    const { setupVite } = await import("./vite");
+    const { setupVite } = await import("./config/vite");
     await setupVite(httpServer, app);
   }
 
