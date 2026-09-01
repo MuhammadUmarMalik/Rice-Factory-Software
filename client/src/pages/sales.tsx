@@ -58,6 +58,13 @@ const isFutureDateString = (value: string) => {
   return selected.getTime() > todayStart.getTime();
 };
 
+const toQuantityKg = (quantity: number, unit: string) => {
+  if (unit === "mound") return quantity * 40;
+  if (unit === "quintal") return quantity * 100;
+  if (unit === "ton") return quantity * 1000;
+  return quantity;
+};
+
 const parseApiErrorMessage = (error: unknown) => {
   if (!(error instanceof Error)) return "Unknown error";
   const message = error.message || "Unknown error";
@@ -90,6 +97,7 @@ const saleFormSchema = z.object({
   saleDate: z.string().optional().refine((val) => !val || !isFutureDateString(val), {
     message: "Date cannot be in the future",
   }),
+  dueDate: z.string().optional(),
   customerId: z.string().min(1, "Customer is required"),
   vehicleNumber: z.string().optional(),
   loadingCharges: z.string().default("0"),
@@ -106,7 +114,10 @@ const saleFormSchema = z.object({
     unit: z.string().min(1, "Unit is required"),
     pricePerUnit: z.string().min(1, "Price is required"),
   })).min(1, "At least one item is required"),
-});
+}).refine(
+  (data) => !data.saleDate || !data.dueDate || parseLocalDate(data.dueDate) >= parseLocalDate(data.saleDate),
+  { path: ["dueDate"], message: "Due date cannot be before the sale date" },
+);
 
 type SaleFormData = z.infer<typeof saleFormSchema>;
 
@@ -136,7 +147,6 @@ export default function SalesPage() {
     { value: "mound", label: "Mound (40 kg)" },
     { value: "quintal", label: "Quintal (100 kg)" },
     { value: "ton", label: "Ton (1000 kg)" },
-    { value: "bag", label: "Bag" },
   ];
 
   const form = useForm<SaleFormData>({
@@ -190,6 +200,7 @@ export default function SalesPage() {
       apiRequest("POST", "/api/sales", {
         ...data,
         saleDate: data.saleDate ? new Date(data.saleDate) : undefined,
+        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
         customerId: parseInt(data.customerId),
         items: data.items.map(item => ({
           productId: parseInt(item.productId),
@@ -225,6 +236,7 @@ export default function SalesPage() {
       apiRequest("PATCH", `/api/sales/${id}`, {
         ...data,
         saleDate: data.saleDate ? new Date(data.saleDate) : undefined,
+        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
         customerId: parseInt(data.customerId),
         items: data.items.map(item => ({
           productId: parseInt(item.productId),
@@ -245,6 +257,9 @@ export default function SalesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
       setIsDialogOpen(false);
       form.reset();
       setEditingId(null);
@@ -258,6 +273,9 @@ export default function SalesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
       queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
       toast({ title: language === "ur" ? "Sale deleted" : "Sale deleted" });
     },
     onError: (error: Error) => {
@@ -272,7 +290,7 @@ export default function SalesPage() {
       if (!product) continue;
 
       const available = Number(product.currentStock);
-      const requested = Number(item.quantity);
+      const requested = toQuantityKg(Number(item.quantity), item.unit);
       const avail = Number.isFinite(available) && available >= 0 ? available : 0;
       const req = Number.isFinite(requested) && requested >= 0 ? requested : 0;
 
@@ -281,7 +299,7 @@ export default function SalesPage() {
         toast({
           variant: "destructive",
           title: language === "ur" ? "Insufficient stock" : "Insufficient stock",
-          description: `${product.name} has only ${avail.toLocaleString()} ${product.unit} available.`,
+          description: `${product.name} has only ${avail.toLocaleString()} kg available; this sale requires ${req.toLocaleString()} kg.`,
         });
         return;
       }
@@ -297,6 +315,7 @@ export default function SalesPage() {
   const handleAddNew = () => {
     form.reset({
       saleDate: formatDateInput(new Date()),
+      dueDate: "",
       customerId: "",
       vehicleNumber: "",
       loadingCharges: "0",
@@ -319,6 +338,7 @@ export default function SalesPage() {
       const sale = await res.json();
       form.reset({
         saleDate: sale.saleDate ? format(new Date(sale.saleDate), "yyyy-MM-dd") : formatDateInput(new Date()),
+        dueDate: sale.dueDate ? format(new Date(sale.dueDate), "yyyy-MM-dd") : "",
         customerId: sale.customerId?.toString() || "",
         vehicleNumber: sale.vehicleNumber || "",
         loadingCharges: sale.loadingCharges || "0",
@@ -575,6 +595,19 @@ export default function SalesPage() {
                 />
                 <FormField
                   control={form.control}
+                  name="dueDate"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("dueDate")}</FormLabel>
+                      <FormControl>
+                        <Input {...field} type="date" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
                   name="vehicleNumber"
                   render={({ field }) => (
                     <FormItem>
@@ -638,7 +671,7 @@ export default function SalesPage() {
                                 <SelectContent>
                                   {products.map((p) => (
                                     <SelectItem key={p.id} value={p.id.toString()}>
-                                      {p.name} ({p.unit}) — {parseFloat(p.currentStock).toLocaleString()} {p.unit} in stock
+                                      {p.name} ({p.unit}) — {(parseFloat(p.currentStock ?? "0") || 0).toLocaleString()} {p.unit} in stock
                                     </SelectItem>
                                   ))}
                                 </SelectContent>

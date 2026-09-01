@@ -64,6 +64,7 @@ type Receipt = {
   totalCredit: string;
   amountInWords: string;
   narration?: string;
+  settlementAccountId?: number;
   primaryAccountName?: string;
   lines?: { id: number; accountId: number; narration?: string; debit: string; credit: string }[];
 };
@@ -266,7 +267,7 @@ export default function ReceiptsPage() {
     const res = await apiRequest("GET", `/api/receipts/${id}`);
     const voucher: Receipt = await res.json();
     const paymentLines = (voucher.lines || []).filter(
-      (l: { narration?: string }) => !(l.narration || "").toLowerCase().includes("settlement")
+      (line) => line.accountId !== voucher.settlementAccountId
     );
     const firstLineSaleId = (paymentLines[0] as { saleId?: number })?.saleId;
     form.reset({

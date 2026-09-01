@@ -60,11 +60,23 @@ export default function LoginPage() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername || !password) {
+      toast({ title: t("login"), description: t("useCredentials"), variant: "destructive" });
+      return;
+    }
     setIsSubmitting(true);
     try {
-      const res = await apiRequest("POST", "/api/auth/login", { username, password });
+      const res = await apiRequest("POST", "/api/auth/login", {
+        username: trimmedUsername,
+        password,
+      });
       const data = await res.json();
-      setSession({ token: data.token || null, user: data.user || null });
+      if (!data?.user) {
+        throw new Error(t("signInToContinue"));
+      }
+      setSession({ token: data.token || null, user: data.user });
       setLocation("/");
     } catch (err: any) {
       toast({ title: t("login"), description: err?.message || t("signInToContinue"), variant: "destructive" });

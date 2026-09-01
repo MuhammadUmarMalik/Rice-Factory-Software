@@ -31,7 +31,7 @@ export async function notifyUsers(input: NotificationInput) {
 export async function notifyLowStock(productId: number) {
   const product = await storage.getProduct(productId);
   if (!product) return;
-  const threshold = Number(process.env.LOW_STOCK_THRESHOLD || "10");
+  const threshold = Number(product.reorderLevel ?? process.env.LOW_STOCK_THRESHOLD ?? "10");
   const current = Number(product.currentStock || "0");
   if (!Number.isFinite(current) || current > threshold) return;
 

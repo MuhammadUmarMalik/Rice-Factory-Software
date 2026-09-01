@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import {
   bardanaReport,
   dayBook,
@@ -65,6 +65,14 @@ router.get(
   reportsCache,
   outstandingSuppliers,
 );
-router.get("/api/reports/detail", requireRoles(Roles.finance), reportsCache, reportDetail);
+// Detail lookup is role-aware: operators who create sales/purchases must be
+// able to open those invoices, while accounting/ledger detail stays finance-only.
+const reportDetailAuth: RequestHandler = (req, res, next) => {
+  const type = (req.query.type as string) || "";
+  const roles = type === "sale" ? Roles.sales : type === "purchase" ? Roles.purchasing : Roles.finance;
+  return requireRoles(roles)(req, res, next);
+};
+
+router.get("/api/reports/detail", reportDetailAuth, reportsCache, reportDetail);
 
 export default router;

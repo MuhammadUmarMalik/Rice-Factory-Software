@@ -3,7 +3,19 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button";
 import { SkeletonBox, SkeletonText } from "@/components/ui/skeletons";
 import { fetchPrintPreview, fetchPrintPdf } from "@/services/printApi";
+import type { PrintColorMode, PrintFormat } from "@/services/printApi";
 import type { DocKey } from "@/print/docRegistry";
+import {
+  COLOR_MODES,
+  PAPER_FORMATS,
+  PX_PER_MM,
+  isRollFormat,
+  loadPrintSettings,
+  resolvePageSizeMm,
+  savePrintSettings,
+  toPrintRequestOptions,
+  type PrintSettings,
+} from "@/print/printSettings";
 import { downloadBlob } from "@/lib/export";
 
 type PrintPreviewModalProps = {
@@ -17,6 +29,9 @@ type PrintPreviewModalProps = {
   onPrinted?: () => void;
 };
 
+const MIN_SCALE = 0.25;
+const MAX_SCALE = 3;
+
 function PrintPreviewModalComponent({
   open,
   onOpenChange,
@@ -29,75 +44,59 @@ function PrintPreviewModalComponent({
 }: PrintPreviewModalProps) {
   const [html, setHtml] = useState<string>("");
   const [loading, setLoading] = useState(false);
-  const [layout, setLayout] = useState<"portrait" | "landscape">(orientation);
-  const [format, setFormat] = useState<"A4" | "A5" | "Letter" | "Legal" | "Custom">("A4");
-  const [customWidthMm, setCustomWidthMm] = useState(210);
-  const [customHeightMm, setCustomHeightMm] = useState(297);
-  const [marginTopMm, setMarginTopMm] = useState(10);
-  const [marginRightMm, setMarginRightMm] = useState(10);
-  const [marginBottomMm, setMarginBottomMm] = useState(10);
-  const [marginLeftMm, setMarginLeftMm] = useState(10);
+  const [printing, setPrinting] = useState(false);
+  const [settings, setSettings] = useState<PrintSettings>(() =>
+    loadPrintSettings(docKey, { orientation }),
+  );
   const [fitMode, setFitMode] = useState<"page" | "width">("page");
   const [zoom, setZoom] = useState(1);
+  const [scale, setScale] = useState(1);
+  const [contentHeightPx, setContentHeightPx] = useState(0);
   const [ready, setReady] = useState(false);
   const [printers, setPrinters] = useState<Array<{ name: string; displayName?: string }>>([]);
   const [printerName, setPrinterName] = useState("");
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const previewRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const autoPrintedRef = useRef(false);
+
   const serializedParams = useMemo(() => JSON.stringify(params || {}), [params]);
+  const pageSizeMm = useMemo(() => resolvePageSizeMm(settings), [settings]);
+  const pageWidthPx = pageSizeMm.width * PX_PER_MM;
+  const pageHeightPx = pageSizeMm.height * PX_PER_MM;
+
   const requestPayload = useMemo(
-    () => ({
-      docKey,
-      params,
-      orientation: layout,
-      format,
-      widthMm: format === "Custom" ? customWidthMm : undefined,
-      heightMm: format === "Custom" ? customHeightMm : undefined,
-      marginTopMm,
-      marginRightMm,
-      marginBottomMm,
-      marginLeftMm,
-    }),
-    [
-      docKey,
-      params,
-      layout,
-      format,
-      customWidthMm,
-      customHeightMm,
-      marginTopMm,
-      marginRightMm,
-      marginBottomMm,
-      marginLeftMm,
-    ],
+    () => ({ docKey, params, ...toPrintRequestOptions(settings) }),
+    // `serializedParams` keeps the identity stable when callers pass a fresh
+    // object literal on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [docKey, serializedParams, settings],
   );
+
   const isElectron =
     typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("electron");
-  const pageAspectClass = layout === "portrait" ? "aspect-[210/297]" : "aspect-[297/210]";
+
+  const update = useCallback(
+    (patch: Partial<PrintSettings>) => {
+      setSettings((prev) => {
+        const next = { ...prev, ...patch };
+        // Roll paper is never rotated, so silently normalise instead of letting
+        // the UI show a landscape option that the renderer would ignore.
+        if (isRollFormat(next.format)) next.orientation = "portrait";
+        savePrintSettings(docKey, next);
+        return next;
+      });
+    },
+    [docKey],
+  );
 
   useEffect(() => {
     if (!open) return;
-    setLayout(orientation);
+    setSettings(loadPrintSettings(docKey, { orientation }));
     setFitMode("page");
     setZoom(1);
     setReady(false);
-  }, [open, orientation]);
-
-  useEffect(() => {
-    if (!open) return;
-    setReady(false);
-  }, [
-    open,
-    layout,
-    format,
-    customWidthMm,
-    customHeightMm,
-    marginTopMm,
-    marginRightMm,
-    marginBottomMm,
-    marginLeftMm,
-  ]);
+    autoPrintedRef.current = false;
+  }, [open, docKey, orientation]);
 
   useEffect(() => {
     if (!open || !isElectron || !window.electronPrintPreview?.getPrinters) return;
@@ -105,9 +104,7 @@ function PrintPreviewModalComponent({
     window.electronPrintPreview.getPrinters().then((list) => {
       if (!active) return;
       setPrinters(list || []);
-      if (!printerName && list?.length) {
-        setPrinterName(list[0].name);
-      }
+      if (!printerName && list?.length) setPrinterName(list[0].name);
     });
     return () => {
       active = false;
@@ -118,6 +115,7 @@ function PrintPreviewModalComponent({
     if (!open) return;
     let active = true;
     setLoading(true);
+    setReady(false);
     fetchPrintPreview(requestPayload)
       .then((markup) => {
         if (active) setHtml(markup);
@@ -128,116 +126,128 @@ function PrintPreviewModalComponent({
     return () => {
       active = false;
     };
-  }, [open, requestPayload, serializedParams]);
+  }, [open, requestPayload]);
 
-  const updatePreviewScale = useCallback(() => {
-    const iframe = iframeRef.current;
-    const preview = previewRef.current;
+  /*
+   * The preview is scaled with a CSS transform, which does NOT affect layout.
+   * The wrapper below is therefore sized to the *scaled* dimensions explicitly;
+   * without that the scroll container had nothing to scroll to and content
+   * wider than the viewport was silently clipped.
+   */
+  const recomputeScale = useCallback(() => {
     const scroll = scrollRef.current;
-    if (!iframe || !preview || !scroll) return;
-    const doc = iframe.contentDocument;
-    if (!doc) return;
-    const pages = Array.from(doc.querySelectorAll(".page")) as HTMLElement[];
-    const firstPage = pages[0];
-    if (!firstPage) return;
-    const pageRect = firstPage.getBoundingClientRect();
-    const pageWidth = firstPage.offsetWidth || pageRect.width;
-    const pageHeight = firstPage.offsetHeight || pageRect.height;
-    if (!pageWidth || !pageHeight) return;
-    const scrollStyles = window.getComputedStyle(scroll);
+    if (!scroll || !pageWidthPx || !pageHeightPx) return;
+    const styles = window.getComputedStyle(scroll);
     const paddingX =
-      (Number.parseFloat(scrollStyles.paddingLeft) || 0) +
-      (Number.parseFloat(scrollStyles.paddingRight) || 0);
+      (Number.parseFloat(styles.paddingLeft) || 0) + (Number.parseFloat(styles.paddingRight) || 0);
     const paddingY =
-      (Number.parseFloat(scrollStyles.paddingTop) || 0) +
-      (Number.parseFloat(scrollStyles.paddingBottom) || 0);
+      (Number.parseFloat(styles.paddingTop) || 0) + (Number.parseFloat(styles.paddingBottom) || 0);
     const viewportWidth = Math.max(scroll.clientWidth - paddingX, 1);
     const viewportHeight = Math.max(scroll.clientHeight - paddingY, 1);
-    const metrics = pages.reduce(
-      (acc, page) => {
-        const width = page.offsetWidth || page.getBoundingClientRect().width;
-        const bottom = page.offsetTop + page.offsetHeight;
-        return {
-          maxWidth: Math.max(acc.maxWidth, width),
-          maxBottom: Math.max(acc.maxBottom, bottom),
-        };
-      },
-      { maxWidth: pageWidth, maxBottom: firstPage.offsetHeight },
-    );
-    const contentWidth = metrics.maxWidth;
-    const contentHeight = metrics.maxBottom;
-    const scaleByWidth = viewportWidth / pageWidth;
-    const scaleByHeight = viewportHeight / pageHeight;
-    const scaleByViewport = fitMode === "width" ? scaleByWidth : Math.min(scaleByWidth, scaleByHeight);
-    const maxScale = 3;
-    const minScale = 0.25;
-    const scale = Math.max(minScale, Math.min(maxScale, scaleByViewport * zoom));
-    preview.style.transform = `scale(${scale.toFixed(3)})`;
-    preview.style.transformOrigin = "top center";
+    const byWidth = viewportWidth / pageWidthPx;
+    const byHeight = viewportHeight / pageHeightPx;
+    const base = fitMode === "width" ? byWidth : Math.min(byWidth, byHeight);
+    setScale(Math.max(MIN_SCALE, Math.min(MAX_SCALE, base * zoom)));
+  }, [fitMode, zoom, pageWidthPx, pageHeightPx]);
 
-    preview.style.height = `${Math.ceil(contentHeight)}px`;
-    preview.style.width = `${Math.ceil(contentWidth)}px`;
-    iframe.style.height = "100%";
-    iframe.style.width = "100%";
-  }, [layout, fitMode, zoom]);
+  /** Measures how tall the rendered document actually is, so multi-page documents scroll. */
+  const measureContent = useCallback(() => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    const height = Math.max(
+      doc.documentElement?.scrollHeight || 0,
+      doc.body?.scrollHeight || 0,
+      pageHeightPx,
+    );
+    setContentHeightPx(height);
+  }, [pageHeightPx]);
 
   const handleIframeLoad = useCallback(() => {
     setReady(true);
-    updatePreviewScale();
-    window.setTimeout(() => updatePreviewScale(), 50);
-    if (!autoPrint) return;
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    win.focus();
-    setTimeout(() => {
-      win.print();
-      onPrinted?.();
-    }, 0);
-  }, [autoPrint, onPrinted, updatePreviewScale]);
+    measureContent();
+    recomputeScale();
+    // Web fonts and images settle a frame or two after load.
+    window.setTimeout(() => {
+      measureContent();
+      recomputeScale();
+    }, 60);
+  }, [measureContent, recomputeScale]);
 
   useEffect(() => {
     if (!open) return;
-    const handleResize = () => updatePreviewScale();
+    const handleResize = () => recomputeScale();
     window.addEventListener("resize", handleResize);
-    const raf = window.requestAnimationFrame(() => updatePreviewScale());
-    const scroll = scrollRef.current;
-    const handleWheel = (event: WheelEvent) => {
-      if (scroll?.dataset.previewScroll === "none") {
-        event.preventDefault();
-      }
-    };
-    scroll?.addEventListener("wheel", handleWheel, { passive: false });
+    const raf = window.requestAnimationFrame(() => recomputeScale());
     return () => {
       window.removeEventListener("resize", handleResize);
       window.cancelAnimationFrame(raf);
-      scroll?.removeEventListener("wheel", handleWheel);
     };
-  }, [open, html, updatePreviewScale]);
+  }, [open, html, recomputeScale]);
 
+  /*
+   * Print and Download both go through the SAME PDF that the server (or Electron)
+   * renders from the previewed HTML. Previously the browser path called
+   * `iframe.contentWindow.print()`, which re-laid the document out using the
+   * browser's own page setup - so Print, Download and the preview could all
+   * disagree. Printing the PDF removes that entire class of mismatch.
+   */
   const handlePrint = useCallback(async () => {
-    if (!ready) return;
-    if (isElectron && window.electronPrintPreview?.printHtml) {
-      await window.electronPrintPreview.printHtml({
-        html,
-        silent: true,
-        deviceName: printerName || undefined,
-      });
-      onPrinted?.();
-      return;
+    if (!ready || printing) return;
+    setPrinting(true);
+    try {
+      if (isElectron && window.electronPrintPreview?.printHtml) {
+        await window.electronPrintPreview.printHtml({
+          html,
+          silent: false,
+          deviceName: printerName || undefined,
+          options: toPrintRequestOptions(settings),
+        });
+        onPrinted?.();
+        return;
+      }
+      const blob = await fetchPrintPdf(requestPayload);
+      const url = URL.createObjectURL(blob);
+      const frame = document.createElement("iframe");
+      frame.style.position = "fixed";
+      frame.style.right = "0";
+      frame.style.bottom = "0";
+      frame.style.width = "0";
+      frame.style.height = "0";
+      frame.style.border = "0";
+      frame.src = url;
+      frame.onload = () => {
+        frame.contentWindow?.focus();
+        frame.contentWindow?.print();
+        onPrinted?.();
+        // Keep the frame alive long enough for the print dialog to read it.
+        window.setTimeout(() => {
+          URL.revokeObjectURL(url);
+          frame.remove();
+        }, 60_000);
+      };
+      document.body.appendChild(frame);
+    } finally {
+      setPrinting(false);
     }
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    win.focus();
-    setTimeout(() => {
-      win.print();
-      onPrinted?.();
-    }, 0);
-  }, [ready, isElectron, html, printerName, onPrinted]);
+  }, [ready, printing, isElectron, html, printerName, settings, requestPayload, onPrinted]);
+
+  useEffect(() => {
+    if (!autoPrint || !ready || autoPrintedRef.current) return;
+    autoPrintedRef.current = true;
+    void handlePrint();
+  }, [autoPrint, ready, handlePrint]);
 
   const handleDownload = useCallback(async () => {
     const blob = await fetchPrintPdf(requestPayload);
     downloadBlob(`${docKey}.pdf`, blob);
   }, [docKey, requestPayload]);
+
+  const scaledWidth = Math.ceil(pageWidthPx * scale);
+  const scaledHeight = Math.ceil((contentHeightPx || pageHeightPx) * scale);
+  const pageAspectClass = settings.orientation === "portrait" ? "aspect-[210/297]" : "aspect-[297/210]";
+  const numberField =
+    "mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
+  const selectField = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -254,8 +264,8 @@ function PrintPreviewModalComponent({
               Review the document preview and adjust print settings before printing.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-1 min-h-0 flex-col lg:flex-row">
-            <div className="w-full min-h-0 shrink-0 border-b border-slate-200/80 bg-slate-50/90 p-4 lg:w-[320px] lg:border-b-0 lg:border-r">
+          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+            <div className="w-full min-h-0 shrink-0 overflow-y-auto border-b border-slate-200/80 bg-slate-50/90 p-4 lg:w-[320px] lg:border-b-0 lg:border-r">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold uppercase tracking-wide text-slate-500">
@@ -264,7 +274,7 @@ function PrintPreviewModalComponent({
                   <div className="text-xs text-muted-foreground">Choose settings for output.</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={handlePrint} data-autofocus>
+                  <Button size="sm" onClick={handlePrint} disabled={!ready || printing} data-autofocus>
                     Print
                   </Button>
                   <Button variant="secondary" size="sm" onClick={handleDownload}>
@@ -280,7 +290,7 @@ function PrintPreviewModalComponent({
                     </div>
                     <select
                       id="print-printer"
-                      className="mt-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                      className={`mt-2 ${selectField}`}
                       value={printerName}
                       onChange={(event) => setPrinterName(event.target.value)}
                     >
@@ -295,26 +305,24 @@ function PrintPreviewModalComponent({
                 <div>
                   <div className="text-xs font-semibold uppercase text-muted-foreground">Settings</div>
                   <div className="mt-2 grid gap-3">
-                    <label className="text-xs text-muted-foreground" htmlFor="print-paper">
-                      Paper
-                    </label>
-                    <select
-                      id="print-paper"
-                      className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                      value={format}
-                      onChange={(event) =>
-                        setFormat(
-                          event.target.value as "A4" | "A5" | "Letter" | "Legal" | "Custom",
-                        )
-                      }
-                    >
-                      <option value="A4">A4</option>
-                      <option value="A5">A5</option>
-                      <option value="Letter">Letter</option>
-                      <option value="Legal">Legal</option>
-                      <option value="Custom">Custom</option>
-                    </select>
-                    {format === "Custom" && (
+                    <div>
+                      <label className="text-xs text-muted-foreground" htmlFor="print-paper">
+                        Paper
+                      </label>
+                      <select
+                        id="print-paper"
+                        className={`mt-1 ${selectField}`}
+                        value={settings.format}
+                        onChange={(event) => update({ format: event.target.value as PrintFormat })}
+                      >
+                        {PAPER_FORMATS.map((paper) => (
+                          <option key={paper.value} value={paper.value}>
+                            {paper.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {settings.format === "Custom" && (
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-xs text-muted-foreground" htmlFor="print-width">
@@ -323,14 +331,14 @@ function PrintPreviewModalComponent({
                           <input
                             id="print-width"
                             type="number"
-                            min={80}
+                            min={40}
                             max={400}
                             step={1}
-                            className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                            value={customWidthMm}
+                            className={numberField}
+                            value={settings.widthMm}
                             onChange={(event) => {
                               const next = Number(event.target.value);
-                              if (Number.isFinite(next)) setCustomWidthMm(next);
+                              if (Number.isFinite(next)) update({ widthMm: next });
                             }}
                           />
                         </div>
@@ -341,115 +349,124 @@ function PrintPreviewModalComponent({
                           <input
                             id="print-height"
                             type="number"
-                            min={80}
-                            max={600}
+                            min={40}
+                            max={1200}
                             step={1}
-                            className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                            value={customHeightMm}
+                            className={numberField}
+                            value={settings.heightMm}
                             onChange={(event) => {
                               const next = Number(event.target.value);
-                              if (Number.isFinite(next)) setCustomHeightMm(next);
+                              if (Number.isFinite(next)) update({ heightMm: next });
                             }}
                           />
                         </div>
                       </div>
                     )}
-                    <label className="text-xs text-muted-foreground" htmlFor="print-layout">
-                      Layout
+                    <div>
+                      <label className="text-xs text-muted-foreground" htmlFor="print-layout">
+                        Layout
+                      </label>
+                      <select
+                        id="print-layout"
+                        className={`mt-1 ${selectField}`}
+                        value={settings.orientation}
+                        disabled={isRollFormat(settings.format)}
+                        onChange={(event) =>
+                          update({ orientation: event.target.value as "portrait" | "landscape" })
+                        }
+                      >
+                        <option value="portrait">Portrait</option>
+                        <option value="landscape">Landscape</option>
+                      </select>
+                      {isRollFormat(settings.format) && (
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          Receipt rolls always print portrait.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold uppercase text-muted-foreground">Colour</div>
+                  <div className="mt-2 grid gap-3">
+                    <div>
+                      <label className="text-xs text-muted-foreground" htmlFor="print-color-mode">
+                        Print colour
+                      </label>
+                      <select
+                        id="print-color-mode"
+                        className={`mt-1 ${selectField}`}
+                        value={settings.colorMode}
+                        onChange={(event) =>
+                          update({ colorMode: event.target.value as PrintColorMode })
+                        }
+                      >
+                        {COLOR_MODES.map((mode) => (
+                          <option key={mode.value} value={mode.value}>
+                            {mode.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-input"
+                        checked={settings.showLogo}
+                        onChange={(event) => update({ showLogo: event.target.checked })}
+                      />
+                      Include company logo
                     </label>
-                    <select
-                      id="print-layout"
-                      className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                      value={layout}
-                      onChange={(event) => setLayout(event.target.value as "portrait" | "landscape")}
-                    >
-                      <option value="portrait">Portrait</option>
-                      <option value="landscape">Landscape</option>
-                    </select>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-input"
+                        checked={settings.showColoredHeaders}
+                        onChange={(event) => update({ showColoredHeaders: event.target.checked })}
+                      />
+                      Coloured headers &amp; fills
+                    </label>
                   </div>
                 </div>
                 <div>
                   <div className="text-xs font-semibold uppercase text-muted-foreground">Margins</div>
                   <div className="mt-2 grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-top">
-                        Top (mm)
-                      </label>
-                      <input
-                        id="print-margin-top"
-                        type="number"
-                        min={0}
-                        max={40}
-                        step={1}
-                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                        value={marginTopMm}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          if (Number.isFinite(next)) setMarginTopMm(next);
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-right">
-                        Right (mm)
-                      </label>
-                      <input
-                        id="print-margin-right"
-                        type="number"
-                        min={0}
-                        max={40}
-                        step={1}
-                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                        value={marginRightMm}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          if (Number.isFinite(next)) setMarginRightMm(next);
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-bottom">
-                        Bottom (mm)
-                      </label>
-                      <input
-                        id="print-margin-bottom"
-                        type="number"
-                        min={0}
-                        max={40}
-                        step={1}
-                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                        value={marginBottomMm}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          if (Number.isFinite(next)) setMarginBottomMm(next);
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground" htmlFor="print-margin-left">
-                        Left (mm)
-                      </label>
-                      <input
-                        id="print-margin-left"
-                        type="number"
-                        min={0}
-                        max={40}
-                        step={1}
-                        className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                        value={marginLeftMm}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          if (Number.isFinite(next)) setMarginLeftMm(next);
-                        }}
-                      />
-                    </div>
+                    {(
+                      [
+                        ["marginTopMm", "Top (mm)", "print-margin-top"],
+                        ["marginRightMm", "Right (mm)", "print-margin-right"],
+                        ["marginBottomMm", "Bottom (mm)", "print-margin-bottom"],
+                        ["marginLeftMm", "Left (mm)", "print-margin-left"],
+                      ] as Array<[keyof PrintSettings, string, string]>
+                    ).map(([key, label, id]) => (
+                      <div key={id}>
+                        <label className="text-xs text-muted-foreground" htmlFor={id}>
+                          {label}
+                        </label>
+                        <input
+                          id={id}
+                          type="number"
+                          min={0}
+                          max={40}
+                          step={1}
+                          className={numberField}
+                          value={settings[key] as number}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            if (Number.isFinite(next)) {
+                              update({ [key]: Math.min(40, Math.max(0, next)) } as Partial<PrintSettings>);
+                            }
+                          }}
+                        />
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
             </div>
             <div
               ref={scrollRef}
-              className=" min-w-fu l  min-h-0 overflow-auto bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.35),_rgba(241,245,249,0.6)_45%,_rgba(226,232,240,1))] p-3 sm:p-4"
+              className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto bg-[radial-gradient(circle_at_top,_rgba(148,163,184,0.35),_rgba(241,245,249,0.6)_45%,_rgba(226,232,240,1))] p-3 sm:p-4"
             >
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -471,6 +488,7 @@ function PrintPreviewModalComponent({
                     Fit Width
                   </Button>
                   <select
+                    aria-label="Zoom"
                     className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                     value={zoom}
                     onChange={(event) => setZoom(Number(event.target.value))}
@@ -485,11 +503,11 @@ function PrintPreviewModalComponent({
                 </div>
               </div>
               {loading ? (
-                <div className="flex min-h-full items-center justify-center">
+                <div className="flex flex-1 items-center justify-center">
                   <div
-                    className={`print-preview-frame w-full rounded-lg bg-white shadow-lg ${pageAspectClass}`}
+                    className={`print-preview-frame w-full max-w-full rounded-lg bg-white shadow-lg ${pageAspectClass}`}
                   >
-                    <div className="p-6 space-y-4">
+                    <div className="space-y-4 p-6">
                       <SkeletonBox className="h-5 w-40" />
                       <SkeletonText lines={3} />
                       <div className="space-y-2">
@@ -501,17 +519,29 @@ function PrintPreviewModalComponent({
                   </div>
                 </div>
               ) : (
-                <div className="flex min-h-full w-full items-center justify-center">
-                  <div ref={previewRef} className="origin-top">
-                    <iframe
-                      key={`${layout}-${format}-${customWidthMm}-${customHeightMm}-${marginTopMm}-${marginRightMm}-${marginBottomMm}-${marginLeftMm}`}
-                      ref={iframeRef}
-                      title="Print preview"
-                      className="print-preview-frame flow-root rounded-lg bg-white shadow-lg"
-                      srcDoc={html}
-                      onLoad={handleIframeLoad}
-                    />
-                  </div>
+                /*
+                 * `mx-auto` centres the page but collapses to 0 when the scaled
+                 * page is wider than the viewport, so nothing is ever pushed off
+                 * the left edge and out of scroll range. The old flex centring
+                 * did exactly that.
+                 */
+                <div
+                  className="relative mx-auto shrink-0"
+                  style={{ width: scaledWidth, height: scaledHeight }}
+                >
+                  <iframe
+                    key={`${settings.format}-${settings.orientation}-${settings.widthMm}-${settings.heightMm}-${settings.marginTopMm}-${settings.marginRightMm}-${settings.marginBottomMm}-${settings.marginLeftMm}-${settings.colorMode}-${settings.showLogo}-${settings.showColoredHeaders}`}
+                    ref={iframeRef}
+                    title="Print preview"
+                    className="print-preview-frame absolute left-0 top-0 origin-top-left rounded-lg border-0 bg-white shadow-lg"
+                    style={{
+                      width: pageWidthPx,
+                      height: contentHeightPx || pageHeightPx,
+                      transform: `scale(${scale})`,
+                    }}
+                    srcDoc={html}
+                    onLoad={handleIframeLoad}
+                  />
                 </div>
               )}
             </div>

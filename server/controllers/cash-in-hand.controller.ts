@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { parseRequiredInt } from "../utils/parse";
 import * as cashService from "../services/cash-in-hand.service";
 
 export async function getBalance(req: Request, res: Response) {
@@ -28,8 +29,8 @@ export async function getReceipts(req: Request, res: Response) {
 
 export async function getReceiptById(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid receipt id" });
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid receipt id" });
     const result = await cashService.getReceiptById(id);
     if (!result) return res.status(404).json({ error: "Receipt not found" });
     res.json(result);
@@ -55,8 +56,8 @@ export async function createReceipt(req: Request, res: Response) {
 
 export async function updateReceipt(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid receipt id" });
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid receipt id" });
     const result = await cashService.updateReceipt(id, req.body);
     if (!result) return res.status(404).json({ error: "Receipt not found" });
     res.json(result);
@@ -71,8 +72,8 @@ export async function updateReceipt(req: Request, res: Response) {
 
 export async function deleteReceipt(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid receipt id" });
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid receipt id" });
     const result = await cashService.deleteReceipt(id);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.status(204).send();
@@ -97,8 +98,8 @@ export async function getPayments(req: Request, res: Response) {
 
 export async function getPaymentById(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid payment id" });
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid payment id" });
     const result = await cashService.getPaymentById(id);
     if (!result) return res.status(404).json({ error: "Payment not found" });
     res.json(result);
@@ -124,8 +125,8 @@ export async function createPayment(req: Request, res: Response) {
 
 export async function updatePayment(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid payment id" });
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid payment id" });
     const result = await cashService.updatePayment(id, req.body);
     if (!result) return res.status(404).json({ error: "Payment not found" });
     res.json(result);
@@ -140,8 +141,8 @@ export async function updatePayment(req: Request, res: Response) {
 
 export async function deletePayment(req: Request, res: Response) {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid payment id" });
+    const id = parseRequiredInt(req.params.id, "id");
+    if (id === undefined) return res.status(400).json({ error: "Invalid payment id" });
     const result = await cashService.deletePayment(id);
     if (!result.ok) return res.status(400).json({ error: result.error });
     res.status(204).send();

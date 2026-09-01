@@ -4,11 +4,13 @@ import {
   computeAgingBuckets,
   computeBalanceSheetValidation,
   computeInventoryRollForward,
+  computeWeightedAverageCost,
+  resolvePaymentStatus,
   computeTrialBalanceTotals,
 } from "../services/reports/calculations";
 import {
   users, accounts, products, purchases, purchaseItems, purchaseCharges,
-  processing, sales, saleItems, ledgerEntries,
+  processing, processingOutputs, sales, saleItems, ledgerEntries,
   type User, type InsertUser, type Account, type InsertAccount,
   notifications, type Notification, type InsertNotification,
   employees, employeeSalaryStructures, payrolls, payrollAuditLogs,
@@ -19,6 +21,7 @@ import {
   type Product, type InsertProduct, type Purchase, type InsertPurchase,
   type PurchaseItem, type InsertPurchaseItem, type PurchaseCharge, type InsertPurchaseCharge,
   type Processing, type InsertProcessing,
+  type ProcessingOutput, type InsertProcessingOutput,
   type Sale, type InsertSale, type SaleItem, type InsertSaleItem,
   type LedgerEntry, type InsertLedgerEntry,
   receiptVouchers, receiptVoucherLines,
@@ -43,6 +46,20 @@ import {
   expenseEntries,
   type ExpenseEntry, type InsertExpenseEntry, insertExpenseEntrySchema,
 } from "../db/schema";
+import { cashOrBankAccountIds, isCashOrBankAccount } from "../utils/cash-accounts";
+import {
+  buildJournalVoucherNarration as buildJournalVoucherNarrationText,
+  buildExpenseNarration as buildExpenseNarrationText,
+  buildPaymentVoucherNarration as buildPaymentVoucherNarrationText,
+  buildProcessingNarration as buildProcessingNarrationText,
+  buildPurchaseNarration as buildPurchaseNarrationText,
+  buildReceiptVoucherNarration as buildReceiptVoucherNarrationText,
+  buildSaleNarration as buildSaleNarrationText,
+  cleanNarrationSegment,
+  firstMeaningfulNarration,
+  joinNarration,
+  preferManualNarration,
+} from "../utils/narration";
 
 type DbClient = typeof db;
 type PurchaseItemInput = Omit<
@@ -52,6 +69,7 @@ type PurchaseItemInput = Omit<
   Partial<Pick<InsertPurchaseItem, "grossWeightKg" | "netWeightKg" | "moundQty" | "moundRemainderKg" | "amount">>;
 type PurchaseChargeInput = Omit<InsertPurchaseCharge, "id" | "purchaseId">;
 type SaleItemInput = Omit<InsertSaleItem, "id" | "saleId" | "totalPrice">;
+type ProcessingOutputInput = Omit<InsertProcessingOutput, "id" | "processingId">;
 type ReceiptLineInput = Omit<InsertReceiptVoucherLine, "id" | "voucherId">;
 type JournalEntryInput = Omit<InsertJournalVoucherEntry, "id" | "journalVoucherId">;
 type CashTxInput = Omit<InsertCashTransaction, "id" | "createdAt" | "referenceType" | "referenceId"> & Partial<Pick<InsertCashTransaction, "journalVoucherId" | "receiptVoucherId" | "contraVoucherId" | "expenseEntryId">>;
@@ -153,6 +171,11 @@ export interface IStorage {
   createProcessing(batch: InsertProcessing): Promise<Processing>;
   updateProcessing(id: number, batch: Partial<InsertProcessing>): Promise<Processing | undefined>;
   getNextBatchNumber(): Promise<string>;
+  getProcessingOutputs(processingId: number): Promise<ProcessingOutput[]>;
+  setProcessingOutputs(processingId: number, outputs: ProcessingOutputInput[]): Promise<ProcessingOutput[]>;
+  addProcessingOutput(processingId: number, output: ProcessingOutputInput): Promise<ProcessingOutput>;
+  updateProcessingOutput(id: number, output: Partial<ProcessingOutputInput>): Promise<ProcessingOutput | undefined>;
+  deleteProcessingOutput(id: number): Promise<boolean>;
 
   // Sales
   getSales(): Promise<Sale[]>;
@@ -298,7 +321,7 @@ export interface IStorage {
     startDate: Date,
     endDate: Date,
     supplierId?: number,
-    groupBy?: "day" | "week" | "month",
+    groupBy?: "day" | "week" | "month" | "year",
   ): Promise<{
     rows: Array<{
       period: string;
@@ -315,7 +338,7 @@ export interface IStorage {
     startDate: Date,
     endDate: Date,
     customerId?: number,
-    groupBy?: "day" | "week" | "month",
+    groupBy?: "day" | "week" | "month" | "year",
   ): Promise<{
     rows: Array<{
       period: string;
@@ -512,6 +535,47 @@ export interface IStorage {
     return num;
   }
 
+  /**
+   * Currency amounts are persisted as decimal strings. Raw IEEE-754 results
+   * such as 3 * 33.33 = 99.99000000000001 were being written verbatim, which
+   * both looked wrong in the UI and made debit/credit totals fail to net to
+   * zero. Round to paisa at every persistence boundary.
+   */
+  function roundMoney(value: number): number {
+    if (!Number.isFinite(value)) throw new Error("Invalid numeric value");
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+  }
+
+  /**
+   * Document numbers (`SAL-2026-0001`, `GP-2026-0001`, ...) form one global
+   * sequence with the current year as a label. Deriving the next value from the
+   * newest row alone broke in two ways: a NULL number (gate passes are
+   * nullable) or a malformed legacy value restarted the sequence at 1 or
+   * produced `NaN`, yielding duplicates and UNIQUE-constraint failures.
+   * Take the highest numeric suffix across all rows instead.
+   *
+   * `rtrim(x, '0123456789')` strips the trailing digits to leave the prefix,
+   * which is then removed to isolate the sequence; rows without a numeric
+   * suffix contribute 0.
+   */
+  function nextDocumentSequence(table: string, column: string): number {
+    const row = sqlite
+      .prepare(
+        `SELECT COALESCE(MAX(CAST(replace(x, rtrim(x, '0123456789'), '') AS INTEGER)), 0) AS maxSeq
+         FROM (SELECT "${column}" AS x FROM "${table}" WHERE "${column}" IS NOT NULL AND "${column}" != '')`,
+      )
+      .get() as { maxSeq: number } | undefined;
+    const maxSeq = Number(row?.maxSeq ?? 0);
+    return (Number.isFinite(maxSeq) && maxSeq > 0 ? maxSeq : 0) + 1;
+  }
+
+  function toSaleQuantityKg(quantity: string | number, unit: string | null | undefined): number {
+    const qty = parseAmount(quantity);
+    const factor = unit === "mound" ? 40 : unit === "quintal" ? 100 : unit === "ton" ? 1000 : unit === "kg" ? 1 : 0;
+    if (qty <= 0 || factor === 0) throw new Error(`Unsupported or invalid sale quantity unit: ${unit ?? ""}`);
+    return qty * factor;
+  }
+
   function formatMoney(value: string | number | null | undefined): string {
     return parseAmount(value).toLocaleString("en-PK", {
       minimumFractionDigits: 2,
@@ -580,6 +644,25 @@ function getLedgerReference(entry: LedgerEntry): { referenceType: string | null;
   if (entry.contraVoucherId) return { referenceType: "contra_voucher", referenceId: entry.contraVoucherId };
   if (entry.expenseEntryId) return { referenceType: "expense", referenceId: entry.expenseEntryId };
   return { referenceType: null, referenceId: null };
+}
+
+/**
+ * Remove a daybook projection row for a source record that is being deleted.
+ * The daybook tables are optional (created lazily by daybooks.service), so a
+ * missing table is not an error.
+ */
+function deleteDaybookProjection(table: string, linkColumn: string, sourceId: number) {
+  try {
+    const exists = sqlite
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`)
+      .get(table) as any;
+    if (!exists?.name) return;
+    const cols = sqlite.prepare(`PRAGMA table_info(${table})`).all() as any[];
+    if (!cols.some((c) => c.name === linkColumn)) return;
+    sqlite.prepare(`DELETE FROM ${table} WHERE ${linkColumn} = ?`).run(sourceId);
+  } catch (error) {
+    console.error(`Failed to clear ${table}.${linkColumn} projection for ${sourceId}`, error);
+  }
 }
 
 function getLedgerReferenceFromValues(entry: {
@@ -758,6 +841,16 @@ function endOfWeek(d: Date): Date {
   dt.setDate(dt.getDate() + 6);
   dt.setHours(23, 59, 59, 999);
   return dt;
+}
+
+/**
+ * Local calendar date as YYYY-MM-DD. `toISOString().slice(0,10)` cannot be used
+ * for this: period starts are local midnight, which in any positive UTC offset
+ * (PKT is +05:00) serialises as 19:00 on the *previous* day, so day-grouped
+ * period labels came out one day early.
+ */
+function localDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function weekNumber(d: Date): number {
@@ -976,6 +1069,15 @@ export class DatabaseStorage implements IStorage {
   async createUser(user: InsertUser): Promise<User> {
     const [newUser] = await db.insert(users).values(user).returning();
     return newUser;
+  }
+
+  async createFirstAdmin(user: InsertUser): Promise<User | null> {
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const [existing] = client.select({ id: users.id }).from(users).limit(1).all();
+      if (existing) return null;
+      return client.insert(users).values(user).returning().get();
+    });
   }
 
   async updateUser(id: number, updates: Partial<InsertUser>): Promise<User | undefined> {
@@ -1260,9 +1362,16 @@ export class DatabaseStorage implements IStorage {
       const voucherNo = this.nextExpenseNumber(client);
       const amount = parseAmount(expense.amount || "0");
       if (amount <= 0) throw new Error("Amount must be greater than zero");
+      const narration = buildExpenseNarrationText({
+        description: expense.description,
+        expenseAccount: expAcc.name,
+        voucherNumber: voucherNo,
+        purpose: (expense as any).purpose,
+      });
 
       const created = client.insert(expenseEntries).values({
         ...expense,
+        description: narration,
         voucherNo,
         amount: amount.toString(),
         expenseDate: postingDate,
@@ -1275,7 +1384,7 @@ export class DatabaseStorage implements IStorage {
         accountId: expense.expenseAccountId,
         transactionType: "debit",
         amount: amount.toString(),
-        description: `Expense ${voucherNo}`,
+        description: narration,
         expenseEntryId: created.id,
         entryDate: postingDate,
       });
@@ -1283,7 +1392,7 @@ export class DatabaseStorage implements IStorage {
         accountId: expense.payFromAccountId,
         transactionType: "credit",
         amount: amount.toString(),
-        description: `Expense ${voucherNo}`,
+        description: narration,
         expenseEntryId: created.id,
         entryDate: postingDate,
       });
@@ -1315,6 +1424,14 @@ export class DatabaseStorage implements IStorage {
 
       const amount = parseAmount(expense.amount ?? existing.amount ?? "0");
       if (amount <= 0) throw new Error("Amount must be greater than zero");
+      const narration = expense.description === undefined
+        ? existing.description
+        : buildExpenseNarrationText({
+            description: expense.description,
+            expenseAccount: expAcc.name,
+            voucherNumber: existing.voucherNo,
+            purpose: (expense as any).purpose,
+          });
 
       const priorEntries = tx
         .select()
@@ -1332,6 +1449,7 @@ export class DatabaseStorage implements IStorage {
 
       const updated = tx.update(expenseEntries).set({
         ...expense,
+        description: narration,
         expenseAccountId,
         payFromAccountId,
         amount: amount.toString(),
@@ -1343,7 +1461,7 @@ export class DatabaseStorage implements IStorage {
         accountId: expenseAccountId,
         transactionType: "debit",
         amount: amount.toString(),
-        description: `Expense ${existing.voucherNo}`,
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
         expenseEntryId: id,
         entryDate: postingDate,
       });
@@ -1351,7 +1469,7 @@ export class DatabaseStorage implements IStorage {
         accountId: payFromAccountId,
         transactionType: "credit",
         amount: amount.toString(),
-        description: `Expense ${existing.voucherNo}`,
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
         expenseEntryId: id,
         entryDate: postingDate,
       });
@@ -2118,21 +2236,6 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateAccountBalance(id: number, amount: string, type: 'add' | 'subtract'): Promise<void> {
-    return this.updateAccountBalanceInternal(db, id, amount, type);
-  }
-
-  private updateAccountBalanceInternal(client: DbClient, id: number, amount: string, type: "add" | "subtract") {
-    const [account] = client.select().from(accounts).where(eq(accounts.id, id)).all();
-    const current = parseAmount(account?.currentBalance || "0");
-    const amt = parseAmount(amount || "0");
-    const newBalance = type === "add" ? current + amt : current - amt;
-
-    client.update(accounts)
-      .set({ currentBalance: newBalance.toString() })
-      .where(eq(accounts.id, id));
-  }
-
   private recomputeAccountBalances(client: DbClient, accountIds: number[]) {
     const uniqueIds = Array.from(new Set(accountIds)).filter((id) => Number.isFinite(id));
     for (const accountId of uniqueIds) {
@@ -2352,10 +2455,16 @@ export class DatabaseStorage implements IStorage {
       .select({
         totalKg: sql<string>`COALESCE(SUM(CAST(${fieldRef} AS REAL)), 0)`,
         totalBags: sql<string>`COALESCE(SUM(CAST(${purchaseItems.bags} AS REAL)), 0)`,
-        purchaseCount: sql<string>`COALESCE(COUNT(DISTINCT ${purchases.id}), 0)`,
+        // Count only purchases that actually carry this deduction — counting every
+        // purchase in range made the Bardana and Less reports show an identical
+        // "Purchases" figure regardless of which deduction was applied.
+        purchaseCount: sql<string>`COALESCE(COUNT(DISTINCT CASE WHEN CAST(${fieldRef} AS REAL) > 0 THEN ${purchases.id} END), 0)`,
       })
       .from(purchaseItems)
-      .leftJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
+      // Inner join: a purchase item with no surviving parent purchase is not a
+      // purchase. With a left join, orphans leaked in whenever no date filter was
+      // set (NULL deletedAt passes isNull) but dropped out as soon as one was.
+      .innerJoin(purchases, eq(purchaseItems.purchaseId, purchases.id))
       .where(and(...conditions))
       .all();
 
@@ -2487,12 +2596,19 @@ export class DatabaseStorage implements IStorage {
 
   private updateProductStockInternal(client: DbClient, id: number, quantity: string, type: "add" | "subtract") {
     const [product] = client.select().from(products).where(eq(products.id, id)).all();
-    const current = parseAmount(product?.currentStock || "0");
+    if (!product) {
+      // Without this the UPDATE below matched no rows and the movement was
+      // silently dropped, leaving the document booked against no inventory.
+      throw new Error(`Product ${id} not found`);
+    }
+    const current = parseAmount(product.currentStock || "0");
     const qty = parseAmount(quantity || "0");
-    const newStock = type === "add" ? current + qty : current - qty;
+    // Binary floating point leaves residue such as 0.30000000000000004; stock
+    // is tracked to 3 decimals (grams), so round to that precision.
+    const newStock = Math.round((type === "add" ? current + qty : current - qty) * 1000) / 1000;
 
     if (type === "subtract" && newStock < 0) {
-      throw new Error(`Insufficient stock for product ${product?.name || id}`);
+      throw new Error(`Insufficient stock for product ${product.name || id}`);
     }
 
     client.update(products)
@@ -2523,24 +2639,12 @@ export class DatabaseStorage implements IStorage {
 
   async getNextPurchaseInvoiceNumber(): Promise<string> {
     const year = new Date().getFullYear();
-    const [last] = db.select().from(purchases)
-      .orderBy(desc(purchases.id))
-      .limit(1)
-      .all();
-
-    const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+    const nextNum = nextDocumentSequence("purchases", "invoice_number");
     return `PUR-${year}-${String(nextNum).padStart(4, "0")}`;
   }
 
   private computeNextBillNumber(client: DbClient, year: number): string {
-    const [last] = client.select().from(purchases)
-      .where(sql`bill_no IS NOT NULL AND bill_no != ''`)
-      .orderBy(desc(purchases.id))
-      .limit(1)
-      .all();
-
-    const lastSeq = last?.billNo ? parseInt((last.billNo as string).split("-").pop() || "0") : 0;
-    const nextNum = Number.isFinite(lastSeq) ? lastSeq + 1 : 1;
+    const nextNum = nextDocumentSequence("purchases", "bill_no");
     return `BILL-${year}-${String(nextNum).padStart(5, "0")}`;
   }
 
@@ -2607,8 +2711,7 @@ export class DatabaseStorage implements IStorage {
       this.assertPostingAllowed(client, postingDate, "purchase");
 
       const year = new Date().getFullYear();
-      const [last] = tx.select().from(purchases).orderBy(desc(purchases.id)).limit(1).all();
-      const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+      const nextNum = nextDocumentSequence("purchases", "invoice_number");
       const invoiceNumber = `PUR-${year}-${String(nextNum).padStart(4, "0")}`;
       const billYear = purchase.purchaseDate ? new Date(purchase.purchaseDate).getFullYear() : year;
       const billNo = purchase.billNo && purchase.billNo.trim() !== "" ? purchase.billNo : this.computeNextBillNumber(tx as unknown as DbClient, billYear);
@@ -2623,7 +2726,7 @@ export class DatabaseStorage implements IStorage {
           serialNo: item.serialNo ?? idx + 1,
           ...item,
         }, moundBaseKg);
-        subtotal += parseAmount(normalized.amount);
+        subtotal = roundMoney(subtotal + parseAmount(normalized.amount));
         totalBags += parseAmount(normalized.bags);
         totalGrossWeightKg += parseAmount(normalized.grossWeightKg);
         totalNetWeightKg += parseAmount(normalized.netWeightKg);
@@ -2636,15 +2739,28 @@ export class DatabaseStorage implements IStorage {
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
       const brokerCommissionPercent = parseAmount(purchase.brokerCommissionPercent || "0");
-      const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
+      const brokerCommission = roundMoney((subtotal * brokerCommissionPercent) / 100);
 
-      const lineSubtotal = subtotal + brokerCommission;
-      const taxAmount = parseAmount((purchase as any).taxAmount || 0);
-      const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
-      const paidAmount = 0;
-      const balanceDue = grandAmount;
+      const lineSubtotal = roundMoney(subtotal + brokerCommission);
+      const taxAmount = roundMoney(this.calculateTaxAmount(client, (purchase as any).taxTypeId, roundMoney(lineSubtotal + chargesAdd - chargesLess), postingDate, "purchases"));
+      const grandAmount = roundMoney(lineSubtotal + chargesAdd - chargesLess + taxAmount);
+      if (grandAmount < 0) throw new Error("Purchase total cannot be negative");
+      const paidAmount = roundMoney(Math.min(Math.max(0, parseAmount((purchase as any).paidAmount || "0")), grandAmount));
+      const balanceDue = roundMoney(grandAmount - paidAmount);
+      const [supplier] = client
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.id, purchase.supplierId))
+        .limit(1)
+        .all();
+      const narration = buildPurchaseNarrationText({
+        notes: purchase.notes,
+        supplierName: supplier?.name,
+        invoiceNumber,
+      });
       const newPurchase = tx.insert(purchases).values({
         ...purchase,
+        notes: narration,
         invoiceNumber,
         billNo,
         subtotal: lineSubtotal.toString(),
@@ -2654,6 +2770,7 @@ export class DatabaseStorage implements IStorage {
         totalNetWeightKg: totalNetWeightKg.toString(),
         totalMoundQty: totalMoundQty.toString(),
         totalMoundRemainderKg: totalMoundRemainderKg.toString(),
+        moundBaseKg,
         chargesAdd: chargesAdd.toString(),
         chargesLess: chargesLess.toString(),
         taxAmount: taxAmount.toString(),
@@ -2844,6 +2961,11 @@ export class DatabaseStorage implements IStorage {
         } as any).run();
       }
 
+      if ((purchase.paymentMode ?? "cash") === "cash" && paidAmount > 0) {
+        const cashAccount = this.ensureSystemAccount(client, "Cash in Hand", "asset");
+        pushLine({ accountId: supplierAccountId, transactionType: "debit", amount: paidAmount.toString(), description: `PAYMENT ${invoiceNumber}`, ...getLedgerReferenceColumns("purchase", newPurchase.id), entryDate: postingDate });
+        pushLine({ accountId: cashAccount.id, transactionType: "credit", amount: paidAmount.toString(), description: `PAYMENT ${invoiceNumber}`, ...getLedgerReferenceColumns("purchase", newPurchase.id), entryDate: postingDate });
+      }
       this.postBalancedLedgerEntries(client, ledgerLines, `purchase ${invoiceNumber}`);
 
       return newPurchase;
@@ -2883,9 +3005,19 @@ export class DatabaseStorage implements IStorage {
         .run();
       this.recomputeAccountBalances(client, affectedAccountIds);
 
-      // Rollback previous stock impact
+      // Reverse the old quantity and cost contribution before applying the replacement.
       for (const item of existing.items) {
-        this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
+        const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+        if (!product) throw new Error(`Product not found: id ${item.productId}`);
+        const currentStock = parseAmount(product.currentStock);
+        const oldQty = parseAmount(item.netWeightKg);
+        const newStock = currentStock - oldQty;
+        if (newStock < -0.0001) throw new Error(`Cannot edit purchase because stock has been consumed for ${product.name}`);
+        const remainingValue = Math.max(currentStock * parseAmount(product.avgPurchasePrice) - parseAmount(item.amount), 0);
+        tx.update(products).set({
+          currentStock: Math.max(newStock, 0).toString(),
+          avgPurchasePrice: newStock > 0 ? (remainingValue / newStock).toString() : "0",
+        }).where(eq(products.id, item.productId)).run();
       }
 
       // Rebuild new items/totals
@@ -2899,7 +3031,7 @@ export class DatabaseStorage implements IStorage {
           serialNo: item.serialNo ?? idx + 1,
           ...item,
         }, moundBaseKg);
-        subtotal += parseAmount(normalized.amount);
+        subtotal = roundMoney(subtotal + parseAmount(normalized.amount));
         totalBags += parseAmount(normalized.bags);
         totalGrossWeightKg += parseAmount(normalized.grossWeightKg);
         totalNetWeightKg += parseAmount(normalized.netWeightKg);
@@ -2912,13 +3044,15 @@ export class DatabaseStorage implements IStorage {
 
       const { add: chargesAdd, less: chargesLess } = this.sumCharges(charges);
       const brokerCommissionPercent = parseAmount((purchase as any).brokerCommissionPercent ?? existing.brokerCommissionPercent ?? "0");
-      const brokerCommission = (subtotal * brokerCommissionPercent) / 100;
+      const brokerCommission = roundMoney((subtotal * brokerCommissionPercent) / 100);
 
-      const lineSubtotal = subtotal + brokerCommission;
-      const taxAmount = parseAmount((purchase as any).taxAmount ?? existing.taxAmount ?? 0);
-      const grandAmount = lineSubtotal + chargesAdd - chargesLess + taxAmount;
-      const paidAmount = parseAmount((purchase as any).paidAmount ?? existing.paidAmount ?? 0);
-      const balanceDue = grandAmount - paidAmount;
+      const lineSubtotal = roundMoney(subtotal + brokerCommission);
+      const effectiveTaxTypeId = (purchase as any).taxTypeId ?? existing.taxTypeId;
+      const taxAmount = roundMoney(this.calculateTaxAmount(client, effectiveTaxTypeId, roundMoney(lineSubtotal + chargesAdd - chargesLess), postingDate, "purchases"));
+      const grandAmount = roundMoney(lineSubtotal + chargesAdd - chargesLess + taxAmount);
+      if (grandAmount < 0) throw new Error("Purchase total cannot be negative");
+      const paidAmount = roundMoney(Math.min(Math.max(0, parseAmount((purchase as any).paidAmount ?? existing.paidAmount ?? 0)), grandAmount));
+      const balanceDue = roundMoney(grandAmount - paidAmount);
       const updatedPurchase = tx.update(purchases).set({
         ...purchase,
         subtotal: lineSubtotal.toString(),
@@ -2928,6 +3062,7 @@ export class DatabaseStorage implements IStorage {
         totalNetWeightKg: totalNetWeightKg.toString(),
         totalMoundQty: totalMoundQty.toString(),
         totalMoundRemainderKg: totalMoundRemainderKg.toString(),
+        moundBaseKg,
         chargesAdd: chargesAdd.toString(),
         chargesLess: chargesLess.toString(),
         buyerAmount: grandAmount.toString(),
@@ -2940,7 +3075,16 @@ export class DatabaseStorage implements IStorage {
       tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id)).run();
       for (const item of normalizedItems) {
         tx.insert(purchaseItems).values({ ...item, purchaseId: id }).run();
-        this.updateProductStockInternal(client, item.productId, item.netWeightKg, "add");
+        const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+        if (!product) throw new Error(`Product not found: id ${item.productId}`);
+        const currentStock = parseAmount(product.currentStock);
+        const currentValue = currentStock * parseAmount(product.avgPurchasePrice);
+        const qtyKg = parseAmount(item.netWeightKg);
+        const newStock = currentStock + qtyKg;
+        tx.update(products).set({
+          currentStock: newStock.toString(),
+          avgPurchasePrice: newStock > 0 ? ((currentValue + parseAmount(item.amount)) / newStock).toString() : "0",
+        }).where(eq(products.id, item.productId)).run();
       }
 
       // Replace charges
@@ -3086,6 +3230,11 @@ export class DatabaseStorage implements IStorage {
         });
       }
 
+      if ((purchase.paymentMode ?? existing.paymentMode ?? "cash") === "cash" && paidAmount > 0) {
+        const cashAccount = this.ensureSystemAccount(client, "Cash in Hand", "asset");
+        pushLine({ accountId: supplierAccountId, transactionType: "debit", amount: paidAmount.toString(), description: `PAYMENT ${existing.invoiceNumber}`, ...getLedgerReferenceColumns("purchase", id), entryDate: postingDate });
+        pushLine({ accountId: cashAccount.id, transactionType: "credit", amount: paidAmount.toString(), description: `PAYMENT ${existing.invoiceNumber}`, ...getLedgerReferenceColumns("purchase", id), entryDate: postingDate });
+      }
       this.postBalancedLedgerEntries(client, ledgerLines, `purchase ${existing.invoiceNumber}`);
 
       return updatedPurchase;
@@ -3096,7 +3245,6 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getPurchaseWithDetails(id);
     if (!existing) return false;
     if (existing.deletedAt) return false;
-    const forceDelete = options?.force === true;
     const parsedPaidAmount = Number.parseFloat(String(existing.paidAmount ?? "0"));
     const paidAmount = Number.isFinite(parsedPaidAmount) ? parsedPaidAmount : 0;
     if (paidAmount > 0) {
@@ -3116,7 +3264,6 @@ export class DatabaseStorage implements IStorage {
         const currentStock = parseAmount(product?.currentStock || "0");
         const rollbackQty = parseAmount(item.netWeightKg || "0");
         if (currentStock + stockEpsilon < rollbackQty) {
-          if (forceDelete) continue;
           throw new Error(
             `Cannot delete purchase because stock has been consumed for product ${product?.name || item.productId}. Available: ${currentStock}, required to rollback: ${rollbackQty}.`,
           );
@@ -3135,17 +3282,28 @@ export class DatabaseStorage implements IStorage {
         .run();
       this.recomputeAccountBalances(client, affectedAccountIds);
 
-      // Rollback stock impact
+      // Rollback stock impact. The quantity *and* the cost contribution must be
+      // withdrawn together: reversing only the quantity (as a bare stock
+      // subtract does) left the weighted average that this purchase had moved,
+      // so the remaining units kept a valuation this purchase paid for and
+      // inventory no longer tied out against the Inventory ledger account.
       for (const item of existing.items.filter((i) => !i.deletedAt)) {
-        if (forceDelete) {
-          const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
-          const currentStock = parseAmount(product?.currentStock || "0");
-          const rollbackQty = parseAmount(item.netWeightKg || "0");
-          const adjustedStock = Math.max(currentStock - rollbackQty, 0);
-          tx.update(products).set({ currentStock: adjustedStock.toString() }).where(eq(products.id, item.productId)).run();
-        } else {
-          this.updateProductStockInternal(client, item.productId, item.netWeightKg, "subtract");
-        }
+        const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+        if (!product) throw new Error(`Product not found: id ${item.productId}`);
+        const currentStock = parseAmount(product.currentStock || "0");
+        const rollbackQty = parseAmount(item.netWeightKg || "0");
+        const newStock = Math.round((currentStock - rollbackQty) * 1000) / 1000;
+        const remainingValue = Math.max(
+          currentStock * parseAmount(product.avgPurchasePrice || "0") - parseAmount(item.amount || "0"),
+          0,
+        );
+        tx.update(products)
+          .set({
+            currentStock: Math.max(newStock, 0).toString(),
+            avgPurchasePrice: newStock > 0 ? (remainingValue / newStock).toString() : "0",
+          })
+          .where(eq(products.id, item.productId))
+          .run();
       }
 
       // Soft delete related rows
@@ -3188,11 +3346,26 @@ export class DatabaseStorage implements IStorage {
 
       const client = tx as unknown as DbClient;
 
+      const productIds = [batch.sourceProductId, batch.outputProductId].filter((id): id is number => Boolean(id));
+      const productRows = productIds.length
+        ? client.select({ id: products.id, name: products.name }).from(products).where(inArray(products.id, productIds)).all()
+        : [];
+      const productNameById = new Map(productRows.map((product) => [product.id, product.name]));
+      const narration = buildProcessingNarrationText({
+        notes: batch.notes,
+        inputProduct: productNameById.get(batch.sourceProductId),
+        inputQuantity: batch.sourceQuantity,
+        outputProduct: batch.outputProductId ? productNameById.get(batch.outputProductId) : batch.outputCategory,
+        outputQuantity: batch.outputQuantity,
+        batchNumber,
+      });
+
       // Reduce stock for source product
       this.updateProductStockInternal(client, batch.sourceProductId, batch.sourceQuantity, "subtract");
 
       const insertResult = tx.insert(processing).values({
         ...batch,
+        notes: narration,
         batchNumber,
       }).run();
       const newId = Number(insertResult.lastInsertRowid);
@@ -3210,29 +3383,205 @@ export class DatabaseStorage implements IStorage {
       const updatePayload: Partial<InsertProcessing> = { ...batch };
       const client = tx as unknown as DbClient;
 
+      const nextSourceProductId = batch.sourceProductId ?? existingBatch.sourceProductId;
+      const nextSourceQuantity = batch.sourceQuantity ?? existingBatch.sourceQuantity;
+      const nextOutputProductId = batch.outputProductId ?? existingBatch.outputProductId;
+      const nextOutputQuantity = batch.outputQuantity ?? existingBatch.outputQuantity;
+      const nextStatus = batch.status ?? existingBatch.status;
+
+      // A batch's yield lives in processing_outputs; batches recorded before
+      // that table existed keep a single pair on the batch row. Read the rows
+      // once so the reverse and re-apply below agree on which path is in play.
+      const outputRows = client
+        .select()
+        .from(processingOutputs)
+        .where(eq(processingOutputs.processingId, id))
+        .all();
+
+      const existingOutputs = outputRows.length
+        ? outputRows.map((row) => ({ productId: row.productId, quantity: row.quantity }))
+        : existingBatch.outputProductId && existingBatch.outputQuantity
+          ? [{ productId: existingBatch.outputProductId, quantity: existingBatch.outputQuantity }]
+          : [];
+
+      // Output rows are edited through the processing-output methods, which
+      // adjust stock themselves, so they are unchanged here. Only the legacy
+      // pair can move as part of this update.
+      const nextOutputs = outputRows.length
+        ? existingOutputs
+        : nextOutputProductId && nextOutputQuantity
+          ? [{ productId: nextOutputProductId, quantity: nextOutputQuantity }]
+          : [];
+
+      this.updateProductStockInternal(client, existingBatch.sourceProductId, existingBatch.sourceQuantity, "add");
+      if (existingBatch.status === "completed") {
+        for (const output of existingOutputs) {
+          this.updateProductStockInternal(client, output.productId, output.quantity, "subtract");
+        }
+      }
+      this.updateProductStockInternal(client, nextSourceProductId, nextSourceQuantity, "subtract");
+      if (nextStatus === "completed") {
+        for (const output of nextOutputs) {
+          this.updateProductStockInternal(client, output.productId, output.quantity, "add");
+        }
+      }
+
       if (batch.status === "in_progress" && existingBatch.status === "pending") {
         updatePayload.startDate = new Date();
       }
 
-      if (batch.status === "completed" && existingBatch.status !== "completed") {
-        const outputProductId = batch.outputProductId || existingBatch.outputProductId;
-        const outputQuantity = batch.outputQuantity || existingBatch.outputQuantity;
-
-        if (outputProductId && outputQuantity) {
-          this.updateProductStockInternal(
-            client,
-            outputProductId,
-            outputQuantity,
-            "add",
-          );
-        }
+      if (nextStatus === "completed" && existingBatch.status !== "completed") {
         updatePayload.completedDate = new Date();
+      } else if (nextStatus !== "completed") {
+        updatePayload.completedDate = null;
       }
 
       tx.update(processing).set(updatePayload).where(eq(processing.id, id)).run();
       const [updated] = tx.select().from(processing).where(eq(processing.id, id)).all();
       return updated;
     });
+  }
+
+  async getProcessingOutputs(processingId: number): Promise<ProcessingOutput[]> {
+    return db
+      .select()
+      .from(processingOutputs)
+      .where(eq(processingOutputs.processingId, processingId))
+      .orderBy(processingOutputs.id)
+      .all();
+  }
+
+  /**
+   * Replaces every output on a batch.
+   *
+   * Stock only moves for a completed batch: the yield of a pending or
+   * in-progress batch has not been added to inventory yet, so rewriting its
+   * outputs must not touch product stock.
+   */
+  async setProcessingOutputs(processingId: number, outputs: ProcessingOutputInput[]): Promise<ProcessingOutput[]> {
+    const batch = await this.getProcessingBatch(processingId);
+    if (!batch) throw new Error("Processing batch not found");
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const isCompleted = batch.status === "completed";
+
+      if (isCompleted) {
+        for (const effect of this.currentOutputEffects(client, processingId, batch)) {
+          this.updateProductStockInternal(client, effect.productId, effect.quantity, "subtract");
+        }
+      }
+
+      tx.delete(processingOutputs).where(eq(processingOutputs.processingId, processingId)).run();
+
+      for (const output of outputs) {
+        tx.insert(processingOutputs).values({ ...output, processingId }).run();
+        if (isCompleted) {
+          this.updateProductStockInternal(client, output.productId, output.quantity, "add");
+        }
+      }
+
+      // The legacy single-output columns are superseded once rows exist; clear
+      // them so the fallback in currentOutputEffects can never double-count.
+      if (outputs.length && (batch.outputProductId || batch.outputQuantity)) {
+        tx.update(processing)
+          .set({ outputProductId: null, outputQuantity: null })
+          .where(eq(processing.id, processingId))
+          .run();
+      }
+
+      return tx
+        .select()
+        .from(processingOutputs)
+        .where(eq(processingOutputs.processingId, processingId))
+        .orderBy(processingOutputs.id)
+        .all();
+    });
+  }
+
+  async addProcessingOutput(processingId: number, output: ProcessingOutputInput): Promise<ProcessingOutput> {
+    const batch = await this.getProcessingBatch(processingId);
+    if (!batch) throw new Error("Processing batch not found");
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const result = tx.insert(processingOutputs).values({ ...output, processingId }).run();
+      if (batch.status === "completed") {
+        this.updateProductStockInternal(client, output.productId, output.quantity, "add");
+      }
+      const [created] = tx
+        .select()
+        .from(processingOutputs)
+        .where(eq(processingOutputs.id, Number(result.lastInsertRowid)))
+        .all();
+      return created;
+    });
+  }
+
+  async updateProcessingOutput(
+    id: number,
+    output: Partial<ProcessingOutputInput>,
+  ): Promise<ProcessingOutput | undefined> {
+    const [existing] = db.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+    if (!existing) return undefined;
+    const batch = await this.getProcessingBatch(existing.processingId);
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      const nextProductId = output.productId ?? existing.productId;
+      const nextQuantity = output.quantity ?? existing.quantity;
+
+      if (batch?.status === "completed") {
+        this.updateProductStockInternal(client, existing.productId, existing.quantity, "subtract");
+        this.updateProductStockInternal(client, nextProductId, nextQuantity, "add");
+      }
+
+      tx.update(processingOutputs)
+        .set({ ...output, updatedAt: new Date() })
+        .where(eq(processingOutputs.id, id))
+        .run();
+      const [updated] = tx.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+      return updated;
+    });
+  }
+
+  async deleteProcessingOutput(id: number): Promise<boolean> {
+    const [existing] = db.select().from(processingOutputs).where(eq(processingOutputs.id, id)).all();
+    if (!existing) return false;
+    const batch = await this.getProcessingBatch(existing.processingId);
+
+    return db.transaction((tx) => {
+      const client = tx as unknown as DbClient;
+      if (batch?.status === "completed") {
+        this.updateProductStockInternal(client, existing.productId, existing.quantity, "subtract");
+      }
+      tx.delete(processingOutputs).where(eq(processingOutputs.id, id)).run();
+      return true;
+    });
+  }
+
+  /**
+   * The outputs currently reflected in stock for a batch: the rows in
+   * processing_outputs, or the batch's own single-output columns for batches
+   * recorded before that table existed.
+   */
+  private currentOutputEffects(
+    client: DbClient,
+    processingId: number,
+    batch: Pick<Processing, "outputProductId" | "outputQuantity">,
+  ): Array<{ productId: number; quantity: string }> {
+    const rows = client
+      .select()
+      .from(processingOutputs)
+      .where(eq(processingOutputs.processingId, processingId))
+      .all();
+    if (rows.length) {
+      return rows.map((row) => ({ productId: row.productId, quantity: row.quantity }));
+    }
+    if (batch.outputProductId && batch.outputQuantity) {
+      return [{ productId: batch.outputProductId, quantity: batch.outputQuantity }];
+    }
+    return [];
   }
 
   // Sales
@@ -3247,35 +3596,23 @@ export class DatabaseStorage implements IStorage {
 
   async getNextSaleInvoiceNumber(): Promise<string> {
     const year = new Date().getFullYear();
-    const [last] = db.select().from(sales)
-      .orderBy(desc(sales.id))
-      .limit(1)
-      .all();
-
-    const nextNum = last ? parseInt(last.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+    const nextNum = nextDocumentSequence("sales", "invoice_number");
     return `SAL-${year}-${String(nextNum).padStart(4, "0")}`;
   }
 
   async getNextGatePassNumber(): Promise<string> {
     const year = new Date().getFullYear();
-    const [last] = db.select().from(sales)
-      .orderBy(desc(sales.id))
-      .limit(1)
-      .all();
-
-    const nextNum = last ? parseInt(last.gatePassNumber?.split("-").pop() || "0") + 1 : 1;
+    const nextNum = nextDocumentSequence("sales", "gate_pass_number");
     return `GP-${year}-${String(nextNum).padStart(4, "0")}`;
   }
 
   async createSale(sale: InsertSale, items: SaleItemInput[]): Promise<Sale> {
     return db.transaction((tx) => {
       const year = new Date().getFullYear();
-      const [lastSale] = tx.select().from(sales).orderBy(desc(sales.id)).limit(1).all();
-      const nextInvoice = lastSale ? parseInt(lastSale.invoiceNumber.split("-").pop() || "0") + 1 : 1;
+      const nextInvoice = nextDocumentSequence("sales", "invoice_number");
       const invoiceNumber = `SAL-${year}-${String(nextInvoice).padStart(4, "0")}`;
 
-      const [lastGp] = tx.select().from(sales).orderBy(desc(sales.id)).limit(1).all();
-      const nextGp = lastGp ? parseInt(lastGp.gatePassNumber?.split("-").pop() || "0") + 1 : 1;
+      const nextGp = nextDocumentSequence("sales", "gate_pass_number");
       const gatePassNumber = `GP-${year}-${String(nextGp).padStart(4, "0")}`;
 
       const client = tx as unknown as DbClient;
@@ -3286,11 +3623,13 @@ export class DatabaseStorage implements IStorage {
       const normalizedItems = items.map((item) => {
         const qty = parseAmount(item.quantity);
         const price = parseAmount(item.pricePerUnit);
-        const total = qty * price;
-        subtotal += total;
+        const quantityKg = toSaleQuantityKg(qty, item.unit);
+        const total = roundMoney(qty * price);
+        subtotal = roundMoney(subtotal + total);
         return {
           ...item,
           quantity: qty.toString(),
+          quantityKg: quantityKg.toString(),
           pricePerUnit: price.toString(),
           totalPrice: total.toString(),
         };
@@ -3300,7 +3639,7 @@ export class DatabaseStorage implements IStorage {
       for (const item of normalizedItems) {
         const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
         const currentStock = parseAmount(product?.currentStock || "0");
-        const qty = parseAmount(item.quantity);
+        const qty = parseAmount(item.quantityKg);
         if (currentStock < qty) {
           throw new Error(`Insufficient stock for product ${product?.name || item.productId}. Available: ${currentStock}, Required: ${qty}`);
         }
@@ -3311,15 +3650,28 @@ export class DatabaseStorage implements IStorage {
       const otherCharge = parseAmount(sale.otherCharges || "0");
       const rentCharge = parseAmount((sale as any).rentCharges || "0");
       const discountAmount = parseAmount((sale as any).discountAmount || "0");
-      const charges = loadingCharge + weighingCharge + otherCharge + rentCharge;
-      const taxAmount = parseAmount((sale as any).taxAmount || 0);
-      const totalAmount = Math.max(0, subtotal + charges - discountAmount + taxAmount);
+      const charges = roundMoney(loadingCharge + weighingCharge + otherCharge + rentCharge);
+      if (discountAmount > subtotal + charges) throw new Error("Discount cannot exceed the invoice value");
+      const taxAmount = roundMoney(this.calculateTaxAmount(client, (sale as any).taxTypeId, roundMoney(subtotal + charges - discountAmount), postingDate, "sales"));
+      const totalAmount = roundMoney(Math.max(0, subtotal + charges - discountAmount + taxAmount));
       const requestedPaid = parseAmount((sale as any).paidAmount || "0");
-      const paidAmount = Math.min(Math.max(0, requestedPaid), totalAmount);
-      const balanceDue = Math.max(totalAmount - paidAmount, 0);
+      const paidAmount = roundMoney(Math.min(Math.max(0, requestedPaid), totalAmount));
+      const balanceDue = roundMoney(Math.max(totalAmount - paidAmount, 0));
+      const [customer] = client
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.id, sale.customerId))
+        .limit(1)
+        .all();
+      const narration = buildSaleNarrationText({
+        notes: sale.notes,
+        customerName: customer?.name,
+        invoiceNumber,
+      });
 
       const newSale = tx.insert(sales).values({
         ...sale,
+        notes: narration,
         invoiceNumber,
         gatePassNumber,
         subtotal: subtotal.toString(),
@@ -3335,7 +3687,7 @@ export class DatabaseStorage implements IStorage {
           ...item,
           saleId: newSale.id,
         }).run();
-        this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
+        this.updateProductStockInternal(client, item.productId, item.quantityKg, "subtract");
       }
 
       // Double-entry: split sale into base/tax/charge lines so ledgers show each impact.
@@ -3431,6 +3783,11 @@ export class DatabaseStorage implements IStorage {
         } as any).run();
       }
 
+      if ((sale.paymentMode ?? "cash") === "cash" && paidAmount > 0) {
+        const cashAccount = this.ensureSystemAccount(client, "Cash in Hand", "asset");
+        pushLine({ accountId: cashAccount.id, transactionType: "debit", amount: paidAmount.toString(), description: `RECEIPT ${invoiceNumber}`, ...getLedgerReferenceColumns("sale", newSale.id), entryDate: postingDate });
+        pushLine({ accountId: sale.customerId, transactionType: "credit", amount: paidAmount.toString(), description: `RECEIPT ${invoiceNumber}`, ...getLedgerReferenceColumns("sale", newSale.id), entryDate: postingDate });
+      }
       this.postBalancedLedgerEntries(client, ledgerLines, `sale ${invoiceNumber}`);
 
       // COGS: use current avgPurchasePrice * qty
@@ -3440,7 +3797,7 @@ export class DatabaseStorage implements IStorage {
       for (const item of normalizedItems) {
         const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
         const avgCost = parseAmount(product?.avgPurchasePrice || "0");
-        const qty = parseAmount(item.quantity);
+        const qty = parseAmount(item.quantityKg);
         const lineCost = avgCost * qty;
         totalCogs += lineCost;
       }
@@ -3491,18 +3848,21 @@ export class DatabaseStorage implements IStorage {
 
         // Rollback previous stock impact
         for (const item of existingItems) {
-          this.updateProductStockInternal(client, item.productId, item.quantity, "add");
+          const quantityKg = parseAmount((item as any).quantityKg) || toSaleQuantityKg(item.quantity, item.unit);
+          this.updateProductStockInternal(client, item.productId, quantityKg.toString(), "add");
         }
 
         let subtotal = 0;
         const normalizedItems = items.map((item) => {
           const qty = parseAmount(item.quantity);
           const price = parseAmount(item.pricePerUnit);
-          const total = qty * price;
-          subtotal += total;
+          const quantityKg = toSaleQuantityKg(qty, item.unit);
+          const total = roundMoney(qty * price);
+          subtotal = roundMoney(subtotal + total);
           return {
             ...item,
             quantity: qty.toString(),
+            quantityKg: quantityKg.toString(),
             pricePerUnit: price.toString(),
             totalPrice: total.toString(),
           };
@@ -3512,7 +3872,7 @@ export class DatabaseStorage implements IStorage {
         for (const item of normalizedItems) {
           const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
           const currentStock = parseAmount(product?.currentStock || "0");
-          const qty = parseAmount(item.quantity);
+          const qty = parseAmount(item.quantityKg);
           if (currentStock < qty) {
             throw new Error(`Insufficient stock for product ${product?.name || item.productId}. Available: ${currentStock}, Required: ${qty}`);
           }
@@ -3523,12 +3883,14 @@ export class DatabaseStorage implements IStorage {
         const otherCharge = parseAmount(sale.otherCharges ?? existing.otherCharges ?? "0");
         const rentCharge = parseAmount((sale as any).rentCharges ?? (existing as any).rentCharges ?? "0");
         const discountAmount = parseAmount((sale as any).discountAmount ?? (existing as any).discountAmount ?? "0");
-        const charges = loadingCharge + weighingCharge + otherCharge + rentCharge;
-        const taxAmount = parseAmount((sale as any).taxAmount ?? existing.taxAmount ?? 0);
-        const totalAmount = Math.max(0, subtotal + charges - discountAmount + taxAmount);
+        const charges = roundMoney(loadingCharge + weighingCharge + otherCharge + rentCharge);
+        if (discountAmount > subtotal + charges) throw new Error("Discount cannot exceed the invoice value");
+        const effectiveTaxTypeId = (sale as any).taxTypeId ?? existing.taxTypeId;
+        const taxAmount = roundMoney(this.calculateTaxAmount(client, effectiveTaxTypeId, roundMoney(subtotal + charges - discountAmount), postingDate, "sales"));
+        const totalAmount = roundMoney(Math.max(0, subtotal + charges - discountAmount + taxAmount));
         const requestedPaid = parseAmount(sale.paidAmount ?? existing.paidAmount ?? 0);
-        const paidAmount = Math.min(Math.max(0, requestedPaid), totalAmount);
-        const balanceDue = Math.max(totalAmount - paidAmount, 0);
+        const paidAmount = roundMoney(Math.min(Math.max(0, requestedPaid), totalAmount));
+        const balanceDue = roundMoney(Math.max(totalAmount - paidAmount, 0));
 
         const updatedSale = tx.update(sales).set({
           ...sale,
@@ -3546,7 +3908,7 @@ export class DatabaseStorage implements IStorage {
             ...item,
             saleId: id,
           }).run();
-          this.updateProductStockInternal(client, item.productId, item.quantity, "subtract");
+          this.updateProductStockInternal(client, item.productId, item.quantityKg, "subtract");
         }
 
         tx.delete(taxLedgers).where(eq(taxLedgers.saleId, id)).run();
@@ -3643,7 +4005,25 @@ export class DatabaseStorage implements IStorage {
           } as any).run();
         }
 
+        if ((sale.paymentMode ?? existing.paymentMode ?? "cash") === "cash" && paidAmount > 0) {
+          const cashAccount = this.ensureSystemAccount(client, "Cash in Hand", "asset");
+          pushLine({ accountId: cashAccount.id, transactionType: "debit", amount: paidAmount.toString(), description: `RECEIPT ${existing.invoiceNumber}`, ...getLedgerReferenceColumns("sale", id), entryDate: postingDate });
+          pushLine({ accountId: customerId, transactionType: "credit", amount: paidAmount.toString(), description: `RECEIPT ${existing.invoiceNumber}`, ...getLedgerReferenceColumns("sale", id), entryDate: postingDate });
+        }
         this.postBalancedLedgerEntries(client, ledgerLines, `sale ${existing.invoiceNumber}`);
+
+        const inventoryAccount = this.ensureSystemAccount(client, "Inventory", "asset");
+        const cogsAccount = this.ensureSystemAccount(client, "Cost of Goods Sold", "cogs");
+        const totalCogs = normalizedItems.reduce((total, item) => {
+          const [product] = tx.select().from(products).where(eq(products.id, item.productId)).all();
+          return total + parseAmount(product?.avgPurchasePrice || "0") * parseAmount(item.quantityKg);
+        }, 0);
+        if (totalCogs > 0) {
+          this.postBalancedLedgerEntries(client, [
+            { accountId: cogsAccount.id, transactionType: "debit", amount: totalCogs.toString(), description: `COGS ${existing.invoiceNumber}`, ...getLedgerReferenceColumns("sale", id), entryDate: postingDate },
+            { accountId: inventoryAccount.id, transactionType: "credit", amount: totalCogs.toString(), description: `Inventory Relief ${existing.invoiceNumber}`, ...getLedgerReferenceColumns("sale", id), entryDate: postingDate },
+          ], `sale COGS ${existing.invoiceNumber}`);
+        }
 
         return updatedSale;
       });
@@ -3671,13 +4051,19 @@ export class DatabaseStorage implements IStorage {
           const affectedAccountIds = Array.from(new Set(priorEntries.map((entry) => entry.accountId)));
 
           for (const item of items) {
-            this.updateProductStockInternal(client, item.productId, item.quantity, "add");
+            const quantityKg = parseAmount((item as any).quantityKg) || toSaleQuantityKg(item.quantity, item.unit);
+            this.updateProductStockInternal(client, item.productId, quantityKg.toString(), "add");
           }
 
           tx.delete(ledgerEntries).where(buildLedgerReferenceWhere("sale", id) as any).run();
           this.recomputeAccountBalances(client, affectedAccountIds);
           tx.delete(taxLedgers).where(eq(taxLedgers.saleId, id)).run();
           tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
+          // The Sales Daybook row is a projection of this invoice and holds an
+          // FK to it — drop it in the same transaction, otherwise the delete
+          // fails on the constraint and the daybook keeps reporting a sale that
+          // no longer exists.
+          deleteDaybookProjection("sales_daybook", "sale_id", id);
         tx.delete(sales).where(eq(sales.id, id)).run();
 
         return true;
@@ -4074,12 +4460,9 @@ export class DatabaseStorage implements IStorage {
       const haystack = value.toLowerCase();
       return narrationTokens.some((token) => haystack.includes(token));
     };
-    const filteredEntries = narrationTokens.length > 0
-      ? entries.filter((e) => {
-          const base = (e.description || "").toLowerCase();
-          return matchesNarration(base);
-        })
-      : entries;
+    // Enriched narration is built below from linked vouchers and accounts, so
+    // filtering must happen after that enrichment rather than on raw descriptions.
+    const filteredEntries = entries;
 
     const byType = filteredEntries.reduce(
       (acc, e) => {
@@ -4096,9 +4479,10 @@ export class DatabaseStorage implements IStorage {
     const uniqueIds = (list?: number[]) => Array.from(new Set(list || []));
     const purchaseIds = uniqueIds(byType.purchase);
     const saleIds = uniqueIds(byType.sale);
-    const receiptIds = uniqueIds([...(byType.receipt || []), ...(byType.payment || [])]);
+    const receiptIds = uniqueIds(byType.receipt_voucher);
     const journalIds = uniqueIds(byType.journal_voucher);
     const expenseIds = uniqueIds(byType.expense);
+    const contraIds = uniqueIds(byType.contra);
 
     const purchaseNoById = new Map<number, string>(
       purchaseIds.length
@@ -4133,6 +4517,9 @@ export class DatabaseStorage implements IStorage {
         subtotal?: string | null;
         itemsSubtotal?: string | null;
         totalAmount?: string | null;
+        partyName?: string | null;
+        notes?: string | null;
+        supplierId?: number | null;
       }
     >(
       purchaseIds.length
@@ -4144,8 +4531,12 @@ export class DatabaseStorage implements IStorage {
               totalMoundQty: purchases.totalMoundQty,
               subtotal: purchases.subtotal,
               totalAmount: purchases.totalAmount,
+              partyName: accounts.name,
+              notes: purchases.notes,
+              supplierId: purchases.supplierId,
             })
             .from(purchases)
+            .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
             .where(inArray(purchases.id, purchaseIds))
             .all()
             .map((r) => [r.id, { ...r, itemsSubtotal: purchaseItemSubtotalById.get(r.id) }])
@@ -4217,11 +4608,25 @@ export class DatabaseStorage implements IStorage {
             .map((r) => [r.id, r.no])
         : [],
     );
-    const saleMetaById = new Map<number, { invoiceNumber?: string | null; subtotal?: string | null; totalAmount?: string | null }>(
+    const saleMetaById = new Map<number, {
+      invoiceNumber?: string | null;
+      subtotal?: string | null;
+      totalAmount?: string | null;
+      partyName?: string | null;
+      notes?: string | null;
+    }>(
       saleIds.length
         ? db
-            .select({ id: sales.id, invoiceNumber: sales.invoiceNumber, subtotal: sales.subtotal, totalAmount: sales.totalAmount })
+            .select({
+              id: sales.id,
+              invoiceNumber: sales.invoiceNumber,
+              subtotal: sales.subtotal,
+              totalAmount: sales.totalAmount,
+              partyName: accounts.name,
+              notes: sales.notes,
+            })
             .from(sales)
+            .leftJoin(accounts, eq(sales.customerId, accounts.id))
             .where(inArray(sales.id, saleIds))
             .all()
             .map((r) => [r.id, r])
@@ -4258,7 +4663,12 @@ export class DatabaseStorage implements IStorage {
     const saleItemNameById = new Map<number, string>(
       Array.from(saleItemNameSets.entries()).map(([id, names]) => [id, summarizeNames(names)]),
     );
-    const receiptMetaById = new Map<number, { no: string; voucherType: string; settlementAccountId: number | null }>(
+    const receiptMetaById = new Map<number, {
+      no: string;
+      voucherType: string;
+      settlementAccountId: number | null;
+      narration: string;
+    }>(
       receiptIds.length
         ? db
             .select({
@@ -4266,13 +4676,60 @@ export class DatabaseStorage implements IStorage {
               no: receiptVouchers.voucherNumber,
               voucherType: receiptVouchers.voucherType,
               settlementAccountId: receiptVouchers.settlementAccountId,
+              narration: receiptVouchers.narration,
             })
             .from(receiptVouchers)
             .where(inArray(receiptVouchers.id, receiptIds))
             .all()
-            .map((r) => [r.id, { no: r.no, voucherType: r.voucherType, settlementAccountId: r.settlementAccountId ?? null }])
+            .map((r) => [r.id, {
+              no: r.no,
+              voucherType: r.voucherType,
+              settlementAccountId: r.settlementAccountId ?? null,
+              narration: r.narration || "",
+            }])
         : [],
     );
+    const receiptLineRows = receiptIds.length
+      ? db
+          .select({
+            voucherId: receiptVoucherLines.voucherId,
+            accountId: receiptVoucherLines.accountId,
+            accountName: accounts.name,
+            narration: receiptVoucherLines.narration,
+            saleId: receiptVoucherLines.saleId,
+            purchaseId: receiptVoucherLines.purchaseId,
+          })
+          .from(receiptVoucherLines)
+          .leftJoin(accounts, eq(receiptVoucherLines.accountId, accounts.id))
+          .where(inArray(receiptVoucherLines.voucherId, receiptIds))
+          .all()
+      : [];
+    const receiptLinesByVoucherId = new Map<number, typeof receiptLineRows>();
+    for (const line of receiptLineRows) {
+      const list = receiptLinesByVoucherId.get(line.voucherId) || [];
+      list.push(line);
+      receiptLinesByVoucherId.set(line.voucherId, list);
+    }
+    const linkedSaleIds = uniqueIds(receiptLineRows.map((line) => line.saleId).filter((id): id is number => id !== null));
+    if (linkedSaleIds.length) {
+      for (const row of db
+        .select({ id: sales.id, no: sales.invoiceNumber })
+        .from(sales)
+        .where(inArray(sales.id, linkedSaleIds))
+        .all()) {
+        saleNoById.set(row.id, row.no);
+      }
+    }
+    const linkedPurchaseIds = uniqueIds(receiptLineRows.map((line) => line.purchaseId).filter((id): id is number => id !== null));
+    if (linkedPurchaseIds.length) {
+      for (const row of db
+        .select({ id: purchases.id, no: purchases.invoiceNumber })
+        .from(purchases)
+        .where(inArray(purchases.id, linkedPurchaseIds))
+        .all()) {
+        purchaseNoById.set(row.id, row.no);
+      }
+    }
     const journalNoById = new Map<number, string>(
       journalIds.length
         ? db
@@ -4293,6 +4750,31 @@ export class DatabaseStorage implements IStorage {
             .map((r) => [r.id, r.narration || ""])
         : [],
     );
+    const contraMetaById = new Map<number, { no: string; narration: string }>(
+      contraIds.length
+        ? db
+            .select({ id: contraVouchers.id, no: contraVouchers.voucherNo, narration: contraVouchers.narration })
+            .from(contraVouchers)
+            .where(inArray(contraVouchers.id, contraIds))
+            .all()
+            .map((row) => [row.id, { no: row.no, narration: row.narration || "" }])
+        : [],
+    );
+    const contraAccountNamesById = new Map<number, string[]>();
+    if (contraIds.length) {
+      const rows = db
+        .select({ contraId: contraVoucherLines.contraVoucherId, accountName: accounts.name })
+        .from(contraVoucherLines)
+        .leftJoin(accounts, eq(contraVoucherLines.accountId, accounts.id))
+        .where(inArray(contraVoucherLines.contraVoucherId, contraIds))
+        .all();
+      for (const row of rows) {
+        if (!row.accountName) continue;
+        const names = contraAccountNamesById.get(row.contraId) || [];
+        if (!names.includes(row.accountName)) names.push(row.accountName);
+        contraAccountNamesById.set(row.contraId, names);
+      }
+    }
     const expenseMetaById = new Map<number, { voucherNo?: string | null; description?: string | null; expenseAccountId?: number | null }>(
       expenseIds.length
         ? db
@@ -4336,37 +4818,24 @@ export class DatabaseStorage implements IStorage {
             .map((r) => [r.id, r.name])
         : [],
     );
-    const expenseAccountIds = Array.from(
-      new Set(
-        Array.from(expenseMetaById.values())
-          .map((m) => m.expenseAccountId)
-          .filter((id): id is number => Number.isFinite(id as number)),
-      ),
-    );
-    const expenseAccountNameById = new Map<number, string>(
-      expenseAccountIds.length
-        ? db
-            .select({ id: accounts.id, name: accounts.name })
-            .from(accounts)
-            .where(inArray(accounts.id, expenseAccountIds))
-            .all()
-            .map((r) => [r.id, r.name])
-        : [],
-    );
-
     const resolveVoucher = (refType?: string | null, refId?: number | null) => {
       if (!refType || !refId) return { vchType: "-", vchNo: "-" };
       if (refType === "purchase") return { vchType: "Purchase", vchNo: purchaseNoById.get(refId) || `PUR-${refId}` };
       if (refType === "sale") return { vchType: "Sale", vchNo: saleNoById.get(refId) || `SAL-${refId}` };
       if (refType === "journal_voucher") return { vchType: "JV", vchNo: journalNoById.get(refId) || `JV-${refId}` };
-      if (refType === "receipt" || refType === "payment") {
+      if (refType === "receipt_voucher") {
         const meta = receiptMetaById.get(refId);
         const settlementType = meta?.settlementAccountId ? settlementTypeById.get(meta.settlementAccountId) : undefined;
         const isBank = settlementType === "bank";
-        const vchType = refType === "receipt" ? (isBank ? "BRV" : "CRV") : (isBank ? "BPV" : "CPV");
+        const isReceipt = meta?.voucherType === "CR" || meta?.voucherType === "BR";
+        const vchType = isReceipt ? (isBank ? "BRV" : "CRV") : (isBank ? "BPV" : "CPV");
         return { vchType, vchNo: meta?.no || `${vchType}-${refId}` };
       }
       if (refType === "expense") return { vchType: "EXP", vchNo: `EXP-${refId}` };
+      if (refType === "contra_voucher") {
+        const meta = contraMetaById.get(refId);
+        return { vchType: "CV", vchNo: meta?.no || `CV-${refId}` };
+      }
       return { vchType: refType.toUpperCase(), vchNo: `${refType.toUpperCase()}-${refId}` };
     };
 
@@ -4420,15 +4889,20 @@ export class DatabaseStorage implements IStorage {
       const rawDescription = (entry.description || "").trim();
       const lowerDescription = rawDescription.toLowerCase();
       const meta = refId ? purchaseMetaById.get(refId) : undefined;
+      if (refId && meta && !cleanNarrationSegment(meta.notes)) return "-";
       const invoice = meta?.invoiceNumber || (refId ? purchaseNoById.get(refId) : "") || (refId ? `PUR-${refId}` : "");
-      const base = invoice ? `PURCHASE ${invoice}` : "PURCHASE";
+      const base = buildPurchaseNarrationText({
+        notes: meta?.notes,
+        supplierName: meta?.partyName,
+        invoiceNumber: invoice,
+      });
       const itemLabel = refId ? purchaseItemNameById.get(refId) : "";
       const itemTotals = refId ? purchaseItemTotals.get(refId) : undefined;
       const netKg = itemTotals?.netKg ?? parseAmount(meta?.totalNetWeightKg || "0");
       const moundQty = netKg > 0 ? netKg / 40 : (itemTotals?.moundQty ?? parseAmount(meta?.totalMoundQty || "0"));
       const subtotal = parseAmount(meta?.itemsSubtotal || meta?.subtotal || "0");
       const qtyParts = [];
-      const parts = [base];
+      const parts: unknown[] = [base];
       const amountLabel = parseAmount(entry.amount || "0");
       if (itemLabel) parts.push(itemLabel);
       if (netKg > 0) qtyParts.push(`${formatQty(netKg)}KG`);
@@ -4439,105 +4913,107 @@ export class DatabaseStorage implements IStorage {
       if (rateLabel) {
         parts.push(`RATE ${rateLabel} PER MUND`);
       }
-      const joinParts = () => parts.join(" / ");
       if (lowerDescription.includes("reversal")) {
         return rawDescription;
       }
       if (lowerDescription.includes("tax")) {
-        return amountLabel > 0 ? `TAX (${formatMoney(amountLabel)})` : "TAX";
-      }
-      if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
+        parts.push(amountLabel > 0 ? `Tax: ${formatMoney(amountLabel)}` : "Tax");
+      } else if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
         const label = normalizeChargeLabel(rawDescription);
-        return amountLabel > 0 ? `${label} (${formatMoney(amountLabel)})` : label;
+        parts.push(amountLabel > 0 ? `${label}: ${formatMoney(amountLabel)}` : label);
+      } else if (lowerDescription.includes("broker commission") || lowerDescription.includes("brokerage")) {
+        parts.push(amountLabel > 0 ? `Broker commission: ${formatMoney(amountLabel)}` : "Broker commission");
+      } else if (lowerDescription.includes("purchase")) {
+        parts.push(entry.accountId === meta?.supplierId ? "Supplier Payable" : "Inventory");
+      } else if (rawDescription) {
+        parts.push(rawDescription);
       }
-      if (lowerDescription.includes("broker commission") || lowerDescription.includes("brokerage")) {
-        return amountLabel > 0 ? `BROKER COMMISSION (${formatMoney(amountLabel)})` : "BROKER COMMISSION";
-      }
-      if (rawDescription && !lowerDescription.includes("purchase")) {
-        return rawDescription;
-      }
-      return joinParts();
+      return joinNarration(parts);
     };
 
     const buildSaleNarration = (entry: LedgerEntry, refId?: number | null) => {
       const rawDescription = (entry.description || "").trim();
       const lowerDescription = rawDescription.toLowerCase();
       const meta = refId ? saleMetaById.get(refId) : undefined;
+      if (refId && meta && !cleanNarrationSegment(meta.notes)) return "-";
       const invoice = meta?.invoiceNumber || (refId ? saleNoById.get(refId) : "") || (refId ? `SAL-${refId}` : "");
-      const base = invoice ? `SALE ${invoice}` : "SALE";
+      const base = buildSaleNarrationText({
+        notes: meta?.notes,
+        customerName: meta?.partyName,
+        invoiceNumber: invoice,
+      });
       const itemLabel = refId ? saleItemNameById.get(refId) : "";
       const qtyMeta = refId ? saleQtyById.get(refId) : undefined;
       const subtotal = parseAmount(meta?.subtotal || "0");
-      const parts = [base];
+      const parts: unknown[] = [base];
       const amountLabel = parseAmount(entry.amount || "0");
       if (itemLabel) parts.push(itemLabel);
-      const qtyParts = [];
       if (qtyMeta && qtyMeta.totalQty > 0) {
-        qtyParts.push(`${formatQty(qtyMeta.totalQty)} ${qtyMeta.unit || "units"}`.trim());
+        parts.push(`${formatQty(qtyMeta.totalQty)} ${qtyMeta.unit || "units"}`.trim());
         if (subtotal > 0) {
           const rateBase = subtotal / Math.max(qtyMeta.totalQty, 1);
           parts.push(`RATE ${formatRate(rateBase)}`);
         }
       }
-      if (qtyParts.length > 0) parts.push(...qtyParts);
-      const joinParts = () => parts.join(" / ");
       if (lowerDescription.includes("reversal")) {
         return rawDescription;
       }
       if (lowerDescription.includes("tax")) {
-        return amountLabel > 0 ? `TAX (${formatMoney(amountLabel)})` : "TAX";
-      }
-      if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
+        parts.push(amountLabel > 0 ? `Tax: ${formatMoney(amountLabel)}` : "Tax");
+      } else if (lowerDescription.includes("charge") || isKnownChargeLabel(rawDescription)) {
         const label = normalizeChargeLabel(rawDescription);
-        return amountLabel > 0 ? `${label} (${formatMoney(amountLabel)})` : label;
+        parts.push(amountLabel > 0 ? `${label}: ${formatMoney(amountLabel)}` : label);
+      } else if (lowerDescription.includes("cogs")) {
+        parts.push("COGS");
+      } else if (lowerDescription.includes("inventory")) {
+        parts.push("Inventory");
+      } else if (lowerDescription.includes("sale")) {
+        parts.push("Revenue");
+      } else if (rawDescription) {
+        parts.push(rawDescription);
       }
-      if (rawDescription && !lowerDescription.includes("sale")) {
-        return rawDescription;
-      }
-      return joinParts();
+      return joinNarration(parts);
     };
 
     const buildReceiptNarration = (refId?: number | null) => {
       if (!refId) return "RECEIPT";
       const meta = receiptMetaById.get(refId);
       const settlementId = meta?.settlementAccountId || undefined;
-      const settlementType = settlementId ? settlementTypeById.get(settlementId) : undefined;
-      const settlementName = settlementId ? settlementNameById.get(settlementId) : undefined;
-      const modeLabel = settlementType === "bank"
-        ? `Bank ${settlementName || "Bank"}`
-        : "Cash";
-      const vch = meta?.no || `CRV-${refId}`;
-      return `RECEIPT ${vch} | ${modeLabel}`;
+      const lines = (receiptLinesByVoucherId.get(refId) || []).filter((line) => line.accountId !== settlementId);
+      return firstMeaningfulNarration([meta?.narration, ...lines.map((line) => line.narration)]) || "-";
     };
 
     const buildPaymentNarration = (refId?: number | null) => {
       if (!refId) return "PAYMENT";
       const meta = receiptMetaById.get(refId);
       const settlementId = meta?.settlementAccountId || undefined;
-      const settlementType = settlementId ? settlementTypeById.get(settlementId) : undefined;
-      const settlementName = settlementId ? settlementNameById.get(settlementId) : undefined;
-      const modeLabel = settlementType === "bank"
-        ? `Bank ${settlementName || "Bank"}`
-        : "Cash";
-      const vch = meta?.no || `CPV-${refId}`;
-      const cleanVch = vch.replace(/\(\s*RS\s*\)/gi, "").replace(/\s{2,}/g, " ").trim();
-      return `PAYMENT ${cleanVch} | ${modeLabel}`;
+      const lines = (receiptLinesByVoucherId.get(refId) || []).filter((line) => line.accountId !== settlementId);
+      return firstMeaningfulNarration([meta?.narration, ...lines.map((line) => line.narration)]) || "-";
     };
 
     const buildJournalNarration = (refId?: number | null) => {
       if (!refId) return "JV";
-      const vch = journalNoById.get(refId) || `JV-${refId}`;
       const note = journalNarrationById.get(refId) || "";
-      return note ? `${vch} | ${note}` : vch;
+      return note || "-";
     };
 
     const buildExpenseNarration = (refId?: number | null) => {
       if (!refId) return "EXP";
       const meta = expenseMetaById.get(refId);
-      const vch = meta?.voucherNo || `EXP-${refId}`;
-      const accountName = meta?.expenseAccountId ? expenseAccountNameById.get(meta.expenseAccountId) : "";
-      const desc = meta?.description || "";
-      return [vch, accountName, desc].filter(Boolean).join(" | ");
+      return meta?.description || "-";
+    };
+
+    const buildContraNarration = (refId?: number | null) => {
+      if (!refId) return "CONTRA";
+      const meta = contraMetaById.get(refId);
+      const vch = meta?.no || `CV-${refId}`;
+      const accountNames = contraAccountNamesById.get(refId) || [];
+      const transfer = accountNames.length ? accountNames.join(" → ") : "";
+      return [
+        `Contra ${vch}`,
+        transfer ? `Transfer: ${transfer}` : "",
+        meta?.narration ? `Note: ${meta.narration}` : "",
+      ].filter(Boolean).join(" | ");
     };
 
     let running = openingBalance;
@@ -4550,20 +5026,24 @@ export class DatabaseStorage implements IStorage {
       const ref = getLedgerReference(entry as any);
       const voucher = resolveVoucher(ref.referenceType, ref.referenceId);
 
-      let narration = entry.description || "";
+      let narration = cleanNarrationSegment(entry.description) || "-";
       if (ref.referenceType === "purchase") {
         narration = buildPurchaseNarration(entry, ref.referenceId as any);
       } else if (ref.referenceType === "sale") {
         narration = buildSaleNarration(entry, ref.referenceId as any);
-      } else if (ref.referenceType === "receipt") {
-        narration = buildReceiptNarration(ref.referenceId as any);
-      } else if (ref.referenceType === "payment") {
-        narration = buildPaymentNarration(ref.referenceId as any);
+      } else if (ref.referenceType === "receipt_voucher") {
+        const voucherType = ref.referenceId ? receiptMetaById.get(ref.referenceId)?.voucherType : undefined;
+        narration = voucherType === "CR" || voucherType === "BR"
+          ? buildReceiptNarration(ref.referenceId as any)
+          : buildPaymentNarration(ref.referenceId as any);
       } else if (ref.referenceType === "journal_voucher") {
         narration = buildJournalNarration(ref.referenceId as any);
       } else if (ref.referenceType === "expense") {
         narration = buildExpenseNarration(ref.referenceId as any);
+      } else if (ref.referenceType === "contra_voucher") {
+        narration = buildContraNarration(ref.referenceId as any);
       }
+      narration = cleanNarrationSegment(narration) || "-";
 
       const matches = narrationTokens.length === 0
         || matchesNarration(narration || "")
@@ -4767,6 +5247,36 @@ export class DatabaseStorage implements IStorage {
     return { totalDebit, totalCredit };
   }
 
+  private resolveReceiptOrPaymentNarration(
+    client: DbClient,
+    voucherType: "CR" | "CP" | "BR" | "BP",
+    voucherNumber: string,
+    headerNarration: unknown,
+    lines: ReceiptLineInput[],
+  ): string {
+    const isReceipt = voucherType === "CR" || voucherType === "BR";
+    const linkedLine = lines.find((line) => isReceipt ? Boolean(line.saleId) : Boolean(line.purchaseId));
+    const primaryLine = linkedLine || lines[0];
+    const [party] = primaryLine
+      ? client.select({ name: accounts.name }).from(accounts).where(eq(accounts.id, primaryLine.accountId)).limit(1).all()
+      : [];
+    const invoiceNumber = isReceipt && linkedLine?.saleId
+      ? client.select({ invoiceNumber: sales.invoiceNumber }).from(sales).where(eq(sales.id, linkedLine.saleId)).limit(1).all()[0]?.invoiceNumber
+      : !isReceipt && linkedLine?.purchaseId
+        ? client.select({ invoiceNumber: purchases.invoiceNumber }).from(purchases).where(eq(purchases.id, linkedLine.purchaseId)).limit(1).all()[0]?.invoiceNumber
+        : undefined;
+    const common = {
+      headerNarration,
+      lineNarrations: lines.map((line) => line.narration),
+      partyName: party?.name,
+      invoiceNumber,
+      voucherNumber,
+    };
+    return isReceipt
+      ? buildReceiptVoucherNarrationText(common)
+      : buildPaymentVoucherNarrationText(common);
+  }
+
   async createReceiptVoucher(data: InsertReceiptVoucher, lines: ReceiptLineInput[]): Promise<ReceiptVoucher> {
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
@@ -4790,14 +5300,6 @@ export class DatabaseStorage implements IStorage {
         const total = cleanLines.reduce((sum, l) => sum + resolveReceiptLineAmount(l), 0);
         if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
-      // Append counter-entry for settlement account to enforce double-entry
-      const settlementLine: ReceiptLineInput = voucherType === "CR"
-        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: "Settlement (Cash/Bank)" }
-        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: "Settlement (Cash/Bank)" };
-
-      const normalizedLines = [...cleanLines, settlementLine];
-      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
-
       const year = new Date().getFullYear();
       const [last] = tx.select().from(receiptVouchers)
         .where(eq(receiptVouchers.voucherType, normalizeReceiptVoucherType(data.voucherType || "CR")))
@@ -4809,9 +5311,29 @@ export class DatabaseStorage implements IStorage {
       const voucherNumber = (data.voucherNumber && data.voucherNumber.trim() !== "")
         ? data.voucherNumber
         : generatedNumber;
+      const resolvedNarration = this.resolveReceiptOrPaymentNarration(
+        client,
+        voucherType,
+        voucherNumber,
+        data.narration,
+        cleanLines,
+      );
+      const narratedLines = cleanLines.map((line) => ({
+        ...line,
+        narration: preferManualNarration(line.narration, resolvedNarration),
+      }));
+
+      // Append counter-entry for the structurally identified settlement account.
+      const settlementLine: ReceiptLineInput = voucherType === "CR"
+        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: resolvedNarration }
+        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: resolvedNarration };
+
+      const normalizedLines = [...narratedLines, settlementLine];
+      const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
 
       const voucher = tx.insert(receiptVouchers).values({
         ...data,
+        narration: resolvedNarration,
         settlementAccountId: settlementAccount,
         voucherNumber,
         totalDebit: totalDebit.toString(),
@@ -4835,7 +5357,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "debit",
             amount: debit.toString(),
-            description: `Receipt ${voucher.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", voucher.id),
             entryDate: postingDate,
           });
@@ -4845,7 +5367,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "credit",
             amount: credit.toString(),
-            description: `Receipt ${voucher.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", voucher.id),
             entryDate: postingDate,
           });
@@ -4863,8 +5385,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.min(currentPaid + amount, totalAmount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.min(currentPaid + amount, totalAmount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(purchases).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -4899,8 +5421,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.min(currentPaid + amount, totalAmount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.min(currentPaid + amount, totalAmount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(sales).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -4932,8 +5454,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.max(0, currentPaid - amount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.max(0, currentPaid - amount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(purchases).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -4952,8 +5474,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.max(0, currentPaid - amount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.max(0, currentPaid - amount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(sales).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -4961,9 +5483,12 @@ export class DatabaseStorage implements IStorage {
         }
       }
 
-      // Reverse previous ledger impacts by recalculating balances from remaining entries (simpler approach: adjust via new postings only)
+      const priorLedgerEntries = tx.select().from(ledgerEntries)
+        .where(buildLedgerReferenceWhere("receipt_voucher", id) as any).all();
+      const priorAccountIds = [...new Set(priorLedgerEntries.map((entry) => entry.accountId))];
       tx.delete(receiptVoucherLines).where(eq(receiptVoucherLines.voucherId, id)).run();
       tx.delete(ledgerEntries).where(buildLedgerReferenceWhere("receipt_voucher", id) as any).run();
+      this.recomputeAccountBalances(client, priorAccountIds);
 
         const voucherType = normalizeReceiptVoucherType(data.voucherType || existing.voucherType || "CR");
         const settlementAccount =
@@ -4973,7 +5498,7 @@ export class DatabaseStorage implements IStorage {
 
         // Exclude settlement lines - they are auto-generated; including them would double the amount
         const paymentLinesOnly = (lines || []).filter(
-          (line) => !(line.narration || "").toLowerCase().includes("settlement")
+          (line) => line.accountId !== settlementAccount
         );
 
         const cleanLines = paymentLinesOnly.map((line) => {
@@ -4988,15 +5513,27 @@ export class DatabaseStorage implements IStorage {
         const total = cleanLines.reduce((sum, l) => sum + resolveReceiptLineAmount(l), 0);
         if (total <= 0) throw new Error("Voucher amount must be greater than 0");
 
+      const resolvedNarration = this.resolveReceiptOrPaymentNarration(
+        client,
+        voucherType,
+        existing.voucherNumber,
+        data.narration === undefined ? existing.narration : data.narration,
+        cleanLines,
+      );
+      const narratedLines = cleanLines.map((line) => ({
+        ...line,
+        narration: preferManualNarration(line.narration, resolvedNarration),
+      }));
       const settlementLine: ReceiptLineInput = voucherType === "CR"
-        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: "Settlement (Cash/Bank)" }
-        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: "Settlement (Cash/Bank)" };
+        ? { accountId: settlementAccount, debit: total.toString(), credit: "0", narration: resolvedNarration }
+        : { accountId: settlementAccount, debit: "0", credit: total.toString(), narration: resolvedNarration };
 
-      const normalizedLines = [...cleanLines, settlementLine];
+      const normalizedLines = [...narratedLines, settlementLine];
       const { totalDebit, totalCredit } = this.validateBalanced(normalizedLines);
 
       const updated = tx.update(receiptVouchers).set({
         ...data,
+        narration: resolvedNarration,
         settlementAccountId: settlementAccount,
         totalDebit: totalDebit.toString(),
         totalCredit: totalCredit.toString(),
@@ -5019,7 +5556,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "debit",
             amount: debit.toString(),
-            description: `Receipt ${updated.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", id),
             entryDate: postingDate,
           });
@@ -5029,7 +5566,7 @@ export class DatabaseStorage implements IStorage {
             accountId: line.accountId,
             transactionType: "credit",
             amount: credit.toString(),
-            description: `Receipt ${updated.voucherNumber}`,
+            description: resolvedNarration,
             ...getLedgerReferenceColumns("receipt_voucher", id),
             entryDate: postingDate,
           });
@@ -5047,8 +5584,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.min(currentPaid + amount, totalAmount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.min(currentPaid + amount, totalAmount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(purchases).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -5067,8 +5604,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.min(currentPaid + amount, totalAmount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.min(currentPaid + amount, totalAmount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(sales).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -5097,8 +5634,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.max(0, currentPaid - amount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.max(0, currentPaid - amount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(purchases).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -5116,8 +5653,8 @@ export class DatabaseStorage implements IStorage {
           if (!row) continue;
           const totalAmount = parseAmount(row.totalAmount || "0");
           const currentPaid = parseAmount(row.paidAmount || "0");
-          const newPaid = Math.max(0, currentPaid - amount);
-          const balanceDue = Math.max(totalAmount - newPaid, 0);
+          const newPaid = roundMoney(Math.max(0, currentPaid - amount));
+          const balanceDue = roundMoney(Math.max(totalAmount - newPaid, 0));
           tx.update(sales).set({
             paidAmount: newPaid.toString(),
             balanceDue: balanceDue.toString(),
@@ -5214,7 +5751,7 @@ export class DatabaseStorage implements IStorage {
         accountId: entry.accountId,
         transactionType: entry.entryType === "DEBIT" ? "debit" : "credit",
         amount,
-        description: `Journal Voucher ${voucher.voucherNo}`,
+        description: voucher.narration || `Journal Voucher #${voucher.voucherNo}`,
         ...getLedgerReferenceColumns("journal_voucher", voucher.id),
         entryDate: voucher.voucherDate ? new Date(voucher.voucherDate as any) : new Date(),
       });
@@ -5236,10 +5773,26 @@ export class DatabaseStorage implements IStorage {
       const generatedNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
       const voucherNo = (data as any).voucherNo && (data as any).voucherNo !== "" ? (data as any).voucherNo : generatedNo;
 
+      const debitLine = normalized.find((entry) => entry.entryType === "DEBIT");
+      const creditLine = normalized.find((entry) => entry.entryType === "CREDIT");
+      const accountRows = client
+        .select({ id: accounts.id, name: accounts.name })
+        .from(accounts)
+        .where(inArray(accounts.id, [debitLine!.accountId, creditLine!.accountId]))
+        .all();
+      const accountNameById = new Map(accountRows.map((account) => [account.id, account.name]));
+      const resolvedNarration = buildJournalVoucherNarrationText({
+        narration: data.narration,
+        voucherNumber: voucherNo,
+        debitAccount: accountNameById.get(debitLine!.accountId),
+        creditAccount: accountNameById.get(creditLine!.accountId),
+      });
+
       const status = (data.status || "draft") as "draft" | "approved";
 
       const voucher = tx.insert(journalVouchers).values({
         ...data,
+        narration: resolvedNarration,
         voucherNo,
         voucherDate: postingDate,
         totalAmount: total.toString(),
@@ -5374,6 +5927,28 @@ export class DatabaseStorage implements IStorage {
 
       return updated;
     });
+  }
+
+  private calculateTaxAmount(
+    client: DbClient,
+    taxTypeId: number | null | undefined,
+    taxableBase: number,
+    postingDate: Date,
+    direction: "sales" | "purchases",
+  ): number {
+    if (!taxTypeId) return 0;
+    const [taxType] = client.select().from(taxTypes).where(eq(taxTypes.id, taxTypeId)).all();
+    if (!taxType || (taxType.direction !== "both" && taxType.direction !== direction)) {
+      throw new Error(`Invalid tax type for ${direction}`);
+    }
+    const [rate] = client.select().from(taxRates).where(and(
+      eq(taxRates.taxTypeId, taxTypeId),
+      eq(taxRates.isActive, true as any),
+      lte(taxRates.effectiveFrom, postingDate),
+      or(isNull(taxRates.effectiveTo), gte(taxRates.effectiveTo, postingDate)),
+    )).orderBy(desc(taxRates.effectiveFrom)).limit(1).all();
+    if (!rate) throw new Error(`No effective tax rate configured for ${direction}`);
+    return Math.round(Math.max(taxableBase, 0) * parseAmount(rate.ratePercent)) / 100;
   }
 
   private async filterExistingSourceLedgerEntries(rows: LedgerEntry[]): Promise<LedgerEntry[]> {
@@ -5662,7 +6237,7 @@ export class DatabaseStorage implements IStorage {
       ? db
           .select({
             productId: saleItems.productId,
-            qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL)), 0)`,
+            qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantityKg} AS REAL)), 0)`,
           })
           .from(saleItems)
           .leftJoin(sales, eq(saleItems.saleId, sales.id))
@@ -5673,7 +6248,7 @@ export class DatabaseStorage implements IStorage {
     const salesIn = db
       .select({
         productId: saleItems.productId,
-        qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantity} AS REAL)), 0)`,
+        qty: sql<string>`COALESCE(SUM(CAST(${saleItems.quantityKg} AS REAL)), 0)`,
       })
       .from(saleItems)
       .leftJoin(sales, eq(saleItems.saleId, sales.id))
@@ -5761,20 +6336,37 @@ export class DatabaseStorage implements IStorage {
     const procInQty = toQtyMap(processingIn as any);
 
     const rows = productRows.map((p) => {
-      const avgCost = parseAmount(p.avgPurchasePrice || "0");
-      const openingInQty = (purchaseBeforeQty.get(p.id) || 0) + (procInBeforeQty.get(p.id) || 0);
+      const productAvgCost = parseAmount(p.avgPurchasePrice || "0");
+
+      // Opening is valued at the average purchase cost *up to* the period start,
+      // not at the product's live average, so the roll-forward stays internally
+      // consistent when cost moves during the period.
+      const beforePurchaseQty = purchaseBeforeQty.get(p.id) || 0;
+      const beforePurchaseValue = purchaseBeforeValue.get(p.id) || 0;
+      const priorAvgCost = beforePurchaseQty > 0 ? beforePurchaseValue / beforePurchaseQty : productAvgCost;
+
+      const openingInQty = beforePurchaseQty + (procInBeforeQty.get(p.id) || 0);
       const openingOutQty = (salesBeforeQty.get(p.id) || 0) + (procOutBeforeQty.get(p.id) || 0);
       const openingQty = openingInQty - openingOutQty;
-      const openingValue =
-        (purchaseBeforeValue.get(p.id) || 0) +
-        (procInBeforeQty.get(p.id) || 0) * avgCost -
-        ((salesBeforeQty.get(p.id) || 0) + (procOutBeforeQty.get(p.id) || 0)) * avgCost;
+      const openingValue = openingQty * priorAvgCost;
 
-      const inQty = (purchaseInQty.get(p.id) || 0) + (procInQty.get(p.id) || 0);
-      const inValue =
-        (purchaseInValue.get(p.id) || 0) + (procInQty.get(p.id) || 0) * avgCost;
+      const periodPurchaseQty = purchaseInQty.get(p.id) || 0;
+      const periodPurchaseValue = purchaseInValue.get(p.id) || 0;
+      const periodPurchaseAvg = periodPurchaseQty > 0 ? periodPurchaseValue / periodPurchaseQty : priorAvgCost;
+
+      const inQty = periodPurchaseQty + (procInQty.get(p.id) || 0);
+      const inValue = periodPurchaseValue + (procInQty.get(p.id) || 0) * periodPurchaseAvg;
       const outQty = (salesInQty.get(p.id) || 0) + (procOutInQty.get(p.id) || 0);
-      const outValue = outQty * avgCost;
+      // Outflows must use the period weighted average, not the live product average.
+      const outValue =
+        outQty *
+        computeWeightedAverageCost({
+          openingQty,
+          openingValue,
+          inQty,
+          inValue,
+          fallbackCost: productAvgCost,
+        });
 
       const roll = computeInventoryRollForward({
         openingQty,
@@ -5818,6 +6410,25 @@ export class DatabaseStorage implements IStorage {
 
     const rollForwardDifference = totals.openingQty + totals.inQty - totals.outQty - totals.closingQty;
 
+    // closingQty is derived from opening + in - out, so rollForwardDifference can
+    // never be non-zero — it only guards against arithmetic drift. The check that
+    // can actually fail is closing vs. the live product stock, and it is only
+    // meaningful when the window covers every movement up to now.
+    const coversAllHistory = !from && (!to || to.getTime() >= Date.now());
+    const stockDifference = coversAllHistory
+      ? rows.reduce((sum, r) => sum + (parseAmount(r.closingQty) - parseAmount(r.currentStock || "0")), 0)
+      : null;
+    const mismatchedProducts = coversAllHistory
+      ? rows
+          .filter((r) => Math.abs(parseAmount(r.closingQty) - parseAmount(r.currentStock || "0")) >= 0.0001)
+          .map((r) => ({
+            productId: r.productId,
+            itemName: r.itemName,
+            closingQty: r.closingQty,
+            currentStock: r.currentStock || "0",
+          }))
+      : [];
+
     return {
       rows,
       totals: {
@@ -5830,6 +6441,9 @@ export class DatabaseStorage implements IStorage {
       validation: {
         rollForwardOk: Math.abs(rollForwardDifference) < 0.0001,
         rollForwardDifference: rollForwardDifference.toString(),
+        stockMatchesLedger: stockDifference === null ? null : Math.abs(stockDifference) < 0.0001,
+        stockDifference: stockDifference === null ? null : stockDifference.toString(),
+        mismatchedProducts,
       },
     };
   }
@@ -5968,7 +6582,9 @@ export class DatabaseStorage implements IStorage {
       .from(purchases)
       .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
       .where(and(...conditions))
-      .orderBy(desc(purchases.purchaseDate))
+      // Tie-break on id so same-day rows keep a stable order between the screen,
+      // the print mapper and repeated calls.
+      .orderBy(desc(purchases.purchaseDate), desc(purchases.id))
       .all()
       .map((r) => {
         const total = parseAmount(r.total || "0");
@@ -5987,16 +6603,10 @@ export class DatabaseStorage implements IStorage {
           total: total.toString(),
           paid: paid.toString(),
           balance: balance.toString(),
+          status: resolvePaymentStatus(total, paid),
         };
       })
-      .filter((r) => {
-        if (!filters?.paymentStatus) return true;
-        const total = parseAmount(r.total);
-        const paid = parseAmount(r.paid);
-        if (filters.paymentStatus === "paid") return paid >= total && total > 0;
-        if (filters.paymentStatus === "unpaid") return paid <= 0 && total > 0;
-        return paid > 0 && paid < total;
-      });
+      .filter((r) => !filters?.paymentStatus || r.status === filters.paymentStatus);
 
     const totals = rows.reduce(
       (acc, r) => {
@@ -6079,7 +6689,9 @@ export class DatabaseStorage implements IStorage {
       .from(sales)
       .leftJoin(accounts, eq(sales.customerId, accounts.id))
       .where(and(...conditions))
-      .orderBy(desc(sales.saleDate))
+      // Tie-break on id so same-day rows keep a stable order between the screen,
+      // the print mapper and repeated calls.
+      .orderBy(desc(sales.saleDate), desc(sales.id))
       .all()
       .map((r) => {
         const total = parseAmount(r.total || "0");
@@ -6099,16 +6711,13 @@ export class DatabaseStorage implements IStorage {
           total: total.toString(),
           received: received.toString(),
           balance: balance.toString(),
+          // Same single definition the badge and the printed column read, so a
+          // row can never display one status and be excluded by the filter for
+          // another.
+          status: resolvePaymentStatus(total, received),
         };
       })
-      .filter((r) => {
-        if (!filters?.paymentStatus) return true;
-        const total = parseAmount(r.total);
-        const received = parseAmount(r.received);
-        if (filters.paymentStatus === "paid") return received >= total && total > 0;
-        if (filters.paymentStatus === "unpaid") return received <= 0 && total > 0;
-        return received > 0 && received < total;
-      });
+      .filter((r) => !filters?.paymentStatus || r.status === filters.paymentStatus);
 
     const totals = rows.reduce(
       (acc, r) => {
@@ -6138,7 +6747,7 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number, groupBy: "day" | "week" | "month" = "month") {
+  async getPeriodPurchases(startDate: Date, endDate: Date, supplierId?: number, groupBy: "day" | "week" | "month" | "year" = "month") {
     const from = startDate;
     const to = endOfDay(endDate);
     const conditions = [gte(purchases.purchaseDate, from), lte(purchases.purchaseDate, to), isNull(purchases.deletedAt)];
@@ -6164,16 +6773,16 @@ export class DatabaseStorage implements IStorage {
           ? new Date(dt.getFullYear(), dt.getMonth(), dt.getDate())
           : groupBy === "week"
             ? startOfWeek(dt)
-            : startOfMonth(dt);
+            : groupBy === "year" ? new Date(dt.getFullYear(), 0, 1) : startOfMonth(dt);
       const periodEnd =
-        groupBy === "day" ? endOfDay(periodStart) : groupBy === "week" ? endOfWeek(dt) : endOfMonth(dt);
+        groupBy === "day" ? endOfDay(periodStart) : groupBy === "week" ? endOfWeek(dt) : groupBy === "year" ? new Date(dt.getFullYear(), 11, 31, 23, 59, 59, 999) : endOfMonth(dt);
 
       const key =
         groupBy === "day"
-          ? periodStart.toISOString().slice(0, 10)
+          ? localDateKey(periodStart)
           : groupBy === "week"
             ? `${periodStart.getFullYear()}-W${String(weekNumber(periodStart)).padStart(2, "0")}`
-            : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, "0")}`;
+            : groupBy === "year" ? String(periodStart.getFullYear()) : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, "0")}`;
 
       const totalAmount = parseAmount(row.totalAmount || "0");
       const paidAmount = parseAmount(row.paidAmount || "0");
@@ -6228,7 +6837,7 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getPeriodSales(startDate: Date, endDate: Date, customerId?: number, groupBy: "day" | "week" | "month" = "month") {
+  async getPeriodSales(startDate: Date, endDate: Date, customerId?: number, groupBy: "day" | "week" | "month" | "year" = "month") {
     const from = startDate;
     const to = endOfDay(endDate);
     const conditions = [gte(sales.saleDate, from), lte(sales.saleDate, to)];
@@ -6254,16 +6863,16 @@ export class DatabaseStorage implements IStorage {
           ? new Date(dt.getFullYear(), dt.getMonth(), dt.getDate())
           : groupBy === "week"
             ? startOfWeek(dt)
-            : startOfMonth(dt);
+            : groupBy === "year" ? new Date(dt.getFullYear(), 0, 1) : startOfMonth(dt);
       const periodEnd =
-        groupBy === "day" ? endOfDay(periodStart) : groupBy === "week" ? endOfWeek(dt) : endOfMonth(dt);
+        groupBy === "day" ? endOfDay(periodStart) : groupBy === "week" ? endOfWeek(dt) : groupBy === "year" ? new Date(dt.getFullYear(), 11, 31, 23, 59, 59, 999) : endOfMonth(dt);
 
       const key =
         groupBy === "day"
-          ? periodStart.toISOString().slice(0, 10)
+          ? localDateKey(periodStart)
           : groupBy === "week"
             ? `${periodStart.getFullYear()}-W${String(weekNumber(periodStart)).padStart(2, "0")}`
-            : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, "0")}`;
+            : groupBy === "year" ? String(periodStart.getFullYear()) : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, "0")}`;
 
       const totalAmount = parseAmount(row.totalAmount || "0");
       const receivedAmount = parseAmount(row.paidAmount || "0");
@@ -6393,8 +7002,15 @@ export class DatabaseStorage implements IStorage {
       };
     });
 
-    const netSales = rows.reduce((sum, r) => sum + parseAmount(r.netSales), 0) || parseAmount(revenueRow?.total || "0");
-    const costOfGoodsSold = rows.reduce((sum, r) => sum + parseAmount(r.costOfGoodsSold), 0) || parseAmount(cogsRow?.total || "0");
+    // Fall back to the ledger totals only when there is genuinely nothing to sum
+    // per row. `|| fallback` also fired on a legitimate zero — a period whose
+    // sales netted to 0 silently reported the ledger's income balance instead.
+    const netSales = rows.length
+      ? rows.reduce((sum, r) => sum + parseAmount(r.netSales), 0)
+      : parseAmount(revenueRow?.total || "0");
+    const costOfGoodsSold = cogsBySale.size
+      ? rows.reduce((sum, r) => sum + parseAmount(r.costOfGoodsSold), 0)
+      : parseAmount(cogsRow?.total || "0");
     const grossProfit = netSales - costOfGoodsSold;
     const margin = netSales !== 0 ? (grossProfit / netSales) * 100 : 0;
 
@@ -6422,15 +7038,7 @@ export class DatabaseStorage implements IStorage {
       .from(accounts)
       .all();
 
-    const isCashBankAccount = (account: { name?: string | null; type?: string | null; isSystemAccount?: boolean | null }) => {
-      const name = (account.name || "").toLowerCase();
-      const isCash = name.includes("cash");
-      const isBank = name.includes("bank") || account.type === "bank";
-      const isSystemCash = account.isSystemAccount && account.type === "asset";
-      return isCash || isBank || isSystemCash;
-    };
-
-    const cashBankIds = accountRows.filter(isCashBankAccount).map((a) => a.id);
+    const cashBankIds = cashOrBankAccountIds(accountRows);
     const cashBankIdSet = new Set(cashBankIds);
 
     const [openingRow] = cashBankIds.length
@@ -6561,12 +7169,16 @@ export class DatabaseStorage implements IStorage {
     }
 
     for (const row of receiptVoucherRows) {
-      const refType = row.voucherType === "CR" ? "receipt" : "payment";
+      // The reference *type* must match what `getLedgerReferenceFromValues`
+      // derives from the ledger row ("receipt_voucher"), otherwise the group
+      // lookup below misses and the voucher is dropped from the day book.
+      // Receipt vs payment is a display distinction only — it belongs in
+      // `typeCode`, not in the key.
       addMeta({
-        referenceType: refType,
+        referenceType: "receipt_voucher",
         referenceId: row.id,
         voucherNo: row.voucherNo,
-        typeCode: refType === "receipt" ? "RV" : "PV",
+        typeCode: row.voucherType === "CR" ? "RV" : "PV",
         date: new Date(row.voucherDate as any),
         partyName: "",
         narration: row.narration || "",
@@ -6599,7 +7211,7 @@ export class DatabaseStorage implements IStorage {
 
     for (const row of contraRows) {
       addMeta({
-        referenceType: "contra",
+        referenceType: "contra_voucher",
         referenceId: row.id,
         voucherNo: row.voucherNo,
         typeCode: "CV",
@@ -6680,9 +7292,8 @@ export class DatabaseStorage implements IStorage {
     };
 
     const resolveMode = (group: Group) => {
-      const cashEntry = group.entries.find((e) => cashBankIdSet.has(e.accountId));
-      const raw = group.meta.narration || cashEntry?.accountName || group.entries[0]?.description || "";
-      return raw ? raw.toUpperCase() : "";
+      const raw = cleanNarrationSegment(group.meta.narration);
+      return raw ? raw.toUpperCase() : "-";
     };
 
     groups.forEach((group, index) => {
@@ -6730,6 +7341,7 @@ export class DatabaseStorage implements IStorage {
         saleId: sales.id,
         invoiceNumber: sales.invoiceNumber,
         saleDate: sales.saleDate,
+        dueDate: sales.dueDate,
         customerId: sales.customerId,
         customerName: accounts.name,
         invoiceAmount: sales.totalAmount,
@@ -6788,7 +7400,7 @@ export class DatabaseStorage implements IStorage {
         remainingCredits -= applied;
         const outstanding = Math.max(invoice - applied, 0);
         const saleDate = new Date(sale.saleDate as any);
-        const dueDate = saleDate;
+        const dueDate = sale.dueDate ? new Date(sale.dueDate as any) : saleDate;
         const daysOutstanding = Math.max(
           Math.floor((to.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)),
           0,

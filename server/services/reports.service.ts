@@ -85,14 +85,14 @@ export async function getReportDetail(type: string, id: number) {
     const cashReceiptId = (detail.sale as { cashReceiptId?: number }).cashReceiptId;
     if (cashReceiptId) {
       (detail.sale as { cashReceiptVoucherNo?: string }).cashReceiptVoucherNo =
-        await cashService.getCashReceiptVoucherNo(cashReceiptId);
+        (await cashService.getCashReceiptVoucherNo(cashReceiptId)) ?? undefined;
     }
   }
   if (type.toLowerCase() === "purchase" && detail?.purchase) {
     const cashPaymentId = (detail.purchase as { cashPaymentId?: number }).cashPaymentId;
     if (cashPaymentId) {
       (detail.purchase as { cashPaymentVoucherNo?: string }).cashPaymentVoucherNo =
-        await cashService.getCashPaymentVoucherNo(cashPaymentId);
+        (await cashService.getCashPaymentVoucherNo(cashPaymentId)) ?? undefined;
     }
   }
   return detail;

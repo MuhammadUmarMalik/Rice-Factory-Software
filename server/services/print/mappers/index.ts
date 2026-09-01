@@ -1,7 +1,9 @@
 import { format } from "date-fns";
 import { storage } from "../../../models/storage";
 import * as daybooksService from "../../daybooks.service";
+import * as cashInHandService from "../../cash-in-hand.service";
 import type { PrintableDocumentPayload, PrintableSection, PrintableTableColumn } from "../../../types/print";
+import { displayNarration } from "../../../utils/narration";
 
 type PrintContext = {
   company: PrintableDocumentPayload["company"];
@@ -30,6 +32,11 @@ function num(value?: string | number | null) {
   return n.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function statusLabel(status?: string | null) {
+  if (!status) return "-";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 function baseMeta(ctx: PrintContext, meta?: PrintableDocumentPayload["meta"]) {
   return {
     createdBy: ctx.createdBy,
@@ -46,12 +53,63 @@ function buildColumns(list: Array<{ key: string; label: string; align?: "left" |
   return list.map((c) => ({ key: c.key, label: c.label, align: c.align, width: c.width }));
 }
 
+/*
+ * Report filter chips are built straight from query params. The pages send "all"
+ * (or nothing) to mean "no filter", and bare numeric ids otherwise - printing
+ * either one verbatim is what produced chips like "Customer: all" and
+ * "Supplier: 42". Everything that renders a filter chip goes through these two
+ * helpers instead.
+ */
+function isAllSentinel(value: unknown) {
+  if (value === undefined || value === null) return true;
+  const text = String(value).trim().toLowerCase();
+  return text === "" || text === "all" || text === "undefined" || text === "null";
+}
+
+/** Falls back to `#id` only when the entity lookup came back empty. */
+function filterLabel(value: unknown, resolvedName?: string | null) {
+  if (isAllSentinel(value)) return "All";
+  return resolvedName || `#${String(value).trim()}`;
+}
+
+/** Title-cases a free-text filter such as a status or voucher type. */
+function filterTextLabel(value: unknown) {
+  if (isAllSentinel(value)) return "All";
+  const text = String(value).trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+async function lookupAccountName(id: unknown) {
+  if (isAllSentinel(id)) return null;
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) return null;
+  try {
+    const account = await storage.getAccount(numericId);
+    return account?.name || null;
+  } catch {
+    return null;
+  }
+}
+
+async function lookupProductName(id: unknown) {
+  if (isAllSentinel(id)) return null;
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) return null;
+  try {
+    const product = await storage.getProduct(numericId);
+    return product?.name || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const saleId = Number(params.saleId);
   const sale = await storage.getSale(saleId);
   if (!sale) throw new Error("Sale not found");
   const items = await storage.getSaleItems(saleId);
   const customer = await storage.getAccount(sale.customerId);
+  const narration = displayNarration(sale.notes);
   const products = await storage.getProducts();
   const productMap = new Map(products.map((p) => [p.id, p]));
 
@@ -185,7 +243,9 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
         amount: money(sale.totalAmount),
       },
     },
-    notes: sale.notes ? `Notes: ${sale.notes}` : "",
+    // The template already renders the "Notes:" label - prefixing here produced
+    // "Notes: Notes: pending".
+    notes: narration || "-",
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },
@@ -200,6 +260,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
   const purchase = await storage.getPurchaseWithDetails(purchaseId);
   if (!purchase) throw new Error("Purchase not found");
   const supplier = await storage.getAccount(purchase.supplierId);
+  const narration = displayNarration(purchase.notes);
   const products = await storage.getProducts();
   const productMap = new Map(products.map((p) => [p.id, p]));
 
@@ -347,7 +408,9 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
         return `${chargeLabel(c.type)}${c.mode === "less" ? " (Less / Watta Kaat (Moisture + Quality))" : ""}: ${money(signed)}`;
       }),
       (purchase as { amountInWords?: string }).amountInWords ? `In words: ${(purchase as { amountInWords?: string }).amountInWords}` : "",
-      purchase.notes ? `Notes: ${purchase.notes}` : "",
+      // "Remarks", not "Notes" - the template already prefixes the whole block
+      // with "Notes:", so a second "Notes:" here read as "Notes: Notes: ...".
+      narration,
     ]
       .filter(Boolean)
       .join(" | "),
@@ -365,7 +428,7 @@ export async function mapCashVoucher(params: Record<string, any>, ctx: PrintCont
   if (!voucher) throw new Error("Voucher not found");
   const accounts = await storage.getAccounts();
   const accountMap = new Map(accounts.map((a) => [a.id, a.name]));
-  const isReceipt = voucher.voucherType === "CR";
+  const isReceipt = voucher.voucherType === "CR" || voucher.voucherType === "BR";
   const title = isReceipt ? "Cash Receipt Voucher" : "Cash Payment Voucher";
 
   const tableColumns = buildColumns([
@@ -379,7 +442,7 @@ export async function mapCashVoucher(params: Record<string, any>, ctx: PrintCont
   const tableRows = (voucher.lines || []).map((line, index) => ({
     sr: String(index + 1),
     account: accountMap.get(line.accountId) || `#${line.accountId}`,
-    narration: line.narration || "",
+    narration: displayNarration(line.narration),
     debit: money(line.debit),
     credit: money(line.credit),
   }));
@@ -404,7 +467,7 @@ export async function mapCashVoucher(params: Record<string, any>, ctx: PrintCont
       columns: tableColumns,
       rows: tableRows,
     },
-    notes: voucher.narration || "",
+    notes: displayNarration(voucher.narration),
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },
@@ -454,7 +517,184 @@ export async function mapJournalVoucher(params: Record<string, any>, ctx: PrintC
       columns: tableColumns,
       rows: tableRows,
     },
-    notes: voucher.narration || "",
+    notes: displayNarration(voucher.narration),
+    signatures: [
+      { label: "Prepared By" },
+      { label: "Approved By" },
+      { label: "Received By" },
+    ],
+    settings: { currency: "PKR" },
+  };
+}
+
+export async function mapCashModuleReceipt(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const receiptId = Number(params.receiptId);
+  const receipt = await cashInHandService.getReceiptById(receiptId);
+  if (!receipt) throw new Error("Cash receipt not found");
+  return {
+    docType: "VOUCHER",
+    docKey: "voucher.cashModuleReceipt",
+    title: "Cash Receipt",
+    docNo: receipt.voucherNo,
+    company: ctx.company,
+    meta: baseMeta(ctx, { filters: { Date: fmtDate(receipt.receiptDate), Party: receipt.receivedFrom } }),
+    sections: [summaryCard("Amount Received", money(receipt.amount), true)],
+    table: {
+      columns: buildColumns([
+        { key: "party", label: "Received From" },
+        { key: "narration", label: "Narration" },
+        { key: "amount", label: "Amount", align: "right" },
+      ]),
+      rows: [{
+        party: receipt.receivedFrom || "-",
+        narration: displayNarration(receipt.description),
+        amount: money(receipt.amount),
+      }],
+    },
+    notes: displayNarration(receipt.description),
+    signatures: [{ label: "Prepared By" }, { label: "Received By" }],
+    settings: { currency: "PKR" },
+  };
+}
+
+export async function mapCashModulePayment(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const paymentId = Number(params.paymentId);
+  const payment = await cashInHandService.getPaymentById(paymentId);
+  if (!payment) throw new Error("Cash payment not found");
+  return {
+    docType: "VOUCHER",
+    docKey: "voucher.cashModulePayment",
+    title: "Cash Payment",
+    docNo: payment.voucherNo,
+    company: ctx.company,
+    meta: baseMeta(ctx, { filters: { Date: fmtDate(payment.paymentDate), Party: payment.paidTo } }),
+    sections: [summaryCard("Amount Paid", money(payment.amount), true)],
+    table: {
+      columns: buildColumns([
+        { key: "party", label: "Paid To" },
+        { key: "narration", label: "Narration" },
+        { key: "amount", label: "Amount", align: "right" },
+      ]),
+      rows: [{
+        party: payment.paidTo || "-",
+        narration: displayNarration(payment.description),
+        amount: money(payment.amount),
+      }],
+    },
+    notes: displayNarration(payment.description),
+    signatures: [{ label: "Prepared By" }, { label: "Approved By" }],
+    settings: { currency: "PKR" },
+  };
+}
+
+export async function mapExpenseVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const expenseId = Number(params.expenseId);
+  const expense = await storage.getExpense(expenseId);
+  if (!expense) throw new Error("Expense not found");
+  const accounts = await storage.getAccounts();
+  const accountMap = new Map(accounts.map((account) => [account.id, account.name]));
+  return {
+    docType: "VOUCHER",
+    docKey: "voucher.expense",
+    title: "Expense Voucher",
+    docNo: expense.voucherNo,
+    company: ctx.company,
+    meta: baseMeta(ctx, { filters: { Date: fmtDate(expense.expenseDate) } }),
+    sections: [summaryCard("Amount", money(expense.amount), true)],
+    table: {
+      columns: buildColumns([
+        { key: "expenseAccount", label: "Expense Account" },
+        { key: "paidFrom", label: "Paid From" },
+        { key: "narration", label: "Narration" },
+        { key: "amount", label: "Amount", align: "right" },
+      ]),
+      rows: [{
+        expenseAccount: accountMap.get(expense.expenseAccountId) || "-",
+        paidFrom: accountMap.get(expense.payFromAccountId) || "-",
+        narration: displayNarration(expense.description),
+        amount: money(expense.amount),
+      }],
+    },
+    notes: displayNarration(expense.description),
+    signatures: [{ label: "Prepared By" }, { label: "Approved By" }],
+    settings: { currency: "PKR" },
+  };
+}
+
+export async function mapProcessingVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const processingId = Number(params.processingId);
+  const batch = await storage.getProcessingBatch(processingId);
+  if (!batch) throw new Error("Processing batch not found");
+  const products = await storage.getProducts();
+  const productMap = new Map(products.map((product) => [product.id, product.name]));
+  return {
+    docType: "VOUCHER",
+    docKey: "voucher.processing",
+    title: "Stock Processing",
+    docNo: batch.batchNumber,
+    company: ctx.company,
+    meta: baseMeta(ctx, { filters: { Date: fmtDate(batch.startDate), Status: statusLabel(batch.status) } }),
+    sections: [
+      summaryCard("Input Qty", num(batch.sourceQuantity), true),
+      summaryCard("Output Qty", num(batch.outputQuantity || 0), true),
+      summaryCard("Wastage", num(batch.wastageQuantity || 0)),
+    ],
+    table: {
+      columns: buildColumns([
+        { key: "input", label: "Input Product" },
+        { key: "inputQty", label: "Input Qty", align: "right" },
+        { key: "output", label: "Output Product" },
+        { key: "outputQty", label: "Output Qty", align: "right" },
+        { key: "narration", label: "Narration" },
+      ]),
+      rows: [{
+        input: productMap.get(batch.sourceProductId) || "-",
+        inputQty: num(batch.sourceQuantity),
+        output: batch.outputProductId ? productMap.get(batch.outputProductId) || "-" : batch.outputCategory || "-",
+        outputQty: num(batch.outputQuantity || 0),
+        narration: displayNarration(batch.notes),
+      }],
+    },
+    notes: displayNarration(batch.notes),
+    signatures: [{ label: "Processed By" }, { label: "Approved By" }],
+    settings: { currency: "PKR" },
+  };
+}
+
+export async function mapCashJournalVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const voucherId = Number(params.voucherId);
+  const result = await cashInHandService.getJournalVoucherById(voucherId);
+  if (!result) throw new Error("Cash journal voucher not found");
+  const { voucher, items } = result;
+
+  return {
+    docType: "VOUCHER",
+    docKey: "voucher.cashJournal",
+    title: "Cash Journal Voucher",
+    docNo: voucher.voucherNo,
+    company: ctx.company,
+    meta: baseMeta(ctx, { filters: { Date: fmtDate(voucher.voucherDate) } }),
+    sections: [
+      summaryCard("Total Debit", money(voucher.totalDebit), true),
+      summaryCard("Total Credit", money(voucher.totalCredit), true),
+    ],
+    table: {
+      columns: buildColumns([
+        { key: "sr", label: "Sr", width: "6%" },
+        { key: "account", label: "Account" },
+        { key: "narration", label: "Narration" },
+        { key: "debit", label: "Debit", align: "right" },
+        { key: "credit", label: "Credit", align: "right" },
+      ]),
+      rows: items.map((item, index) => ({
+        sr: String(index + 1),
+        account: item.accountHead || "-",
+        narration: displayNarration(item.narration),
+        debit: money(item.debitAmount),
+        credit: money(item.creditAmount),
+      })),
+    },
+    notes: displayNarration(voucher.narration),
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },
@@ -719,6 +959,7 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
     { key: "outQty", label: "Out Qty", align: "right", width: "6%" },
     { key: "outValue", label: "Out Value", align: "right", width: "9%" },
     { key: "closingQty", label: "Closing Qty", align: "right", width: "6%" },
+    { key: "avgCost", label: "Avg Cost", align: "right", width: "8%" },
     { key: "closingValue", label: "Closing Value", align: "right", width: "9%" },
   ]);
 
@@ -734,6 +975,7 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
     outQty: num(r.outQty),
     outValue: money(r.outValue),
     closingQty: num(r.closingQty),
+    avgCost: money(r.avgCost),
     closingValue: money(r.closingValue),
   }));
 
@@ -746,9 +988,9 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
       dateFrom: params.fromDate,
       dateTo: params.toDate,
       filters: {
-        Product: params.productId ? String(params.productId) : "All",
-        Category: params.category || "All",
-        Unit: params.unit || "All",
+        Product: filterLabel(params.productId, await lookupProductName(params.productId)),
+        Category: filterTextLabel(params.category),
+        Unit: filterTextLabel(params.unit),
       },
     }),
     sections: [
@@ -792,12 +1034,13 @@ export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintC
     { key: "date", label: "Date", width: "14%" },
     { key: "supplier", label: "Supplier" },
     { key: "subtotal", label: "Subtotal", align: "right" },
-    { key: "discount", label: "Discount", align: "right" },
+    { key: "discount", label: "Less Charges", align: "right" },
     { key: "tax", label: "Tax", align: "right" },
     { key: "other", label: "Other", align: "right" },
     { key: "total", label: "Total", align: "right" },
     { key: "paid", label: "Paid", align: "right" },
     { key: "balance", label: "Balance", align: "right" },
+    { key: "status", label: "Status", align: "center" },
   ]);
 
   const rows = report.rows.map((r) => ({
@@ -811,6 +1054,7 @@ export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintC
     total: money(r.total),
     paid: money(r.paid),
     balance: money(r.balance),
+    status: statusLabel(r.status),
   }));
 
   return {
@@ -822,9 +1066,9 @@ export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintC
       dateFrom: params.fromDate,
       dateTo: params.toDate,
       filters: {
-        Supplier: params.supplierId ? String(params.supplierId) : "All",
-        Product: params.productId ? String(params.productId) : "All",
-        Status: params.paymentStatus || "All",
+        Supplier: filterLabel(params.supplierId, await lookupAccountName(params.supplierId)),
+        Product: filterLabel(params.productId, await lookupProductName(params.productId)),
+        Status: filterTextLabel(params.paymentStatus),
       },
     }),
     sections: [
@@ -860,19 +1104,9 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     productId: params.productId ? Number(params.productId) : undefined,
     paymentStatus: params.paymentStatus,
   });
-  const totals = report.rows.reduce(
-    (acc, r) => {
-      acc.subtotal += parseFloat(String(r.subtotal || "0"));
-      acc.discount += parseFloat(String(r.discount || "0"));
-      acc.tax += parseFloat(String(r.tax || "0"));
-      acc.otherCharges += parseFloat(String(r.otherCharges || "0"));
-      acc.total += parseFloat(String(r.total || "0"));
-      acc.received += parseFloat(String(r.received || "0"));
-      acc.balance += parseFloat(String(r.balance || "0"));
-      return acc;
-    },
-    { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, received: 0, balance: 0 },
-  );
+  // Use the report's own totals rather than re-summing here — a second
+  // accumulator is a second source of truth that can drift from the screen.
+  const totals = report.totals;
 
   const columns = buildColumns([
     { key: "invoice", label: "Sales No" },
@@ -885,6 +1119,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     { key: "total", label: "Total", align: "right" },
     { key: "received", label: "Received", align: "right" },
     { key: "balance", label: "Balance", align: "right" },
+    { key: "status", label: "Status", align: "center" },
   ]);
 
   const rows = report.rows.map((r) => ({
@@ -898,6 +1133,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     total: money(r.total),
     received: money(r.received),
     balance: money(r.balance),
+    status: statusLabel(r.status),
   }));
 
   return {
@@ -909,9 +1145,9 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
       dateFrom: params.fromDate,
       dateTo: params.toDate,
       filters: {
-        Customer: params.customerId ? String(params.customerId) : "All",
-        Product: params.productId ? String(params.productId) : "All",
-        Status: params.paymentStatus || "All",
+        Customer: filterLabel(params.customerId, await lookupAccountName(params.customerId)),
+        Product: filterLabel(params.productId, await lookupProductName(params.productId)),
+        Status: filterTextLabel(params.paymentStatus),
       },
     }),
     sections: [
@@ -933,6 +1169,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
         total: money(totals.total),
         received: money(totals.received),
         balance: money(totals.balance),
+        status: "",
       },
     },
     settings: { currency: "PKR" },
@@ -962,7 +1199,7 @@ export async function mapBardanaReport(params: Record<string, any>, ctx: PrintCo
       summaryCard("Total Bardana / Kaat", `${num(report.totals.totalKg)} kg`, true),
       summaryCard("Total Bags", num(report.totals.totalBags)),
       summaryCard("Avg / Bag", `${num(report.totals.avgPerBag)} kg`),
-      summaryCard("Purchases", String(report.totals.purchaseCount)),
+      summaryCard("Purchases", report.totals.purchaseCount.toLocaleString("en-PK")),
     ],
     settings: { currency: "PKR" },
   };
@@ -991,7 +1228,7 @@ export async function mapLessReport(params: Record<string, any>, ctx: PrintConte
       summaryCard("Total Less / Watta Kaat (Moisture + Quality)", `${num(report.totals.totalKg)} kg`, true),
       summaryCard("Total Bags", num(report.totals.totalBags)),
       summaryCard("Avg / Bag", `${num(report.totals.avgPerBag)} kg`),
-      summaryCard("Purchases", String(report.totals.purchaseCount)),
+      summaryCard("Purchases", report.totals.purchaseCount.toLocaleString("en-PK")),
     ],
     settings: { currency: "PKR" },
   };
@@ -1029,8 +1266,8 @@ export async function mapPeriodPurchases(params: Record<string, any>, ctx: Print
       dateFrom: fmtDate(fromDate),
       dateTo: fmtDate(toDate),
       filters: {
-        GroupBy: groupBy,
-        Supplier: supplierId ? String(supplierId) : "All",
+        GroupBy: filterTextLabel(groupBy),
+        Supplier: filterLabel(supplierId, await lookupAccountName(supplierId)),
       },
     }),
     sections: [
@@ -1085,8 +1322,8 @@ export async function mapPeriodSales(params: Record<string, any>, ctx: PrintCont
       dateFrom: fmtDate(fromDate),
       dateTo: fmtDate(toDate),
       filters: {
-        GroupBy: groupBy,
-        Customer: customerId ? String(customerId) : "All",
+        GroupBy: filterTextLabel(groupBy),
+        Customer: filterLabel(customerId, await lookupAccountName(customerId)),
       },
     }),
     sections: [
@@ -1247,7 +1484,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       date: fmtDate(r.transaction_date),
       reference: r.invoice_number || "-",
       party: r.customer_name || "-",
-      details: r.description || "",
+      details: r.description || "-",
       amount: money(r.total_amount),
       status: r.status || "-",
     }));
@@ -1256,7 +1493,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       date: fmtDate(r.transaction_date),
       reference: r.invoice_number || "-",
       party: r.supplier_name || "-",
-      details: r.description || "",
+      details: r.description || "-",
       amount: money(r.total_amount),
       status: r.status || "-",
     }));
@@ -1265,7 +1502,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       date: fmtDate(r.transaction_date),
       reference: r.reference_number || "-",
       party: r.party_name || "-",
-      details: `${r.account_type || ""} ${r.transaction_type || ""}`.trim(),
+      details: r.description || r.notes || "-",
       amount: money(r.amount),
       status: r.transaction_type || "-",
     }));
@@ -1274,7 +1511,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       date: fmtDate(r.return_date),
       reference: r.credit_note_number || "-",
       party: r.customer_name || "-",
-      details: r.reason || r.description || "",
+      details: r.description || r.reason || r.notes || "-",
       amount: money(r.total_credit_amount),
       status: r.status || "-",
     }));
@@ -1283,7 +1520,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       date: fmtDate(r.return_date),
       reference: r.debit_note_number || "-",
       party: r.supplier_name || "-",
-      details: r.reason || r.description || "",
+      details: r.description || r.reason || r.notes || "-",
       amount: money(r.total_debit_amount),
       status: r.status || "-",
     }));
@@ -1292,7 +1529,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       date: fmtDate(r.transaction_date),
       reference: r.journal_entry_number || "-",
       party: "-",
-      details: r.description || "",
+      details: r.description || "-",
       amount: money(r.total_debits || r.total_credits || 0),
       status: r.status || "-",
     }));
@@ -1334,7 +1571,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       meta: baseMeta(ctx, {
         dateFrom: dateFrom ? fmtDate(dateFrom) : undefined,
         dateTo: dateTo ? fmtDate(dateTo) : undefined,
-        filters: { Type: "all" },
+        filters: { Type: "All" },
       }),
       sections,
       table: { columns, rows },
@@ -1349,10 +1586,18 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       { key: "date", label: "Date" },
       { key: "invoice", label: "Invoice" },
       { key: "party", label: "Customer" },
+      { key: "narration", label: "Narration" },
       { key: "amount", label: "Amount", align: "right" },
       { key: "status", label: "Status" },
     ]);
-    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), invoice: r.invoice_number, party: r.customer_name, amount: money(r.total_amount), status: r.status }));
+    rows = data.map((r) => ({
+      date: fmtDate(r.transaction_date),
+      invoice: r.invoice_number,
+      party: r.customer_name,
+      narration: r.description || "-",
+      amount: money(r.total_amount),
+      status: r.status,
+    }));
     const total = data.reduce((s, r) => s + parseFloat(String(r.total_amount || "0")), 0);
     const paid = data.reduce((s, r) => s + parseFloat(String(r.paid_amount || "0")), 0);
     sections = [summaryCard("Total Sales", money(total), true), summaryCard("Paid", money(paid)), summaryCard("Outstanding", money(total - paid))];
@@ -1363,10 +1608,18 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       { key: "date", label: "Date" },
       { key: "invoice", label: "Invoice" },
       { key: "party", label: "Supplier" },
+      { key: "narration", label: "Narration" },
       { key: "amount", label: "Amount", align: "right" },
       { key: "status", label: "Status" },
     ]);
-    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), invoice: r.invoice_number, party: r.supplier_name, amount: money(r.total_amount), status: r.status }));
+    rows = data.map((r) => ({
+      date: fmtDate(r.transaction_date),
+      invoice: r.invoice_number,
+      party: r.supplier_name,
+      narration: r.description || "-",
+      amount: money(r.total_amount),
+      status: r.status,
+    }));
     const total = data.reduce((s, r) => s + parseFloat(String(r.total_amount || "0")), 0);
     const paid = data.reduce((s, r) => s + parseFloat(String(r.paid_amount || "0")), 0);
     sections = [summaryCard("Total Purchases", money(total), true), summaryCard("Paid", money(paid)), summaryCard("Outstanding", money(total - paid))];
@@ -1378,6 +1631,8 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       { key: "type", label: "Type" },
       { key: "account", label: "Account" },
       { key: "party", label: "Party" },
+      { key: "narration", label: "Narration" },
+      { key: "details", label: "Details" },
       { key: "amount", label: "Amount", align: "right" },
       { key: "running", label: "Running", align: "right" },
     ]);
@@ -1386,6 +1641,8 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       type: r.transaction_type,
       account: r.account_type,
       party: r.party_name || "-",
+      narration: r.description || r.notes || "-",
+      details: [r.reference_number ? `Ref #${r.reference_number}` : "", r.category || ""].filter(Boolean).join(" — ") || "-",
       amount: money(r.amount),
       running: num(r.runningBalance || 0),
     }));
@@ -1399,10 +1656,20 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       { key: "date", label: "Date" },
       { key: "note", label: "Credit Note" },
       { key: "party", label: "Customer" },
+      { key: "narration", label: "Narration" },
+      { key: "details", label: "Details" },
       { key: "amount", label: "Amount", align: "right" },
       { key: "status", label: "Status" },
     ]);
-    rows = data.map((r) => ({ date: fmtDate(r.return_date), note: r.credit_note_number, party: r.customer_name, amount: money(r.total_credit_amount), status: r.status }));
+    rows = data.map((r) => ({
+      date: fmtDate(r.return_date),
+      note: r.credit_note_number,
+      party: r.customer_name,
+      narration: r.description || r.reason || r.notes || "-",
+      details: [r.original_invoice_reference ? `Invoice #${r.original_invoice_reference}` : "", r.reason ? `Reason: ${r.reason}` : ""].filter(Boolean).join(" — ") || "-",
+      amount: money(r.total_credit_amount),
+      status: r.status,
+    }));
     const total = data.reduce((s, r) => s + parseFloat(String(r.total_credit_amount || "0")), 0);
     sections = [summaryCard("Total Returns", money(total), true), summaryCard("Entries", String(data.length))];
   } else if (type === "purchase-returns") {
@@ -1412,10 +1679,20 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       { key: "date", label: "Date" },
       { key: "note", label: "Debit Note" },
       { key: "party", label: "Supplier" },
+      { key: "narration", label: "Narration" },
+      { key: "details", label: "Details" },
       { key: "amount", label: "Amount", align: "right" },
       { key: "status", label: "Status" },
     ]);
-    rows = data.map((r) => ({ date: fmtDate(r.return_date), note: r.debit_note_number, party: r.supplier_name, amount: money(r.total_debit_amount), status: r.status }));
+    rows = data.map((r) => ({
+      date: fmtDate(r.return_date),
+      note: r.debit_note_number,
+      party: r.supplier_name,
+      narration: r.description || r.reason || r.notes || "-",
+      details: [r.original_purchase_reference ? `Invoice #${r.original_purchase_reference}` : "", r.reason ? `Reason: ${r.reason}` : ""].filter(Boolean).join(" — ") || "-",
+      amount: money(r.total_debit_amount),
+      status: r.status,
+    }));
     const total = data.reduce((s, r) => s + parseFloat(String(r.total_debit_amount || "0")), 0);
     sections = [summaryCard("Total Returns", money(total), true), summaryCard("Entries", String(data.length))];
   } else {
@@ -1429,7 +1706,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       { key: "credit", label: "Credit", align: "right" },
       { key: "status", label: "Status" },
     ]);
-    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), entryNo: r.journal_entry_number, narration: r.description, debit: money(r.total_debits), credit: money(r.total_credits), status: r.status }));
+    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), entryNo: r.journal_entry_number, narration: r.description || "-", debit: money(r.total_debits), credit: money(r.total_credits), status: r.status }));
     const debit = data.reduce((s, r) => s + parseFloat(String(r.total_debits || "0")), 0);
     const credit = data.reduce((s, r) => s + parseFloat(String(r.total_credits || "0")), 0);
     sections = [summaryCard("Total Debits", money(debit), true), summaryCard("Total Credits", money(credit), true), summaryCard("Entries", String(data.length))];
@@ -1444,8 +1721,8 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       dateFrom: dateFrom ? fmtDate(dateFrom) : undefined,
       dateTo: dateTo ? fmtDate(dateTo) : undefined,
       filters: {
-        Type: type,
-        ...(filters.status ? { Status: filters.status } : {}),
+        Type: filterTextLabel(type),
+        ...(filters.status ? { Status: filterTextLabel(filters.status) } : {}),
         ...(filters.search ? { Search: filters.search } : {}),
       },
     }),

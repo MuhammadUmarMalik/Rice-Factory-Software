@@ -7,8 +7,9 @@ export async function ensureDesktopAdmin(): Promise<void> {
   const users = await storage.getUsers();
   if (users.length > 0) return;
 
-  const username = process.env.DEFAULT_ADMIN_USERNAME || "admin";
-  const password = process.env.DEFAULT_ADMIN_PASSWORD || "admin123";
+  const username = process.env.DEFAULT_ADMIN_USERNAME;
+  const password = process.env.DEFAULT_ADMIN_PASSWORD;
+  if (!username || !password) return;
   const fullName = process.env.DEFAULT_ADMIN_FULLNAME || "Administrator";
 
   await storage.createUser({

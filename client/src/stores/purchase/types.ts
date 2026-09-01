@@ -1,5 +1,5 @@
 import type { Purchase } from "@/types/schema";
-import type { RequestStatus } from "@/stores/base";
+export type { RequestStatus } from "@/stores/base";
 
 export type PurchaseItemDraft = {
   productId: string;

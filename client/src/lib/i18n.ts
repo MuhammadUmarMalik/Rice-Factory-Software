@@ -127,6 +127,10 @@ export const translations = {
     confirmDelete: "Are you sure you want to delete this item?",
     savedSuccessfully: "Saved successfully",
     deletedSuccessfully: "Deleted successfully",
+
+    comingSoon: "Coming soon",
+    
+    // Auth
     login: "Login",
     username: "Username",
     password: "Password",
@@ -298,6 +302,9 @@ export const translations = {
     noRecords: "کوئی ریکارڈ نہیں ملا",
     loading: "لوڈ ہو رہا ہے...",
     confirmDelete: "کیا آپ واقعی یہ آئٹم حذف کرنا چاہتے ہیں؟",
+
+    comingSoon: "جلد آ رہا ہے",
+
     savedSuccessfully: "کامیابی سے محفوظ ہوگیا",
     deletedSuccessfully: "کامیابی سے حذف ہوگیا",
     login: "لاگ اِن",

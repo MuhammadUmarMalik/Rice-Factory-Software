@@ -11,7 +11,8 @@ export async function previewHandler(req: Request, res: Response) {
     });
     res.json({ html: result.html, payload: result.payload });
   } catch (error: any) {
-    res.status(400).json({ error: error?.message || "Failed to render preview" });
+    const status = error?.status === 403 ? 403 : error?.name === "ZodError" ? 400 : 500;
+    res.status(status).json({ error: status === 500 ? "Failed to render preview" : error?.message });
   }
 }
 
@@ -25,6 +26,7 @@ export async function pdfHandler(req: Request, res: Response) {
     res.setHeader("Content-Type", "application/pdf");
     res.send(pdf);
   } catch (error: any) {
-    res.status(400).json({ error: error?.message || "Failed to generate PDF" });
+    const status = error?.status === 403 ? 403 : error?.name === "ZodError" ? 400 : 500;
+    res.status(status).json({ error: status === 500 ? "Failed to generate PDF" : error?.message });
   }
 }

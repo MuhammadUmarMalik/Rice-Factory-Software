@@ -42,6 +42,7 @@ type SalesReportRow = {
   total: string;
   received: string;
   balance: string;
+  status: "paid" | "partial" | "unpaid";
 };
 
 type SalesReport = {
@@ -56,6 +57,12 @@ type SalesReport = {
     balance: string;
   };
 };
+
+const money = (value: string | number | null | undefined) =>
+  Number(value || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 
 function formatSafeDate(value: string | number | Date) {
   const date = new Date(value as any);
@@ -100,22 +107,19 @@ export default function SalesReportPage() {
   }, [error]);
 
   const rows = data?.rows || [];
+  // The backend already sums the same filtered row set; re-adding it here only
+  // creates a second source of truth that can drift from the printed totals.
   const totals = useMemo(
-    () =>
-      rows.reduce(
-        (acc, r) => {
-          acc.subtotal += parseFloat(r.subtotal || "0");
-          acc.discount += parseFloat(r.discount || "0");
-          acc.tax += parseFloat(r.tax || "0");
-          acc.otherCharges += parseFloat(r.otherCharges || "0");
-          acc.total += parseFloat(r.total || "0");
-          acc.received += parseFloat(r.received || "0");
-          acc.balance += parseFloat(r.balance || "0");
-          return acc;
-        },
-        { subtotal: 0, discount: 0, tax: 0, otherCharges: 0, total: 0, received: 0, balance: 0 },
-      ),
-    [rows],
+    () => ({
+      subtotal: Number(data?.totals.subtotal || 0),
+      discount: Number(data?.totals.discount || 0),
+      tax: Number(data?.totals.tax || 0),
+      otherCharges: Number(data?.totals.otherCharges || 0),
+      total: Number(data?.totals.total || 0),
+      received: Number(data?.totals.received || 0),
+      balance: Number(data?.totals.balance || 0),
+    }),
+    [data?.totals],
   );
 
   const columns: Column<SalesReportRow>[] = [
@@ -148,7 +152,7 @@ export default function SalesReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.subtotal || "0").toLocaleString()}
+          Rs. {money(item.subtotal)}
         </span>
       ),
     },
@@ -158,7 +162,7 @@ export default function SalesReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.discount || "0").toLocaleString()}
+          Rs. {money(item.discount)}
         </span>
       ),
     },
@@ -168,7 +172,7 @@ export default function SalesReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.tax || "0").toLocaleString()}
+          Rs. {money(item.tax)}
         </span>
       ),
     },
@@ -178,7 +182,7 @@ export default function SalesReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {parseFloat(item.otherCharges || "0").toLocaleString()}
+          Rs. {money(item.otherCharges)}
         </span>
       ),
     },
@@ -188,7 +192,7 @@ export default function SalesReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono font-medium text-primary">
-          Rs. {parseFloat(item.total || "0").toLocaleString()}
+          Rs. {money(item.total)}
         </span>
       ),
     },
@@ -198,7 +202,7 @@ export default function SalesReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm">
-          Rs. {parseFloat(item.received || "0").toLocaleString()}
+          Rs. {money(item.received)}
         </span>
       ),
     },
@@ -208,7 +212,7 @@ export default function SalesReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm text-destructive">
-          Rs. {parseFloat(item.balance || "0").toLocaleString()}
+          Rs. {money(item.balance)}
         </span>
       ),
     },
@@ -216,17 +220,16 @@ export default function SalesReportPage() {
       key: "status",
       title: "Status",
       align: "center",
-      render: (item) => {
-        const total = parseFloat(item.total || "0");
-        const received = parseFloat(item.received || "0");
-        const isPaid = received >= total && total > 0;
-        const isPartial = received > 0 && received < total;
-        return (
-          <Badge variant={isPaid ? "default" : isPartial ? "secondary" : "outline"} className="text-xs">
-            {isPaid ? "Paid" : isPartial ? "Partial" : "Unpaid"}
-          </Badge>
-        );
-      },
+      // Read the backend's status verbatim so the badge can never disagree with
+      // what the paymentStatus filter selects on.
+      render: (item) => (
+        <Badge
+          variant={item.status === "paid" ? "default" : item.status === "partial" ? "secondary" : "outline"}
+          className="text-xs capitalize"
+        >
+          {item.status}
+        </Badge>
+      ),
     },
   ];
 
@@ -319,7 +322,7 @@ export default function SalesReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-primary ${isRTL ? "text-right" : ""}`}>
-              Rs. {totals.total.toLocaleString()}
+              Rs. {money(totals.total)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">{rows.length} transactions</p>
           </CardContent>
@@ -332,7 +335,7 @@ export default function SalesReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
-              Rs. {totals.received.toLocaleString()}
+              Rs. {money(totals.received)}
             </div>
           </CardContent>
         </Card>
@@ -344,7 +347,7 @@ export default function SalesReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-destructive ${isRTL ? "text-right" : ""}`}>
-              Rs. {totals.balance.toLocaleString()}
+              Rs. {money(totals.balance)}
             </div>
           </CardContent>
         </Card>

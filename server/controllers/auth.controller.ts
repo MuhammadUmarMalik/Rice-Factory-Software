@@ -1,17 +1,17 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { storage } from "../models/storage";
-import { hashPassword, signAccessToken, verifyPassword } from "../utils/auth";
+import { asyncHandler, hashPassword, signAccessToken, verifyPassword } from "../utils/auth";
 
 const loginSchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(1),
+  username: z.string().trim().min(1).max(64),
+  password: z.string().min(1).max(200),
 });
 
 const bootstrapSchema = z.object({
-  username: z.string().min(1),
-  password: z.string().min(8),
-  fullName: z.string().min(1),
+  username: z.string().trim().min(1).max(64),
+  password: z.string().min(8).max(200),
+  fullName: z.string().trim().min(1).max(120),
 });
 
 function sanitizeUser(user: { id: number; username: string; fullName: string; role: string }) {
@@ -23,7 +23,7 @@ function sanitizeUser(user: { id: number; username: string; fullName: string; ro
   };
 }
 
-export async function login(req: Request, res: Response) {
+export const login = asyncHandler(async (req: Request, res: Response) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid login payload" });
@@ -60,33 +60,28 @@ export async function login(req: Request, res: Response) {
   });
 
   return res.json({ token, user: sanitizeUser(user) });
-}
+});
 
-export async function logout(req: Request, res: Response) {
+export const logout = asyncHandler(async (req: Request, res: Response) => {
   await new Promise<void>((resolve) => {
     req.session.destroy(() => resolve());
   });
   res.clearCookie("connect.sid");
   return res.json({ ok: true });
-}
+});
 
-export async function me(req: Request, res: Response) {
+export const me = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
   return res.json({ user: sanitizeUser(req.user) });
-}
+});
 
-export async function bootstrapAdmin(req: Request, res: Response) {
+export const bootstrapAdmin = asyncHandler(async (req: Request, res: Response) => {
   const parsed = bootstrapSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid bootstrap payload" });
   }
 
-  const existing = await storage.getUsers();
-  if (existing.length > 0) {
-    return res.status(403).json({ error: "Bootstrap already completed" });
-  }
-
-  const created = await storage.createUser({
+  const created = await storage.createFirstAdmin({
     username: parsed.data.username,
     password: hashPassword(parsed.data.password),
     fullName: parsed.data.fullName,
@@ -94,5 +89,9 @@ export async function bootstrapAdmin(req: Request, res: Response) {
     isActive: true,
   });
 
+  if (!created) {
+    return res.status(403).json({ error: "Bootstrap already completed" });
+  }
+
   return res.status(201).json({ user: sanitizeUser(created) });
-}
+});

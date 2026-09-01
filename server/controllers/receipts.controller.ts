@@ -8,6 +8,7 @@ import {
 import * as receiptsService from "../services/receipts.service";
 import { notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
+import { isBusinessRuleError } from "../utils/errors";
 
 export async function listReceipts(_req: Request, res: Response) {
   try {
@@ -21,7 +22,9 @@ export async function listReceipts(_req: Request, res: Response) {
 
 export async function getNextReceiptNumber(req: Request, res: Response) {
   try {
-    const type = (req.query.type as string) || "CR";
+    const parsedType = z.enum(["CR", "CP", "BR", "BP"]).safeParse(req.query.type ?? "CR");
+    if (!parsedType.success) return res.status(400).json({ error: "Invalid voucher type" });
+    const type = parsedType.data;
     const next = await receiptsService.getNextReceiptNumber(type);
     res.json({ voucherNumber: next });
   } catch (error) {
@@ -62,7 +65,7 @@ export async function createReceipt(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -89,7 +92,7 @@ export async function updateReceipt(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
     }
-    if (error instanceof Error) {
+    if (isBusinessRuleError(error)) {
       return res.status(400).json({ error: error.message });
     }
     console.error(error);
@@ -109,6 +112,9 @@ export async function deleteReceipt(req: Request, res: Response) {
     if (!ok) return res.status(404).json({ error: "Voucher not found" });
     res.status(204).send();
   } catch (error) {
+    if (isBusinessRuleError(error)) {
+      return res.status(400).json({ error: error.message });
+    }
     console.error(error);
     res.status(500).json({ error: "Failed to delete voucher" });
   }

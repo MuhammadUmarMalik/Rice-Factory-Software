@@ -49,8 +49,21 @@ type StockReportRow = {
 type StockReport = {
   rows: StockReportRow[];
   totals: { openingQty: string; inQty: string; outQty: string; closingQty: string; closingValue: string };
-  validation: { rollForwardOk: boolean; rollForwardDifference: string };
+  validation: {
+    rollForwardOk: boolean;
+    rollForwardDifference: string;
+    // null when the selected window does not cover every movement up to now,
+    // in which case closing qty cannot be compared to live product stock.
+    stockMatchesLedger: boolean | null;
+    stockDifference: string | null;
+    mismatchedProducts: Array<{ productId: number; itemName: string; closingQty: string; currentStock: string }>;
+  };
 };
+
+const qty = (value: string | number | null | undefined) =>
+  Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const money = (value: string | number | null | undefined) =>
+  Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function StockReportPage() {
   const { t, isRTL, language } = useLanguage();
@@ -88,6 +101,18 @@ export default function StockReportPage() {
   const totalStockValue = parseFloat(data?.totals.closingValue || "0");
   const totalQuantity = parseFloat(data?.totals.closingQty || "0");
   const rollForwardOk = data?.validation.rollForwardOk ?? true;
+  // Only comparable when the window covers every movement to date; otherwise the
+  // backend returns null and there is nothing to warn about.
+  const stockMatchesLedger = data?.validation.stockMatchesLedger ?? null;
+  const mismatchedProducts = data?.validation.mismatchedProducts ?? [];
+  const validationOk = rollForwardOk && stockMatchesLedger !== false;
+  const validationLabel = !rollForwardOk
+    ? "Inventory roll-forward mismatch"
+    : stockMatchesLedger === false
+      ? `Closing qty differs from live stock on ${mismatchedProducts.length} item(s)`
+      : stockMatchesLedger === true
+        ? "Closing qty matches live stock"
+        : "Inventory roll-forward OK";
 
   const columns: Column<StockReportRow>[] = [
     {
@@ -131,7 +156,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          {Number(item.openingQty || 0).toLocaleString()} {item.unit}
+          {qty(item.openingQty)} {item.unit}
         </span>
       ),
     },
@@ -141,7 +166,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {Number(item.openingValue || 0).toLocaleString()}
+          Rs. {money(item.openingValue)}
         </span>
       ),
     },
@@ -151,7 +176,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          {Number(item.inQty || 0).toLocaleString()} {item.unit}
+          {qty(item.inQty)} {item.unit}
         </span>
       ),
     },
@@ -161,7 +186,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {Number(item.inValue || 0).toLocaleString()}
+          Rs. {money(item.inValue)}
         </span>
       ),
     },
@@ -171,7 +196,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          {Number(item.outQty || 0).toLocaleString()} {item.unit}
+          {qty(item.outQty)} {item.unit}
         </span>
       ),
     },
@@ -181,7 +206,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono">
-          Rs. {Number(item.outValue || 0).toLocaleString()}
+          Rs. {money(item.outValue)}
         </span>
       ),
     },
@@ -191,7 +216,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono font-medium">
-          {Number(item.closingQty || 0).toLocaleString()} {item.unit}
+          {qty(item.closingQty)} {item.unit}
         </span>
       ),
     },
@@ -201,7 +226,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm">
-          Rs. {Number(item.avgCost || 0).toLocaleString()}/{item.unit}
+          Rs. {money(item.avgCost)}/{item.unit}
         </span>
       ),
     },
@@ -211,7 +236,7 @@ export default function StockReportPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono font-medium">
-          Rs. {Number(item.closingValue || 0).toLocaleString()}
+          Rs. {money(item.closingValue)}
         </span>
       ),
     },
@@ -262,7 +287,7 @@ export default function StockReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
-              {totalQuantity.toLocaleString()}
+              {qty(totalQuantity)}
             </div>
           </CardContent>
         </Card>
@@ -276,10 +301,10 @@ export default function StockReportPage() {
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold font-mono text-primary ${isRTL ? "text-right" : ""}`}>
-              Rs. {totalStockValue.toLocaleString()}
+              Rs. {money(totalStockValue)}
             </div>
-            <p className={`text-xs mt-1 ${rollForwardOk ? "text-muted-foreground" : "text-destructive"}`}>
-              {rollForwardOk ? "Inventory roll-forward OK" : "Inventory roll-forward mismatch"}
+            <p className={`text-xs mt-1 ${validationOk ? "text-muted-foreground" : "text-destructive"}`}>
+              {validationLabel}
             </p>
           </CardContent>
         </Card>

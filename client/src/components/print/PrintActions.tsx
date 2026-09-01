@@ -2,6 +2,7 @@ import { Suspense, lazy, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { DocKey } from "@/print/docRegistry";
 import { fetchPrintPdf } from "@/services/printApi";
+import { loadPrintSettings, toPrintRequestOptions } from "@/print/printSettings";
 import { downloadBlob } from "@/lib/export";
 
 const PrintPreviewModal = lazy(() =>
@@ -38,7 +39,15 @@ export function PrintActions({
 
   const handleDownload = async () => {
     if (disabled) return;
-    const blob = await fetchPrintPdf({ docKey, params: safeParams, orientation, format: "A4" });
+    // Use whatever the user last configured for THIS document type. Hardcoding
+    // A4/default margins here made the toolbar download disagree with both the
+    // preview and the preview's own download button.
+    const settings = loadPrintSettings(docKey, { orientation });
+    const blob = await fetchPrintPdf({
+      docKey,
+      params: safeParams,
+      ...toPrintRequestOptions(settings),
+    });
     downloadBlob(`${docKey}.pdf`, blob);
   };
 

@@ -2,11 +2,15 @@ import { apiRequest } from "@/lib/queryClient";
 import type { DocKey } from "@/print/docRegistry";
 import type { PrintableDocumentPayload } from "@/types/print";
 
+export type PrintFormat = "A4" | "A5" | "Letter" | "Legal" | "Thermal80" | "Custom";
+export type PrintOrientation = "portrait" | "landscape";
+export type PrintColorMode = "color" | "grayscale" | "bw";
+
 export type PrintRequest = {
   docKey: DocKey;
   params?: Record<string, unknown>;
-  format?: "A4" | "A5" | "Letter" | "Legal" | "Custom";
-  orientation?: "portrait" | "landscape";
+  format?: PrintFormat;
+  orientation?: PrintOrientation;
   widthMm?: number;
   heightMm?: number;
   marginMm?: number;
@@ -14,6 +18,9 @@ export type PrintRequest = {
   marginRightMm?: number;
   marginBottomMm?: number;
   marginLeftMm?: number;
+  colorMode?: PrintColorMode;
+  showLogo?: boolean;
+  showColoredHeaders?: boolean;
 };
 
 const isElectron =

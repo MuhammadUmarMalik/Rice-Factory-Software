@@ -23,7 +23,7 @@ export default function ProfitLossPage() {
   const { t, isRTL, language } = useLanguage();
   const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
 
-  const { data: profitLoss } = useQuery<ProfitLossResponse>({
+  const { data: profitLoss, isLoading, isError, refetch } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", fromDate, toDate],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -44,6 +44,9 @@ export default function ProfitLossPage() {
   const netMargin = revenue !== 0 ? (netProfit / revenue) * 100 : 0;
   const money = (value: number) =>
     `Rs. ${value.toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+
+  if (isLoading) return <div className="p-6 text-muted-foreground">Loading profit and loss…</div>;
+  if (isError || !profitLoss) return <div className="p-6"><p className="text-destructive">Unable to load profit and loss.</p><Button className="mt-4" onClick={() => refetch()}>Retry</Button></div>;
 
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>

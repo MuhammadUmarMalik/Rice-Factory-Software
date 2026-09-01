@@ -21,7 +21,7 @@ export async function listReceipts() {
   return detailed;
 }
 
-export async function getNextReceiptNumber(type: string) {
+export async function getNextReceiptNumber(type: "CR" | "CP" | "BR" | "BP") {
   return storage.getNextReceiptVoucherNumber(type);
 }
 

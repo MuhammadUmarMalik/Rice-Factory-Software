@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import { storage } from "../models/storage";
+import { isBankAccount, isCashAccount, isCashOrBankAccount } from "../utils/cash-accounts";
 
 type DashboardRange = { fromDate: Date; toDate: Date };
 type DashboardSummaryScope = "core" | "details" | "full";
@@ -222,24 +223,9 @@ export async function getDashboardSummary(
         storage.getOutstandingSuppliers(asOfDate),
       ]);
 
-    const cashBankAccounts = accounts.filter((a) => {
-      const name = (a.name || "").toLowerCase();
-      const isCash = name.includes("cash");
-      const isBank = name.includes("bank") || a.type === "bank";
-      const isSystemCash = a.isSystemAccount && a.type === "asset";
-      return isCash || isBank || isSystemCash;
-    });
-
-    const cashAccountIds = new Set(
-      cashBankAccounts
-        .filter((a) => (a.name || "").toLowerCase().includes("cash") || (a.isSystemAccount && a.type === "asset"))
-        .map((a) => a.id),
-    );
-    const bankAccountIds = new Set(
-      cashBankAccounts
-        .filter((a) => (a.name || "").toLowerCase().includes("bank") || a.type === "bank")
-        .map((a) => a.id),
-    );
+    const cashBankAccounts = accounts.filter(isCashOrBankAccount);
+    const cashAccountIds = new Set(cashBankAccounts.filter(isCashAccount).map((a) => a.id));
+    const bankAccountIds = new Set(cashBankAccounts.filter(isBankAccount).map((a) => a.id));
 
     const ledgerToDate = await storage.getLedgerEntries(undefined, undefined, undefined, toDate ?? undefined);
     let cashBalance = cashBankAccounts
@@ -387,7 +373,7 @@ export async function getDashboardSummary(
     const bardanaBalance = bardanaRows.reduce((sum, r) => sum + parseAmount(r.closingQty), 0);
 
     const lowStock = products
-      .filter((p) => parseAmount(p.currentStock || "0") <= 10)
+      .filter((p) => parseAmount(p.currentStock || "0") <= parseAmount(p.reorderLevel || process.env.LOW_STOCK_THRESHOLD || "10"))
       .map((p) => ({
         id: p.id,
         name: p.name,

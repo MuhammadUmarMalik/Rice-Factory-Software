@@ -35,6 +35,12 @@ type PeriodSalesReport = {
   totals: { totalAmount: string; receivedAmount: string; balanceAmount: string; invoiceCount: number };
 };
 
+const money = (value: string | number | null | undefined) =>
+  Number(value || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 export default function PeriodSalesPage() {
   const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
   const [customerId, setCustomerId] = useState<string>("all");
@@ -60,19 +66,16 @@ export default function PeriodSalesPage() {
   });
 
   const rows = data?.rows || [];
+  // The backend already totals the same grouped rows; re-adding them here is a
+  // second source of truth that can drift from the printed summary cards.
   const totals = useMemo(
-    () =>
-      rows.reduce(
-        (acc, r) => {
-          acc.totalAmount += Number(r.totalAmount || 0);
-          acc.receivedAmount += Number(r.receivedAmount || 0);
-          acc.balanceAmount += Number(r.balanceAmount || 0);
-          acc.invoiceCount += Number(r.invoiceCount || 0);
-          return acc;
-        },
-        { totalAmount: 0, receivedAmount: 0, balanceAmount: 0, invoiceCount: 0 },
-      ),
-    [rows],
+    () => ({
+      totalAmount: Number(data?.totals?.totalAmount || 0),
+      receivedAmount: Number(data?.totals?.receivedAmount || 0),
+      balanceAmount: Number(data?.totals?.balanceAmount || 0),
+      invoiceCount: Number(data?.totals?.invoiceCount || 0),
+    }),
+    [data?.totals],
   );
 
   const columns: Column<PeriodSalesRow>[] = useMemo(
@@ -82,19 +85,19 @@ export default function PeriodSalesPage() {
         key: "totalAmount",
         title: "Total Sales",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.totalAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.totalAmount)}</span>,
       },
       {
         key: "receivedAmount",
         title: "Received",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.receivedAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.receivedAmount)}</span>,
       },
       {
         key: "balanceAmount",
         title: "Balance",
         align: "right",
-        render: (r) => <span className="font-mono">Rs. {Number(r.balanceAmount || 0).toLocaleString()}</span>,
+        render: (r) => <span className="font-mono">Rs. {money(r.balanceAmount)}</span>,
       },
       { key: "invoiceCount", title: "Invoices", align: "right" },
     ],
@@ -187,7 +190,7 @@ export default function PeriodSalesPage() {
         <SummaryCard label="Total Sales" value={totals.totalAmount.toString()} />
         <SummaryCard label="Received" value={totals.receivedAmount.toString()} />
         <SummaryCard label="Balance" value={totals.balanceAmount.toString()} />
-        <SummaryCard label="Invoices" value={totals.invoiceCount.toString()} highlight />
+        <SummaryCard label="Invoices" value={totals.invoiceCount.toString()} highlight decimals={0} />
       </div>
 
       <Card>
@@ -208,13 +211,13 @@ export default function PeriodSalesPage() {
   );
 }
 
-function SummaryCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function SummaryCard({ label, value, highlight, decimals = 2 }: { label: string; value: string; highlight?: boolean; decimals?: number }) {
   return (
     <Card className={highlight ? "border-primary/30 shadow-sm" : ""}>
       <CardContent className="pt-4 space-y-1">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
         <p className={`text-2xl font-semibold font-mono ${highlight ? "text-primary" : ""}`}>
-          {Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          {Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
         </p>
       </CardContent>
     </Card>

@@ -339,7 +339,7 @@ export default function PurchasesPage() {
   };
 
   const handleDelete = (purchase: Purchase) => {
-    deleteMutation.mutate({ id: purchase.id, force: true }, {
+    deleteMutation.mutate({ id: purchase.id, force: false }, {
       onError: (err) =>
         toast({
           title: `Delete failed for purchase ${purchase.id}`,
@@ -396,7 +396,7 @@ export default function PurchasesPage() {
         c.type,
         {
           type: c.type,
-          mode: "add",
+          mode: c.mode === "less" ? "less" : "add",
           amount: c.amount || "0",
           accountId: c.accountId ? String(c.accountId) : "none",
         },
@@ -409,7 +409,7 @@ export default function PurchasesPage() {
 
     form.reset({
       purchaseDate: purchase.purchaseDate ? format(new Date(purchase.purchaseDate), "yyyy-MM-dd") : formatDateInput(new Date()),
-      moundBaseKg: "40",
+      moundBaseKg: String((purchase as any).moundBaseKg ?? 40) === "60" ? "60" : "40",
       billNo: purchase.billNo || "",
       bookNo: purchase.bookNo || "",
       supplierId: purchase.supplierId ? String(purchase.supplierId) : "",

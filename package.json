@@ -14,14 +14,28 @@
     "dev:client": "npm run dev --prefix client",
     "build": "npm run build --prefix client && npm run build --prefix server",
     "start": "npm run start --prefix server",
-    "check": "npm run check --prefix client 2>/dev/null || true && npm run check --prefix server 2>/dev/null || true",
+    "check": "node script/check.mjs",
     "db:push": "npm run db:push --prefix server",
     "db:seed": "tsx script/seed-admin.ts",
     "test": "tsx script/test-reports.ts",
     "electron:dev": "concurrently -k \"npm run dev --prefix server\" \"wait-on http://127.0.0.1:5000 && electron .\"",
-    "electron:build": "node script/clean-desktop.js && tsx script/prepare-seed-db.ts && npm run build && electron-builder"
+    "electron:build": "node script/clean-desktop.js && npm rebuild better-sqlite3 && tsx script/prepare-seed-db.ts && electron-rebuild -f -w better-sqlite3 && npm run build && electron-builder",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
+  },
+  "overrides": {
+    "yargs": "^17.7.3"
+  },
+  "trustedDependencies": [
+    "better-sqlite3",
+    "electron",
+    "esbuild"
+  ],
+  "dependencies": {
+    "@sentry/node": "^10.69.0",
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
     "concurrently": "^8.2.2",
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3",
@@ -39,7 +53,10 @@
     },
     "win": {
       "publisherName": "Muhammad Umar Malik",
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -54,10 +71,15 @@
       "electron/**",
       "package.json",
       "node_modules/**",
+      "server/node_modules/**/*",
       "client/public/app_icon.ico",
       "app-data/data.db"
     ],
     "asar": true,
+    "asarUnpack": [
+      "**/better-sqlite3/**",
+      "**/@sentry/node/**"
+    ],
     "icon": "client/public/app_icon.ico"
   }
 }

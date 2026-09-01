@@ -1,4 +1,4 @@
-import type { Request, RequestHandler } from "express";
+import type { NextFunction, Request, RequestHandler, Response } from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { storage } from "../models/storage";
@@ -67,18 +67,19 @@ export const authenticate: RequestHandler = async (req, res, next) => {
 
     if (req.session?.userId) {
       const user = await storage.getUser(req.session.userId);
-      if (!user || !user.isActive) {
-        req.session.destroy(() => undefined);
+      if (user && user.isActive) {
+        req.user = {
+          id: user.id,
+          username: user.username,
+          fullName: user.fullName,
+          role: user.role,
+          isActive: user.isActive,
+        };
         return next();
       }
-      req.user = {
-        id: user.id,
-        username: user.username,
-        fullName: user.fullName,
-        role: user.role,
-        isActive: user.isActive,
-      };
-      return next();
+      // Stale session (user deleted or deactivated): drop it, but still allow a
+      // valid Bearer token on the same request to authenticate.
+      req.session.destroy(() => undefined);
     }
 
     const authHeader = req.headers.authorization;
@@ -141,5 +142,13 @@ export function requireRoles(allowed: string[]) {
       return res.status(403).json({ error: "Forbidden" });
     }
     next();
+  };
+}
+
+export function asyncHandler(
+  handler: (req: Request, res: Response, next: NextFunction) => Promise<unknown>,
+): RequestHandler {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
   };
 }

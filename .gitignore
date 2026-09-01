@@ -1,10 +1,66 @@
+# Dependencies
 node_modules
-dist
-.DS_Store
-server/public
-vite.config.ts.*
-*.tar.gz
-.replit
-agents.md
+
+# Build output
 dist
 dist-desktop
+server/public
+build
+out
+*.tar.gz
+*.zip
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+cookies.txt
+
+# Local runtime data (live SQLite databases, settings, backups)
+.local/
+server/.local/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+backups/
+
+# Generated reports / exports
+outputs/
+exports/
+*.generated.pdf
+
+# Local audit + scratch harnesses
+.audit/
+prompt.md
+server/h.mjs
+server/t.mjs
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tooling
+.replit
+agents.md
+vite.config.ts.*
+*.log
+.audit
+.claude
+.local
+
+CODEBASE_AUDIT.md
+CODEBASE_REAUDIT.md
+prompt.md

@@ -2,7 +2,7 @@ import "./config/sentry";
 import { captureException, isSentryEnabled, logger } from "./config/sentry";
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
-import createMemoryStore from "memorystore";
+import { SQLiteSessionStore } from "./utils/session-store";
 import { registerRoutes } from "./routes";
 import { ensureDesktopAdmin } from "./utils/bootstrap";
 import { ensureSchema } from "./utils/ensure-schema";
@@ -16,11 +16,12 @@ import rateLimit from "express-rate-limit";
 
 const app = express();
 const httpServer = createServer(app);
-const MemoryStore = createMemoryStore(session);
+app.set("trust proxy", 1);
 ensureDesktopSecret();
 const isProduction = process.env.NODE_ENV === "production";
 const sessionSecret = process.env.SESSION_SECRET || process.env.JWT_SECRET;
 const forceHttps = process.env.FORCE_HTTPS === "true";
+const canonicalOrigin = (process.env.CANONICAL_ORIGIN || "").replace(/\/+$/, "");
 
 if (isProduction && !sessionSecret) {
   throw new Error("SESSION_SECRET or JWT_SECRET must be set in production.");
@@ -42,12 +43,31 @@ app.use(
   }),
 );
 
+// Report-only CSP: monitors policy violations without breaking the SPA or
+// server-rendered print documents. Enforce once violations are reviewed.
+const cspReportOnly = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "connect-src 'self' ws: wss:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'self'",
+].join("; ");
+app.use((_req, res, next) => {
+  res.setHeader("Content-Security-Policy-Report-Only", cspReportOnly);
+  next();
+});
+
 if (isProduction && forceHttps) {
   app.use((req, res, next) => {
-    const proto = req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http");
-    if (proto === "https") return next();
-    const host = req.headers.host;
-    if (!host) return res.status(400).json({ message: "Invalid host" });
+    if (req.protocol === "https") return next();
+    const host = canonicalOrigin ? new URL(canonicalOrigin).host : req.get("host");
+    if (!host || !/^[a-zA-Z0-9.-]+(:\d+)?$/.test(host)) {
+      return res.status(400).json({ message: "HTTPS required" });
+    }
     return res.redirect(301, `https://${host}${req.originalUrl}`);
   });
 }
@@ -67,16 +87,15 @@ if (corsOrigins.length > 0) {
 
 app.use(
   express.json({
-    limit: "100mb",
+    limit: "1mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false, limit: "100mb" }));
+app.use(express.urlencoded({ extended: false, limit: "1mb" }));
 
-app.set("trust proxy", 1);
 app.use(
   session({
     secret: sessionSecret || "dev-secret",
@@ -85,12 +104,10 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: isProduction,
+      secure: isProduction && process.env.DESKTOP_BUILD !== "1",
       maxAge: 1000 * 60 * 60 * 8,
     },
-    store: new MemoryStore({
-      checkPeriod: 1000 * 60 * 60,
-    }),
+    store: new SQLiteSessionStore(),
   }),
 );
 
@@ -146,7 +163,9 @@ app.use((req, res, next) => {
       return next();
     }
     res.setHeader("Cache-Control", "private, max-age=60, stale-while-revalidate=30");
-    res.setHeader("Vary", "Authorization, Accept-Encoding");
+    // Cookie must be part of the cache key too: session-authenticated responses
+    // were otherwise reusable across a user switch in the same browser.
+    res.setHeader("Vary", "Authorization, Cookie, Accept-Encoding");
     return next();
   }
   res.setHeader("Cache-Control", "no-store");
@@ -164,10 +183,12 @@ app.use((req, res, next) => {
 
     console.error(err);
     if (status >= 500) captureException(err);
+    // Controllers respond with `error`; keep both keys so every client error
+    // reader sees the same message regardless of which path produced it.
     if (isProduction && status >= 500) {
-      return res.status(status).json({ message: "Internal Server Error" });
+      return res.status(status).json({ error: "Internal Server Error", message: "Internal Server Error" });
     }
-    return res.status(status).json({ message });
+    return res.status(status).json({ error: message, message });
   });
 
   // importantly only setup vite in development and after
@@ -201,7 +222,7 @@ app.use((req, res, next) => {
     httpServer.listen(
       {
         port,
-        host: "0.0.0.0",
+        host: process.env.DESKTOP_BUILD === "1" ? "127.0.0.1" : (process.env.HOST || "0.0.0.0"),
       },
       () => {
         log(`serving on port ${port}`);

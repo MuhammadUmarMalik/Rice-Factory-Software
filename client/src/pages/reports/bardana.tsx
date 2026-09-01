@@ -112,7 +112,7 @@ export default function BardanaReportPage() {
         <MetricCard title="Total Bardana / Kaat" value={totalKg} loading={isLoading} suffix="kg" highlight />
         <MetricCard title="Total Bags" value={totalBags} loading={isLoading} />
         <MetricCard title="Avg / Bag" value={avgPerBag} loading={isLoading} suffix="kg" />
-        <MetricCard title="Purchases" value={purchaseCount} loading={isLoading} />
+        <MetricCard title="Purchases" value={purchaseCount} loading={isLoading} decimals={0} />
       </div>
     </div>
   );
@@ -124,12 +124,16 @@ function MetricCard({
   suffix,
   highlight,
   loading,
+  // Weights print with 2 decimals in the PDF mapper; counts are whole numbers.
+  // Pinning the precision here keeps the screen and the print identical.
+  decimals = 2,
 }: {
   title: string;
   value: number;
   suffix?: string;
   highlight?: boolean;
   loading?: boolean;
+  decimals?: number;
 }) {
   return (
     <Card className={highlight && !loading ? "border-primary/30 shadow-sm" : ""}>
@@ -141,7 +145,12 @@ function MetricCard({
           <SkeletonBox className="h-6 w-24" />
         ) : (
           <div className={`text-2xl font-bold font-mono ${highlight ? "text-primary" : ""}`}>
-            {Number.isFinite(value) ? value.toLocaleString() : "0"}
+            {Number.isFinite(value)
+              ? value.toLocaleString(undefined, {
+                  minimumFractionDigits: decimals,
+                  maximumFractionDigits: decimals,
+                })
+              : "0"}
             {suffix ? ` ${suffix}` : ""}
           </div>
         )}
