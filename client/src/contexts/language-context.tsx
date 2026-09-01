@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
 import { type Language, type TranslationKey, translations } from "@/lib/i18n";
+import { ensureUrduFonts } from "@/lib/fonts";
 
 interface LanguageContextType {
   language: Language;
@@ -14,13 +15,13 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => {
     if (typeof window !== "undefined") {
       try {
-        return (localStorage.getItem("language") as Language) || "en";
+        return (localStorage.getItem("language") as Language) || "ur";
       } catch (err) {
-        console.warn("Language storage unavailable, falling back to en", err);
-        return "en";
+        console.warn("Language storage unavailable, falling back to ur", err);
+        return "ur";
       }
     }
-    return "en";
+    return "ur";
   });
 
   const isRTL = language === "ur";
@@ -30,6 +31,9 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("language", language);
     } catch (err) {
       console.warn("Language storage write failed", err);
+    }
+    if (isRTL) {
+      ensureUrduFonts();
     }
     document.documentElement.dir = isRTL ? "rtl" : "ltr";
     document.documentElement.lang = language;
@@ -41,13 +45,8 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 
   const t = (key: TranslationKey): string => {
     const val = translations[language][key];
-    // If Urdu string is missing or not actually Urdu, fall back to English for a clean UI
-    if (language === "ur") {
-      if (!val || !/[\u0600-\u06FF]/.test(val)) {
-        return translations.en[key];
-      }
-    }
-    return val ?? translations.en[key];
+    if (val) return val;
+    return translations.ur[key] ?? translations.en[key];
   };
 
   return (

@@ -44,7 +44,28 @@ const FormField = <
 const useFormField = () => {
   const fieldContext = React.useContext(FormFieldContext)
   const itemContext = React.useContext(FormItemContext)
-  const { getFieldState, formState } = useFormContext()
+  const formContext = useFormContext()
+
+  // If a consumer renders <FormLabel>/<FormControl> outside of a <FormProvider>,
+  // `useFormContext()` is `null` and destructuring will crash the app.
+  // Return a safe, "no validation" field state instead.
+  if (!formContext) {
+    const id = itemContext?.id || "form-item"
+    return {
+      id,
+      name: fieldContext?.name,
+      formItemId: `${id}-form-item`,
+      formDescriptionId: `${id}-form-item-description`,
+      formMessageId: `${id}-form-item-message`,
+      invalid: false,
+      isDirty: false,
+      isTouched: false,
+      isValidating: false,
+      error: undefined,
+    }
+  }
+
+  const { getFieldState, formState } = formContext
 
   const fieldState = getFieldState(fieldContext.name, formState)
 

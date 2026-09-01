@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 import { format } from "date-fns";
 
 const lineSchema = z.object({
@@ -48,6 +50,7 @@ const receiptFormSchema = z.object({
   voucherNumber: z.string().optional(),
   voucherDate: z.string().default(new Date().toISOString().slice(0, 10)),
   narration: z.string().optional(),
+  linkToSaleId: z.string().optional(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
 });
 
@@ -118,6 +121,7 @@ export default function ReceiptsPage() {
     voucherDate: new Date().toISOString().slice(0, 10),
     voucherNumber: "",
     narration: "",
+    linkToSaleId: "",
     lines: [{ accountId: "", narration: "", amount: "0" }],
   });
 
@@ -131,27 +135,43 @@ export default function ReceiptsPage() {
   const voucherType = useWatch({ control: form.control, name: "voucherType" }) || "CR";
 
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
+  const { data: salesList = [] } = useQuery<Array<{ id: number; invoiceNumber: string; totalAmount: string; paidAmount: string; balanceDue: string; customerId: number }>>({ queryKey: ["/api/sales"] });
+  const salesWithBalance = useMemo(
+    () =>
+      salesList.filter((s) => {
+        const total = parseFloat(s.totalAmount || "0");
+        const paid = parseFloat(s.paidAmount || "0");
+        const storedDue = parseFloat(s.balanceDue || "0");
+        const computedDue = Math.max(total - paid, 0);
+        const due = Number.isFinite(storedDue) && storedDue > 0 ? storedDue : computedDue;
+        return due > 0;
+      }),
+    [salesList]
+  );
   const { data: receipts = [], isLoading } = useQuery<Receipt[]>({ queryKey: ["/api/receipts"] });
   const filteredReceipts = useMemo(
-    () => receipts.filter((r) => (listFilter === "ALL" || r.voucherType === listFilter) && r.voucherType === "CR"),
+    () => receipts.filter((r) => listFilter === "ALL" || r.voucherType === listFilter),
     [receipts, listFilter]
   );
 
-  const fetchNextNumber = async (type?: string) => {
+  const fetchNextNumber = useCallback(async (type?: string): Promise<string | undefined> => {
     try {
-      const res = await apiRequest("GET", `/api/receipts/next-number?type=${type || form.getValues("voucherType") || "CR"}`);
+      const res = await apiRequest("GET", `/api/receipts/next-number?type=${type ?? voucherType ?? "CR"}`);
       const json = await res.json();
-      form.setValue("voucherNumber", json.voucherNumber, { shouldDirty: true });
+      const num = json.voucherNumber as string | undefined;
+      if (num) form.setValue("voucherNumber", num, { shouldDirty: true });
+      return num;
     } catch (err) {
       console.error(err);
+      return undefined;
     }
-  };
+  }, [form, voucherType]);
 
   useEffect(() => {
     if (isDialogOpen && !editingId) {
-      fetchNextNumber(form.getValues("voucherType"));
+      fetchNextNumber(voucherType);
     }
-  }, [isDialogOpen, editingId]);
+  }, [isDialogOpen, editingId, voucherType, fetchNextNumber]);
 
   useEffect(() => {
     if (!isDialogOpen) {
@@ -173,18 +193,22 @@ export default function ReceiptsPage() {
     };
   }, [isDialogOpen]);
 
-  const normalizeLines = (data: ReceiptFormData) =>
-    (data.lines || [])
+  const normalizeLines = (data: ReceiptFormData) => {
+    const linkId = (data as ReceiptFormData & { linkToSaleId?: string }).linkToSaleId;
+    const saleId = linkId && /^\d+$/.test(linkId) ? parseInt(linkId, 10) : undefined;
+    return (data.lines || [])
       .filter((l) => l.accountId && parseFloat(l.amount || "0") > 0)
-      .map((l) => {
+      .map((l, i) => {
         const amt = l.amount || "0";
         return {
           accountId: parseInt(l.accountId ?? "0"),
           narration: l.narration,
           debit: "0",
           credit: amt,
+          ...(i === 0 && saleId ? { saleId } : {}),
         };
       });
+  };
 
   const createMutation = useMutation({
     mutationFn: (data: ReceiptFormData) => apiRequest("POST", "/api/receipts", {
@@ -195,6 +219,7 @@ export default function ReceiptsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -215,6 +240,7 @@ export default function ReceiptsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -231,6 +257,7 @@ export default function ReceiptsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
       toast({ title: "Deleted" });
     },
   });
@@ -238,12 +265,17 @@ export default function ReceiptsPage() {
   const loadVoucher = async (id: number) => {
     const res = await apiRequest("GET", `/api/receipts/${id}`);
     const voucher: Receipt = await res.json();
+    const paymentLines = (voucher.lines || []).filter(
+      (l: { narration?: string }) => !(l.narration || "").toLowerCase().includes("settlement")
+    );
+    const firstLineSaleId = (paymentLines[0] as { saleId?: number })?.saleId;
     form.reset({
       voucherType: "CR",
       voucherNumber: voucher.voucherNumber,
       voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
       narration: voucher.narration || "",
-      lines: (voucher.lines || []).map((l) => ({
+      linkToSaleId: firstLineSaleId ? String(firstLineSaleId) : "",
+      lines: paymentLines.map((l: { accountId: number; narration?: string; debit?: string; credit?: string }) => ({
         accountId: l.accountId.toString(),
         narration: l.narration || "",
         amount: l.credit || l.debit || "0",
@@ -286,18 +318,25 @@ export default function ReceiptsPage() {
       toast({ title: "Amount must be greater than 0", variant: "destructive" });
       return;
     }
+    let voucherNumber = data.voucherNumber?.trim();
+    if (!voucherNumber && !editingId) {
+      const next = await fetchNextNumber(data.voucherType);
+      if (!next) {
+        toast({ title: "Could not get next voucher number", variant: "destructive" });
+        return;
+      }
+      voucherNumber = next;
+    }
+
     const payload: ReceiptFormData = {
       ...data,
       voucherType: "CR",
+      voucherNumber: voucherNumber || data.voucherNumber,
       lines: activeLines.map((l) => ({
         ...l,
         accountId: l.accountId as string,
       })),
     };
-    // ensure voucher number exists (defensive, in case fetch failed)
-    if (!data.voucherNumber) {
-      await fetchNextNumber(data.voucherType);
-    }
 
     if (editingId) {
       updateMutation.mutate({ id: editingId, data: payload });
@@ -406,7 +445,16 @@ export default function ReceiptsPage() {
                 </Button>
                 <DialogTitle>{dialogTitle}</DialogTitle>
               </div>
-              {!isReadOnly && <Button variant="ghost" onClick={startNew}>Clear</Button>}
+              <div className="flex items-center gap-2">
+                {isReadOnly && viewId && (
+                  <PrintActions
+                    docKey={docKeys.cashReceiptVoucher}
+                    params={{ voucherId: viewId }}
+                    title="Cash Receipt Voucher"
+                  />
+                )}
+                {!isReadOnly && <Button variant="ghost" onClick={startNew}>Clear</Button>}
+              </div>
             </div>
             <DialogDescription className="sr-only">
               Cash receipt voucher details
@@ -517,6 +565,40 @@ export default function ReceiptsPage() {
                     </FormItem>
                   )}
                 />
+                {voucherType === "CR" && (
+                  <FormField
+                    control={form.control}
+                    name="linkToSaleId"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Link to Sale (optional)</FormLabel>
+                        <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="None – receipt will not update a sale" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="none">None</SelectItem>
+                            {salesWithBalance.map((s) => {
+                              const total = parseFloat(s.totalAmount || "0");
+                              const paid = parseFloat(s.paidAmount || "0");
+                              const storedDue = parseFloat(s.balanceDue || "0");
+                              const computedDue = Math.max(total - paid, 0);
+                              const due = Number.isFinite(storedDue) && storedDue > 0 ? storedDue : computedDue;
+                              return (
+                                <SelectItem key={s.id} value={String(s.id)}>
+                                  {s.invoiceNumber} – {accounts.find((a) => a.id === s.customerId)?.name || "Customer"} (Due: Rs. {due.toLocaleString()})
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">If selected, this receipt will update the sale&apos;s paid amount automatically.</p>
+                      </FormItem>
+                    )}
+                  />
+                )}
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
