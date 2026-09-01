@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Plus, Edit, Package, Scale, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Plus, Edit, Package, Scale, Trash2, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Form,
@@ -33,12 +34,13 @@ import {
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Product } from "@shared/schema";
+import type { Product } from "@/types/schema";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 const productFormSchema = z.object({
   name: z.string().min(1, "Product name is required"),
   nameUrdu: z.string().optional(),
+  productType: z.enum(["raw", "bio"]).default("raw"),
   unit: z.string().default("kg"),
   salePrice: z.coerce.string().default("0"),
   currentStock: z.coerce.string().default("0"),
@@ -52,12 +54,16 @@ export default function ProductsPage() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | "raw" | "bio">("all");
+  const [sortOption, setSortOption] = useState<"name-asc" | "name-desc" | "price-asc" | "price-desc">("name-asc");
 
   const form = useForm<ProductFormData>({
     resolver: zodResolver(productFormSchema),
     defaultValues: {
       name: "",
       nameUrdu: "",
+      productType: "raw",
       unit: "kg",
       salePrice: "0",
       currentStock: "0",
@@ -69,10 +75,40 @@ export default function ProductsPage() {
     queryKey: ["/api/products"],
   });
 
+  const filteredProducts = useMemo(() => {
+    const list = [...products];
+    const q = searchQuery.trim().toLowerCase();
+    const searched = q
+      ? list.filter((p) => {
+          const haystack = [p.name, p.nameUrdu, p.productType, p.unit]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(q);
+        })
+      : list;
+    let filtered =
+      typeFilter === "all"
+        ? searched
+        : searched.filter((p) => (p.productType || "").toLowerCase() === typeFilter);
+
+    const compare = {
+      "name-asc": (a: Product, b: Product) => a.name.localeCompare(b.name),
+      "name-desc": (a: Product, b: Product) => b.name.localeCompare(a.name),
+      "price-asc": (a: Product, b: Product) =>
+        parseFloat(a.salePrice || "0") - parseFloat(b.salePrice || "0"),
+      "price-desc": (a: Product, b: Product) =>
+        parseFloat(b.salePrice || "0") - parseFloat(a.salePrice || "0"),
+    }[sortOption];
+
+    return filtered.sort(compare);
+  }, [products, searchQuery, sortOption, typeFilter]);
+
   const createMutation = useMutation({
     mutationFn: (data: ProductFormData) => {
       const payload = {
         ...data,
+        productType: (data.productType || "raw").toLowerCase() as "raw" | "bio",
         currentStock: data.currentStock || "0",
         avgPurchasePrice: data.avgPurchasePrice || "0",
         salePrice: data.salePrice || "0",
@@ -115,6 +151,7 @@ export default function ProductsPage() {
     mutationFn: (data: ProductFormData & { id: number }) => {
       const payload = {
         ...data,
+        productType: (data.productType || "raw").toLowerCase() as "raw" | "bio",
         currentStock: data.currentStock || "0",
         avgPurchasePrice: data.avgPurchasePrice || "0",
         salePrice: data.salePrice || "0",
@@ -140,9 +177,12 @@ export default function ProductsPage() {
 
   const handleEdit = (product: Product) => {
     setEditingProduct(product);
+    const normalizedType: "raw" | "bio" =
+      (product.productType || "").toLowerCase() === "bio" ? "bio" : "raw";
     form.reset({
       name: product.name,
       nameUrdu: product.nameUrdu || "",
+      productType: normalizedType,
       unit: product.unit,
       salePrice: product.salePrice || "0",
       currentStock: product.currentStock || "0",
@@ -156,6 +196,7 @@ export default function ProductsPage() {
     form.reset({
       name: "",
       nameUrdu: "",
+      productType: "raw",
       unit: "kg",
       salePrice: "0",
       currentStock: "0",
@@ -182,6 +223,33 @@ export default function ProductsPage() {
           </div>
         </div>
       ),
+    },
+    {
+      key: "productType",
+      title: "Type",
+      align: "center",
+      render: (item) => {
+        const bioNames = new Set([
+          "head rice",
+          "broken rice",
+          "rice polish",
+          "kacher(nakoo)",
+          "head white rice",
+          "head brown rice",
+          "white broken rice",
+          "brown broken rice",
+          "waste",
+          "husk",
+        ]);
+        const typeValue = (item.productType || "").toLowerCase();
+        const inferredBio = bioNames.has((item.name || "").trim().toLowerCase());
+        const isBio = typeValue === "bio" || inferredBio;
+        return (
+          <Badge variant="outline">
+            {isBio ? "Bio (Processed)" : "Raw"}
+          </Badge>
+        );
+      },
     },
     {
       key: "unit",
@@ -307,10 +375,48 @@ export default function ProductsPage() {
 
       <Card>
         <CardContent className="pt-6">
+          <div
+            className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end sm:gap-6 mb-4 ${
+              isRTL ? "sm:flex-row-reverse" : ""
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">{t("filter") || "Filter"}</span>
+              <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as any)}>
+                <FormControl>
+                  <SelectTrigger className="w-36">
+                    <SelectValue placeholder="Type" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="raw">Raw</SelectItem>
+                  <SelectItem value="bio">Bio</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Sort</span>
+              <Select value={sortOption} onValueChange={(v) => setSortOption(v as any)}>
+                <FormControl>
+                  <SelectTrigger className="w-44">
+                    <SelectValue placeholder="Sort by" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="name-asc">Name (A → Z)</SelectItem>
+                  <SelectItem value="name-desc">Name (Z → A)</SelectItem>
+                  <SelectItem value="price-asc">Sale Price (Low → High)</SelectItem>
+                  <SelectItem value="price-desc">Sale Price (High → Low)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <DataTable
             columns={columns}
-            data={products}
+            data={filteredProducts}
             isLoading={isLoading}
+            searchAlign="end"
             testIdPrefix="products"
           />
         </CardContent>
@@ -319,6 +425,9 @@ export default function ProductsPage() {
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
+            <DialogDescription className="sr-only">
+              Add or edit a product by providing names, product type, unit, and prices.
+            </DialogDescription>
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
               {editingProduct
                 ? (language === "ur" ? "مصنوعات میں ترمیم" : "Edit Product")
@@ -326,8 +435,8 @@ export default function ProductsPage() {
             </DialogTitle>
           </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+              <div className="grid grid-cols-1 gap-4">
                 <FormField
                   control={form.control}
                   name="name"
@@ -361,7 +470,30 @@ export default function ProductsPage() {
                   )}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
+                <FormField
+                  control={form.control}
+                  name="productType"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{language === "ur" ? "نوع" : "Product Type"}</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value ?? "raw"}>
+                        <FormControl>
+                          <SelectTrigger data-testid="select-product-type">
+                            <SelectValue placeholder="Select type" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="raw">Raw</SelectItem>
+                          <SelectItem value="bio">Bio (Processed product)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="unit"
@@ -376,6 +508,7 @@ export default function ProductsPage() {
                         </FormControl>
                         <SelectContent>
                           <SelectItem value="kg">Kilogram (kg)</SelectItem>
+                          <SelectItem value="mound">Mound (40 kg)</SelectItem>
                           <SelectItem value="quintal">Quintal (100 kg)</SelectItem>
                           <SelectItem value="ton">Ton (1000 kg)</SelectItem>
                           <SelectItem value="bag">Bag</SelectItem>
@@ -399,7 +532,7 @@ export default function ProductsPage() {
                   )}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="currentStock"

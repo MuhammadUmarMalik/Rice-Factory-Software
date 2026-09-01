@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { Calculator, Eye, Trash2, ArrowLeft, Plus, Pencil, Minus } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,8 @@ import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useToast } from "@/hooks/use-toast";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Account } from "@shared/schema";
+import type { Account } from "@/types/schema";
 import { format } from "date-fns";
 
 const lineSchema = z.object({
@@ -44,10 +47,11 @@ const lineSchema = z.object({
 });
 
 const paymentFormSchema = z.object({
-  voucherType: z.literal("DR").default("DR"),
+  voucherType: z.literal("CP").default("CP"),
   voucherNumber: z.string().optional(),
   voucherDate: z.string().default(new Date().toISOString().slice(0, 10)),
   narration: z.string().optional(),
+  linkToPurchaseId: z.string().optional(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
 });
 
@@ -104,19 +108,22 @@ function numberToWords(num: number) {
 }
 
 export default function PaymentsPage() {
-  const { t, isRTL } = useLanguage();
+  const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
+  const [location] = useLocation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [viewId, setViewId] = useState<number | null>(null);
   const isReadOnly = viewId !== null;
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const consumedEditId = useRef<number | null>(null);
 
   const buildDefaults = (): PaymentFormData => ({
-    voucherType: "DR",
+    voucherType: "CP",
     voucherDate: new Date().toISOString().slice(0, 10),
     voucherNumber: "",
     narration: "",
+    linkToPurchaseId: "",
     lines: [{ accountId: "", narration: "", amount: "0" }],
   });
 
@@ -129,14 +136,18 @@ export default function PaymentsPage() {
   const lines = useWatch({ control: form.control, name: "lines" }) || [];
 
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
+  const { data: purchasesList = [] } = useQuery<Array<{ id: number; invoiceNumber: string; totalAmount: string; paidAmount: string; balanceDue: string; supplierId: number }>>({ queryKey: ["/api/purchases"] });
+  const purchasesWithBalance = useMemo(
+    () => purchasesList.filter((p) => parseFloat(p.balanceDue || "0") > 0),
+    [purchasesList]
+  );
   const { data: payments = [], isLoading } = useQuery<Payment[]>({ queryKey: ["/api/payments"] });
   const filteredPayments = useMemo(
-    () => payments.filter((p) => p.voucherType === "DR"),
+    () => payments.filter((p) => p.voucherType === "CP"),
     [payments]
   );
 
-  const fetchNextNumber = async () => {
-    // Skip sequence calls while viewing or editing to avoid bumping numbers
+  const fetchNextNumber = useCallback(async () => {
     if (editingId || viewId) {
       return form.getValues("voucherNumber") || "";
     }
@@ -149,13 +160,13 @@ export default function PaymentsPage() {
       console.error(err);
       return "";
     }
-  };
+  }, [form, editingId, viewId]);
 
   useEffect(() => {
     if (isDialogOpen && !editingId && !viewId) {
       fetchNextNumber();
     }
-  }, [isDialogOpen, editingId, viewId]);
+  }, [isDialogOpen, editingId, viewId, fetchNextNumber]);
 
   useEffect(() => {
     if (!isDialogOpen) {
@@ -177,18 +188,22 @@ export default function PaymentsPage() {
     };
   }, [isDialogOpen]);
 
-  const normalizeLines = (data: PaymentFormData) =>
-    (data.lines || [])
+  const normalizeLines = (data: PaymentFormData) => {
+    const linkId = (data as PaymentFormData & { linkToPurchaseId?: string }).linkToPurchaseId;
+    const purchaseId = linkId && /^\d+$/.test(linkId) ? parseInt(linkId, 10) : undefined;
+    return (data.lines || [])
       .filter((l) => l.accountId && parseFloat(l.amount || "0") > 0)
-      .map((l) => {
+      .map((l, i) => {
         const amt = l.amount || "0";
         return {
           accountId: parseInt(l.accountId ?? "0"),
           narration: l.narration,
           debit: amt,
           credit: "0",
+          ...(i === 0 && purchaseId ? { purchaseId } : {}),
         };
       });
+  };
 
   const createMutation = useMutation({
     mutationFn: (data: PaymentFormData) => apiRequest("POST", "/api/payments", {
@@ -199,14 +214,15 @@ export default function PaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
       toast({ title: t("savedSuccessfully") });
     },
     onError: async (err: any) => {
-      const msg = await err?.json?.()?.error || err?.message || "Failed to save";
-      toast({ title: "Save failed", description: String(msg), variant: "destructive" });
+      const msg = await err?.json?.()?.error || err?.message || t("saveFailed");
+      toast({ title: t("saveFailed"), description: String(msg), variant: "destructive" });
     },
   });
 
@@ -219,14 +235,15 @@ export default function PaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
       toast({ title: t("savedSuccessfully") });
     },
     onError: async (err: any) => {
-      const msg = await err?.json?.()?.error || err?.message || "Failed to save";
-      toast({ title: "Save failed", description: String(msg), variant: "destructive" });
+      const msg = await err?.json?.()?.error || err?.message || t("saveFailed");
+      toast({ title: t("saveFailed"), description: String(msg), variant: "destructive" });
     },
   });
 
@@ -235,7 +252,8 @@ export default function PaymentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      toast({ title: "Deleted" });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      toast({ title: t("deletedSuccessfully") });
     },
   });
 
@@ -247,12 +265,18 @@ export default function PaymentsPage() {
       const credit = parseFloat(l.credit || "0");
       return debit > 0 ? l.debit : credit > 0 ? l.credit : "0";
     };
+    // Exclude settlement lines (auto-generated); including them would double the amount on save
+    const paymentLines = (voucher.lines || []).filter(
+      (l: { narration?: string }) => !(l.narration || "").toLowerCase().includes("settlement")
+    );
+    const firstLinePurchaseId = (paymentLines[0] as { purchaseId?: number })?.purchaseId;
     form.reset({
-      voucherType: "DR",
+      voucherType: "CP",
       voucherNumber: voucher.voucherNumber,
       voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
       narration: voucher.narration || "",
-      lines: (voucher.lines || []).map((l) => ({
+      linkToPurchaseId: firstLinePurchaseId ? String(firstLinePurchaseId) : "",
+      lines: paymentLines.map((l: { accountId: number; narration?: string; debit?: string; credit?: string }) => ({
         accountId: l.accountId.toString(),
         narration: l.narration || "",
         amount: lineAmount(l),
@@ -267,7 +291,7 @@ export default function PaymentsPage() {
       setViewId(null);
       await loadVoucher(id);
     } catch (err: any) {
-      toast({ title: "Failed to load voucher", description: err?.message, variant: "destructive" });
+      toast({ title: t("failedToLoadVoucher"), description: err?.message, variant: "destructive" });
     }
   };
 
@@ -277,9 +301,19 @@ export default function PaymentsPage() {
       setViewId(id);
       await loadVoucher(id);
     } catch (err: any) {
-      toast({ title: "Failed to load voucher", description: err?.message, variant: "destructive" });
+      toast({ title: t("failedToLoadVoucher"), description: err?.message, variant: "destructive" });
     }
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.split("?")[1] || "");
+    const editParam = params.get("editId");
+    if (!editParam) return;
+    const id = Number(editParam);
+    if (!Number.isFinite(id) || consumedEditId.current === id) return;
+    consumedEditId.current = id;
+    handleEdit(id);
+  }, [location]);
 
   const handleSubmit = async (data: PaymentFormData) => {
     if (isReadOnly) {
@@ -288,11 +322,11 @@ export default function PaymentsPage() {
       return;
     }
     if (activeLines.length === 0) {
-      toast({ title: "Add at least one line with an account and amount", variant: "destructive" });
+      toast({ title: language === "ur" ? "Ú©Ù… Ø§Ø² Ú©Ù… Ø§ÛŒÚ© Ø³Ø·Ø± Ù…ÛŒÚº Ú©Ú¾Ø§ØªÛ Ø§ÙˆØ± Ø±Ù‚Ù… Ø¯Ø±Ø¬ Ú©Ø±ÛŒÚº" : "Add at least one line with an account and amount", variant: "destructive" });
       return;
     }
     if (totalAmount === 0) {
-      toast({ title: "Amount must be greater than 0", variant: "destructive" });
+      toast({ title: language === "ur" ? "Ø±Ù‚Ù… ØµÙØ± Ø³Û’ Ø²ÛŒØ§Ø¯Û ÛÙˆÙ†ÛŒ Ú†Ø§ÛÛŒÛ’" : "Amount must be greater than 0", variant: "destructive" });
       return;
     }
     if (!data.voucherNumber) {
@@ -301,7 +335,7 @@ export default function PaymentsPage() {
 
     const payload: PaymentFormData = {
       ...data,
-      voucherType: "DR",
+      voucherType: "CP",
       lines: activeLines.map((l) => ({
         ...l,
         accountId: l.accountId as string,
@@ -330,7 +364,7 @@ export default function PaymentsPage() {
   );
   const displayDebit = totalAmount;
   const amountWords = useMemo(
-    () => numberToWords(Math.round(totalAmount)) + " only",
+    () => (language === "ur" ? `${numberToWords(Math.round(totalAmount))} ÙÙ‚Ø·` : `${numberToWords(Math.round(totalAmount))} only`),
     [totalAmount]
   );
 
@@ -348,8 +382,12 @@ export default function PaymentsPage() {
     return accounts.find((a) => a.id === firstLineAccId)?.name || "";
   };
 
-  const amountTitle = t("total") || "Amount";
-  const dialogTitle = viewId ? "View Cash Payment" : editingId ? "Edit Cash Payment" : "New Cash Payment";
+  const amountTitle = language === "ur" ? "Ø±Ù‚Ù…" : "Amount";
+  const dialogTitle = viewId
+    ? (language === "ur" ? "Ù†Ù‚Ø¯ Ø§Ø¯Ø§Ø¦ÛŒÚ¯ÛŒ Ø¯ÛŒÚ©Ú¾ÛŒÚº" : "View Cash Payment")
+    : editingId
+      ? (language === "ur" ? "Ù†Ù‚Ø¯ Ø§Ø¯Ø§Ø¦ÛŒÚ¯ÛŒ Ù…ÛŒÚº ØªØ±Ù…ÛŒÙ…" : "Edit Cash Payment")
+      : (language === "ur" ? "Ù†Ø¦ÛŒ Ù†Ù‚Ø¯ Ø§Ø¯Ø§Ø¦ÛŒÚ¯ÛŒ" : "New Cash Payment");
 
   const columns: Column<Payment>[] = [
     { key: "voucherNumber", title: t("voucherNumber"), render: (p) => <span className="font-mono text-sm">{p.voucherNumber}</span> },
@@ -376,7 +414,7 @@ export default function PaymentsPage() {
         <div className="flex items-center gap-3">
           <div>
             <h1 className="text-2xl font-semibold">{t("cashPayments")}</h1>
-            <p className="text-sm text-muted-foreground">Cash Payment (debit only)</p>
+            <p className="text-sm text-muted-foreground">{language === "ur" ? "Ù†Ù‚Ø¯ Ø§Ø¯Ø§Ø¦ÛŒÚ¯ÛŒ (ØµØ±Ù ÚˆÛŒØ¨Ù¹)" : "Cash Payment (debit only)"}</p>
           </div>
         </div>
         <Button onClick={startNew}>
@@ -401,15 +439,24 @@ export default function PaymentsPage() {
           <DialogHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
+                <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label={language === "ur" ? "ÙˆØ§Ù¾Ø³" : "Back"}>
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
                 <DialogTitle>{dialogTitle}</DialogTitle>
               </div>
-              {!isReadOnly && <Button variant="ghost" onClick={startNew}>Clear</Button>}
+              <div className="flex items-center gap-2">
+                {isReadOnly && viewId && (
+                  <PrintActions
+                    docKey={docKeys.cashPaymentVoucher}
+                    params={{ voucherId: viewId }}
+                    title={language === "ur" ? "Ù†Ù‚Ø¯ Ø§Ø¯Ø§Ø¦ÛŒÚ¯ÛŒ ÙˆØ§Ø¤Ú†Ø±" : "Cash Payment Voucher"}
+                  />
+                )}
+                {!isReadOnly && <Button variant="ghost" onClick={startNew}>{language === "ur" ? "ØµØ§Ù Ú©Ø±ÛŒÚº" : "Clear"}</Button>}
+              </div>
             </div>
             <DialogDescription className="sr-only">
-              Cash payment voucher details
+              {language === "ur" ? "Ù†Ù‚Ø¯ Ø§Ø¯Ø§Ø¦ÛŒÚ¯ÛŒ ÙˆØ§Ø¤Ú†Ø± Ú©ÛŒ ØªÙØµÛŒÙ„" : "Cash payment voucher details"}
             </DialogDescription>
           </DialogHeader>
           {isReadOnly ? (
@@ -421,21 +468,21 @@ export default function PaymentsPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">{t("voucherNumber")}</p>
-                  <p className="font-mono">{form.watch("voucherNumber") || "Лил"}</p>
+                  <p className="font-mono">{form.watch("voucherNumber") || "—"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">{t("voucherType")}</p>
-                  <p className="font-medium">DR</p>
+                  <p className="font-medium">CP</p>
                 </div>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Detail</p>
+                <p className="text-xs text-muted-foreground">{language === "ur" ? "تفصیل" : "Detail"}</p>
                 <p className="rounded-md border bg-muted/40 p-3 min-h-[72px] whitespace-pre-wrap">
-                  {form.watch("narration") || "Лил"}
+                  {form.watch("narration") || "—"}
                 </p>
               </div>
               <div className="space-y-3">
-                <h3 className="font-semibold">Lines</h3>
+                <h3 className="font-semibold">{language === "ur" ? "سطور" : "Lines"}</h3>
                 {fields.map((field, idx) => {
                   const accountId = form.watch(`lines.${idx}.accountId`);
                   const accountSelected = accounts.find(a => a.id.toString() === accountId);
@@ -445,12 +492,12 @@ export default function PaymentsPage() {
                   return (
                     <div key={field.id} className="rounded-md border bg-muted/30 p-3 space-y-1">
                       <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">Paid To</span>
-                        <span className="font-medium">{accountTitle || "Лил"}</span>
+                        <span className="text-muted-foreground">{language === "ur" ? "ادا کیا گیا" : "Paid To"}</span>
+                        <span className="font-medium">{accountTitle || "—"}</span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">{t("narration")}</span>
-                        <span>{narration || "Лил"}</span>
+                        <span>{narration || "—"}</span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">{t("debit")}</span>
@@ -489,7 +536,7 @@ export default function PaymentsPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("voucherNumber")}</FormLabel>
-                        <FormControl><Input {...field} readOnly placeholder="Auto" /></FormControl>
+                        <FormControl><Input {...field} readOnly placeholder={language === "ur" ? "خودکار" : "Auto"} /></FormControl>
                       </FormItem>
                     )}
                   />
@@ -499,7 +546,7 @@ export default function PaymentsPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("voucherType")}</FormLabel>
-                        <Input readOnly value="DR" />
+                        <Input readOnly value="CP" />
                         <input type="hidden" {...field} />
                       </FormItem>
                     )}
@@ -510,20 +557,45 @@ export default function PaymentsPage() {
                   name="narration"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Detail</FormLabel>
+                      <FormLabel>{language === "ur" ? "تفصیل" : "Detail"}</FormLabel>
                       <FormControl>
-                        <Textarea rows={2} placeholder="Add details" {...field} />
+                        <Textarea rows={2} placeholder={language === "ur" ? "تفصیل شامل کریں" : "Add details"} {...field} />
                       </FormControl>
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="linkToPurchaseId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{language === "ur" ? "خریداری سے لنک کریں (اختیاری)" : "Link to Purchase (optional)"}</FormLabel>
+                      <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder={language === "ur" ? "کوئی نہیں - ادائیگی سے خریداری اپ ڈیٹ نہیں ہوگی" : "None - payment will not update a purchase"} />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="none">{language === "ur" ? "کوئی نہیں" : "None"}</SelectItem>
+                          {purchasesWithBalance.map((p) => (
+                            <SelectItem key={p.id} value={String(p.id)}>
+                              {p.invoiceNumber} - {accounts.find((a) => a.id === p.supplierId)?.name || (language === "ur" ? "سپلائر" : "Supplier")} ({language === "ur" ? "بقایا" : "Due"}: Rs. {parseFloat(p.balanceDue || "0").toLocaleString()})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">{language === "ur" ? "منتخب کرنے پر یہ ادائیگی خریداری کی ادا شدہ رقم خودکار طور پر اپ ڈیٹ کرے گی۔" : "If selected, this payment will update the purchase's paid amount automatically."}</p>
                     </FormItem>
                   )}
                 />
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h3 className="font-medium">Lines</h3>
+                    <h3 className="font-medium">{language === "ur" ? "سطور" : "Lines"}</h3>
                     <div className="flex gap-2">
                       <Button type="button" size="sm" variant="outline" onClick={() => append({ accountId: "", narration: "", amount: "0" })}>
-                        <Plus className="h-4 w-4" /> Add line
+                        <Plus className="h-4 w-4" /> {language === "ur" ? "سطر شامل کریں" : "Add line"}
                       </Button>
                     </div>
                   </div>
@@ -540,11 +612,11 @@ export default function PaymentsPage() {
                               name={`lines.${idx}.accountId`}
                               render={({ field }) => (
                                 <FormItem>
-                                  {idx === 0 && <FormLabel>Paid To</FormLabel>}
+                                  {idx === 0 && <FormLabel>{language === "ur" ? "ادا کیا گیا" : "Paid To"}</FormLabel>}
                                   <Select value={field.value} onValueChange={field.onChange}>
                                     <FormControl>
                                       <SelectTrigger>
-                                        <SelectValue placeholder="Select account" />
+                                        <SelectValue placeholder={language === "ur" ? "کھاتہ منتخب کریں" : "Select account"} />
                                       </SelectTrigger>
                                     </FormControl>
                                     <SelectContent>
@@ -561,7 +633,7 @@ export default function PaymentsPage() {
                             />
                           </div>
                           <div className="col-span-2">
-                            {idx === 0 && <FormLabel>Title</FormLabel>}
+                            {idx === 0 && <FormLabel>{language === "ur" ? "عنوان" : "Title"}</FormLabel>}
                             <Input value={accountTitle} readOnly />
                           </div>
                           <div className="col-span-3">
@@ -592,7 +664,7 @@ export default function PaymentsPage() {
                           </div>
                           <div className="col-span-2 flex items-end justify-end">
                             {fields.length > 1 && (
-                              <Button type="button" size="icon" variant="ghost" onClick={() => remove(idx)} aria-label="Remove line">
+                              <Button type="button" size="icon" variant="ghost" onClick={() => remove(idx)} aria-label={language === "ur" ? "سطر ہٹائیں" : "Remove line"}>
                                 <Minus className="h-4 w-4" />
                               </Button>
                             )}
@@ -612,7 +684,7 @@ export default function PaymentsPage() {
                     <div className="flex items-center justify-end gap-2">
                       <Button type="submit" disabled={totalAmount === 0 || createMutation.isPending || updateMutation.isPending}>
                         <Calculator className="h-4 w-4" />
-                        {editingId ? "Update" : t("save")}
+                        {editingId ? (language === "ur" ? "اپ ڈیٹ کریں" : "Update") : t("save")}
                       </Button>
                     </div>
                   </CardContent>
@@ -625,3 +697,4 @@ export default function PaymentsPage() {
     </div>
   );
 }
+
