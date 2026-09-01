@@ -6,6 +6,7 @@ export const translations = {
     accounts: "Accounts",
     products: "Products",
     purchases: "Purchases",
+    journal: "Journal",
     processing: "Processing",
     sales: "Sales",
     reports: "Reports",
@@ -127,6 +128,10 @@ export const translations = {
     confirmDelete: "Are you sure you want to delete this item?",
     savedSuccessfully: "Saved successfully",
     deletedSuccessfully: "Deleted successfully",
+
+    comingSoon: "Coming soon",
+    
+    // Auth
     login: "Login",
     username: "Username",
     password: "Password",
@@ -179,6 +184,7 @@ export const translations = {
     accounts: "کھاتے",
     products: "مصنوعات",
     purchases: "خریداری",
+    journal: "جرنل",
     processing: "پروسیسنگ",
     sales: "فروخت",
     reports: "رپورٹس",
@@ -298,6 +304,14 @@ export const translations = {
     noRecords: "کوئی ریکارڈ نہیں ملا",
     loading: "لوڈ ہو رہا ہے...",
     confirmDelete: "کیا آپ واقعی یہ آئٹم حذف کرنا چاہتے ہیں؟",
+
+    savedSuccessfully: "کامیابی سے محفوظ ہو گیا",
+    deletedSuccessfully: "کامیابی سے حذف ہو گیا",
+    comingSoon: "جلد آ رہا ہے",
+
+    // Auth
+    login: "لاگ ان",
+    username: "یوزر نیم",
     savedSuccessfully: "کامیابی سے محفوظ ہوگیا",
     deletedSuccessfully: "کامیابی سے حذف ہوگیا",
     login: "لاگ اِن",
