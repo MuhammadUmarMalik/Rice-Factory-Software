@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { loadModels } from "./load-models";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -16,9 +17,9 @@ async function main() {
   copyFileSync(resolve(".local/data.db"), tempDb);
   process.env.DATABASE_URL = tempDb;
 
-  const [{ sqlite }, { storage }, cashService, daybooksService, printService, pdfEngine] = await Promise.all([
+  const [{ sqlite }, storage, cashService, daybooksService, printService, pdfEngine] = await Promise.all([
     import("../server/models/db"),
-    import("../server/models/storage"),
+    loadModels(),
     import("../server/services/cash-in-hand.service"),
     import("../server/services/daybooks.service"),
     import("../server/services/print.service"),

@@ -20,6 +20,17 @@ let quitTimer = null;
 let appUrl = null;
 const logPath = path.join(app.getPath("userData"), "app.log");
 
+/** Mirrors escapeHtml() in server/views/print/base.ts. */
+function escapeHtml(value) {
+  const text = String(value ?? "");
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function appendAppLog(message) {
   const ts = new Date().toISOString();
   const line = `[${ts}] ${message}\n`;
@@ -295,8 +306,8 @@ function createWindow() {
         <head><meta charset="utf-8"><title>Mill Manager</title></head>
         <body style="font-family: Arial, sans-serif; padding: 24px; color: #0f172a;">
           <h2>App failed to load</h2>
-          <p>URL: ${url}</p>
-          <p>Error ${code}: ${description}</p>
+          <p>URL: ${escapeHtml(url)}</p>
+          <p>Error ${code}: ${escapeHtml(description)}</p>
           <p>Please close and reopen the app. If the issue persists, check if port ${port} is in use.</p>
         </body>
       </html>
