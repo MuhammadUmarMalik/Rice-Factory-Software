@@ -1,6 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { salesApi } from "@/api/sales.api";
 import { apiKeys } from "@/api/keys";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 
 export function useSales() {
   return useQuery({
@@ -18,38 +19,35 @@ export function useSale(id: number | null) {
 }
 
 export function useCreateSale() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/sales", "create"],
+    meta: scopedInvalidation,
     mutationFn: salesApi.create,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.sales });
-      qc.invalidateQueries({ queryKey: ["/api/reports/sales"] });
-      qc.invalidateQueries({ queryKey: apiKeys.products });
+      invalidateApi(invalidationGroups.sales);
     },
   });
 }
 
 export function useUpdateSale() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/sales", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: unknown }) =>
       salesApi.update(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.sales });
-      qc.invalidateQueries({ queryKey: ["/api/reports/sales"] });
-      qc.invalidateQueries({ queryKey: apiKeys.products });
+      invalidateApi(invalidationGroups.sales);
     },
   });
 }
 
 export function useDeleteSale() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/sales", "delete"],
+    meta: scopedInvalidation,
     mutationFn: salesApi.delete,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.sales });
-      qc.invalidateQueries({ queryKey: ["/api/reports/sales"] });
-      qc.invalidateQueries({ queryKey: apiKeys.products });
+      invalidateApi(invalidationGroups.sales);
     },
   });
 }

@@ -22,13 +22,13 @@ export async function setupVite(server: Server, app: Express) {
   const vite = await createViteServer({
     configFile: viteConfigPath,
     root: clientDir,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
-      },
-    },
+    // Vite routes every recoverable problem through logger.error - a syntax
+    // error in a file you just saved, an unresolved import, a failed HMR
+    // transform. Exiting here killed the API server too, so the browser's next
+    // dynamic import failed with "Failed to fetch dynamically imported module"
+    // instead of showing Vite's error overlay. Log and keep serving; a fix on
+    // disk then recovers on the next request.
+    customLogger: viteLogger,
     server: serverOptions,
     appType: "custom",
   });
@@ -37,6 +37,16 @@ export async function setupVite(server: Server, app: Express) {
 
   app.use(async (req, res, next) => {
     const url = req.originalUrl;
+
+    // Only real navigations get the SPA shell. Module and asset requests send
+    // `Accept: */*`, and answering those with index.html made a failed Vite
+    // transform look like a 200 text/html response - which helmet's nosniff
+    // then rejects as a module script, hiding the actual syntax error behind
+    // "Failed to fetch dynamically imported module". Let them 404 instead.
+    const wantsHtml = req.headers.accept?.includes("text/html") ?? false;
+    if ((req.method !== "GET" && req.method !== "HEAD") || !wantsHtml) {
+      return next();
+    }
 
     try {
       const clientTemplate = path.join(clientDir, "index.html");

@@ -33,7 +33,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useAuthStore } from "@/stores/auth.store";
 import { useLocation } from "wouter";
 import { defaultShortcutConfig, type ShortcutConfig } from "@/lib/shortcuts";
@@ -229,6 +230,8 @@ export default function SettingsPage() {
   }, [settingsData, setTheme]);
 
   const saveMutation = useMutation({
+    mutationKey: ["/api/settings", "save"],
+    meta: scopedInvalidation,
     mutationFn: async () => {
       const payload: SettingsPayload = {
         businessName,
@@ -243,9 +246,7 @@ export default function SettingsPage() {
         shortcuts,
       };
       await apiRequest("POST", "/api/settings", payload);
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/shortcuts"] });
+      invalidateApi(invalidationGroups.settings);
       return payload;
     },
     onSuccess: () => {
@@ -453,7 +454,7 @@ export default function SettingsPage() {
         title: "Import complete",
         description: `Imported ${result.totalRows ?? 0} rows using ${importMode} mode.`,
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/data/summary"] });
+      invalidateApi(invalidationGroups.settings);
       setSelectedFile(null);
       setParsedBackup(null);
       setBackupErrors([]);

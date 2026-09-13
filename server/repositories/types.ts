@@ -11,6 +11,7 @@ import type {
   InsertPurchaseCharge,
   Sale,
   InsertSale,
+  SaleItem,
 } from "../db/schema";
 
 export type PurchaseItemInput = Omit<
@@ -63,6 +64,9 @@ export interface IPurchasesRepository {
     moundBaseKg?: number
   ): Promise<Purchase | undefined>;
   deletePurchase(id: number, deletedBy?: number, options?: { force?: boolean }): Promise<boolean>;
+  getPurchaseItems(purchaseId: number): Promise<PurchaseItem[]>;
+  getPurchaseCharges(purchaseId: number): Promise<PurchaseCharge[]>;
+  getNextPurchaseInvoiceNumber(): Promise<string>;
   getNextPurchaseBillNumber(): Promise<string>;
 }
 
@@ -72,4 +76,7 @@ export interface ISalesRepository {
   createSale(sale: InsertSale, items: SaleItemInput[]): Promise<Sale>;
   updateSale(id: number, sale: Partial<InsertSale>, items: SaleItemInput[]): Promise<Sale | undefined>;
   deleteSale(id: number): Promise<boolean>;
+  getSaleItems(saleId: number): Promise<SaleItem[]>;
+  getNextSaleInvoiceNumber(): Promise<string>;
+  getNextGatePassNumber(): Promise<string>;
 }

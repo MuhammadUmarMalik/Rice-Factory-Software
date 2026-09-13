@@ -1,8 +1,8 @@
 /**
- * Simple DI container providing repositories and storage access.
- * Services can use repositories for better testability; storage remains for full compatibility.
+ * Simple DI container providing the domain repositories.
+ * Services resolve repositories from here for testability; everything else
+ * imports the model modules under ./models directly.
  */
-import { storage } from "./models/storage";
 import {
   AccountsRepositoryAdapter,
   ProductsRepositoryAdapter,
@@ -22,9 +22,6 @@ const purchasesRepo = new PurchasesRepositoryAdapter();
 const salesRepo = new SalesRepositoryAdapter();
 
 export const container = {
-  /** Full storage - use for operations not yet in repositories */
-  storage,
-
   /** Domain repositories - use for better testability and separation */
   accounts: accountsRepo as IAccountsRepository,
   products: productsRepo as IProductsRepository,

@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import { useReportDetail } from "@/components/report-detail-hook";
 import {
@@ -37,6 +38,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Link, useLocation } from "wouter";
 import type { Sale, Account, Product } from "@/types/schema";
+import { formatStock, unitToKg } from "@/lib/units";
 import { format } from "date-fns";
 
 const formatDateInput = (date: Date) => {
@@ -58,12 +60,7 @@ const isFutureDateString = (value: string) => {
   return selected.getTime() > todayStart.getTime();
 };
 
-const toQuantityKg = (quantity: number, unit: string) => {
-  if (unit === "mound") return quantity * 40;
-  if (unit === "quintal") return quantity * 100;
-  if (unit === "ton") return quantity * 1000;
-  return quantity;
-};
+const toQuantityKg = (quantity: number, unit: string) => unitToKg(quantity, unit);
 
 const parseApiErrorMessage = (error: unknown) => {
   if (!(error instanceof Error)) return "Unknown error";
@@ -196,6 +193,8 @@ export default function SalesPage() {
     products.find((p) => p.id.toString() === productId)?.unit;
 
   const createMutation = useMutation({
+    mutationKey: ["/api/sales", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: SaleFormData) =>
       apiRequest("POST", "/api/sales", {
         ...data,
@@ -218,12 +217,7 @@ export default function SalesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/receipts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
+      invalidateApi(invalidationGroups.sales);
       setIsDialogOpen(false);
       form.reset();
       setEditingId(null);
@@ -232,6 +226,8 @@ export default function SalesPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/sales", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: SaleFormData }) =>
       apiRequest("PATCH", `/api/sales/${id}`, {
         ...data,
@@ -254,12 +250,7 @@ export default function SalesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/receipts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
+      invalidateApi(invalidationGroups.sales);
       setIsDialogOpen(false);
       form.reset();
       setEditingId(null);
@@ -268,14 +259,11 @@ export default function SalesPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/sales", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/sales/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/reports/sales"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/receipts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
+      invalidateApi(invalidationGroups.sales);
       toast({ title: language === "ur" ? "Sale deleted" : "Sale deleted" });
     },
     onError: (error: Error) => {
@@ -671,7 +659,7 @@ export default function SalesPage() {
                                 <SelectContent>
                                   {products.map((p) => (
                                     <SelectItem key={p.id} value={p.id.toString()}>
-                                      {p.name} ({p.unit}) — {(parseFloat(p.currentStock ?? "0") || 0).toLocaleString()} {p.unit} in stock
+                                      {p.name} ({p.unit}) — {formatStock(p.currentStock, p.unit)} in stock
                                     </SelectItem>
                                   ))}
                                 </SelectContent>

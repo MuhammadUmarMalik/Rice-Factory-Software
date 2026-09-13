@@ -1,6 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { purchasesApi } from "@/api/purchases.api";
 import { apiKeys } from "@/api/keys";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 
 export function usePurchases() {
   return useQuery({
@@ -27,45 +28,38 @@ export function useNextBillNumber(enabled = true) {
 }
 
 export function useCreatePurchase() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/purchases", "create"],
+    meta: scopedInvalidation,
     mutationFn: purchasesApi.create,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.purchases });
-      qc.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
-      qc.invalidateQueries({ queryKey: apiKeys.products });
-      qc.invalidateQueries({ queryKey: ["/api/cash/summary"] });
-      qc.invalidateQueries({ queryKey: ["/api/cash/payments"] });
-      qc.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
+      invalidateApi(invalidationGroups.purchases);
     },
   });
 }
 
 export function useUpdatePurchase() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/purchases", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: unknown }) =>
       purchasesApi.update(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.purchases });
-      qc.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
-      qc.invalidateQueries({ queryKey: apiKeys.products });
-      qc.invalidateQueries({ queryKey: ["/api/cash/summary"] });
-      qc.invalidateQueries({ queryKey: ["/api/cash/payments"] });
-      qc.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
+      invalidateApi(invalidationGroups.purchases);
     },
   });
 }
 
 export function useDeletePurchase() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/purchases", "delete"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, force }: { id: number; force?: boolean }) =>
       purchasesApi.delete(id, force),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.purchases });
-      qc.invalidateQueries({ queryKey: ["/api/reports/purchases"] });
-      qc.invalidateQueries({ queryKey: apiKeys.products });
+      // Deleting also releases the stock and supplier balance the purchase took,
+      // so it invalidates the same group a create does.
+      invalidateApi(invalidationGroups.purchases);
     },
   });
 }
