@@ -23,6 +23,7 @@ const Header = lazy(() =>
 const ShortcutManager = lazy(() =>
   import("@/components/shortcut-manager").then((mod) => ({ default: mod.ShortcutManager })),
 );
+const ForcePasswordChange = lazy(() => import("@/components/force-password-change"));
 
 // Route-level code splitting keeps authenticated pages out of the login bundle.
 function withRoles(
@@ -199,6 +200,10 @@ export default function AuthenticatedApp() {
     if (!user && location !== "/login") setLocation("/login");
   }, [authChecked, user, location, setLocation]);
 
+  // Accounts still on the shipped default password get one screen and nothing
+  // else — no sidebar, no router — until the password update clears the flag.
+  const mustChangePassword = authChecked && Boolean(user?.mustChangePassword);
+
   const sidebarStyle = useMemo(
     () => ({
       "--sidebar-width": "16rem",
@@ -223,6 +228,11 @@ export default function AuthenticatedApp() {
             >
               Skip to content
             </a>
+            {mustChangePassword ? (
+              <Suspense fallback={<RouteSkeleton />}>
+                <ForcePasswordChange />
+              </Suspense>
+            ) : (
             <SidebarProvider style={sidebarStyle as React.CSSProperties}>
               <Shell>
                 <Suspense
@@ -253,7 +263,8 @@ export default function AuthenticatedApp() {
                 </div>
               </Shell>
             </SidebarProvider>
-            {user ? (
+            )}
+            {user && !mustChangePassword ? (
               <Suspense fallback={null}>
                 <ShortcutManager />
               </Suspense>

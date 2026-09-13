@@ -2,7 +2,15 @@ import { create } from "zustand";
 
 type AuthState = {
   token: string | null;
-  user: { id: number; username: string; fullName: string; role: string } | null;
+  user: {
+    id: number;
+    username: string;
+    fullName: string;
+    role: string;
+    // Set for accounts still on the shipped default password; AuthenticatedApp
+    // shows the forced change-password view instead of the app shell.
+    mustChangePassword?: boolean;
+  } | null;
 };
 
 type AuthActions = {

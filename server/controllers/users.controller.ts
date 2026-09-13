@@ -1,7 +1,8 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { storage } from "../models/storage";
+import * as usersModel from "../models/users.model";
 import { asyncHandler, getUserId, hashPassword } from "../utils/auth";
+import { usesFallbackAdminPassword } from "../utils/bootstrap";
 
 const usernameSchema = z
   .string()
@@ -35,18 +36,26 @@ function isUniqueViolation(err: any): boolean {
   return code === "SQLITE_CONSTRAINT_UNIQUE" || /UNIQUE constraint failed/i.test(message);
 }
 
-function sanitizeUser(user: { id: number; username: string; fullName: string; role: string; isActive?: boolean }) {
+function sanitizeUser(user: {
+  id: number;
+  username: string;
+  fullName: string;
+  role: string;
+  isActive?: boolean;
+  mustChangePassword?: boolean;
+}) {
   return {
     id: user.id,
     username: user.username,
     fullName: user.fullName,
     role: user.role,
     isActive: user.isActive,
+    mustChangePassword: Boolean(user.mustChangePassword),
   };
 }
 
 export const listUsers = asyncHandler(async (_req: Request, res: Response) => {
-  const users = await storage.getUsers();
+  const users = await usersModel.getUsers();
   return res.json(users.map((u) => sanitizeUser(u)));
 });
 
@@ -56,13 +65,13 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
     return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid user payload" });
   }
 
-  const existing = await storage.getUserByUsername(parsed.data.username);
+  const existing = await usersModel.getUserByUsername(parsed.data.username);
   if (existing) {
     return res.status(409).json({ error: "Username is already taken" });
   }
 
   try {
-    const created = await storage.createUser({
+    const created = await usersModel.createUser({
       username: parsed.data.username,
       password: hashPassword(parsed.data.password),
       fullName: parsed.data.fullName,
@@ -91,7 +100,13 @@ export const updateUser = asyncHandler(async (req: Request, res: Response) => {
     return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid user payload" });
   }
 
-  const target = await storage.getUser(userId);
+  // Otherwise the forced rotation could be "satisfied" by re-entering the
+  // shipped default, which is long enough to pass the length check.
+  if (parsed.data.password && usesFallbackAdminPassword(parsed.data.password)) {
+    return res.status(400).json({ error: "Choose a password other than the default one" });
+  }
+
+  const target = await usersModel.getUser(userId);
   if (!target) return res.status(404).json({ error: "User not found" });
 
   const losesAdmin =
@@ -103,7 +118,7 @@ export const updateUser = asyncHandler(async (req: Request, res: Response) => {
     if (getUserId(req) === userId) {
       return res.status(400).json({ error: "You cannot remove your own administrator access" });
     }
-    const allUsers = await storage.getUsers();
+    const allUsers = await usersModel.getUsers();
     const otherActiveAdmins = allUsers.filter(
       (u) => u.id !== userId && u.role === "admin" && u.isActive,
     );
@@ -115,9 +130,12 @@ export const updateUser = asyncHandler(async (req: Request, res: Response) => {
   const updates: Record<string, any> = { ...parsed.data };
   if (updates.password) {
     updates.password = hashPassword(updates.password);
+    // Any password write satisfies a forced rotation — this is the only way the
+    // flag is cleared, and it is what releases the client's change-password gate.
+    updates.mustChangePassword = false;
   }
 
-  const updated = await storage.updateUser(userId, updates);
+  const updated = await usersModel.updateUser(userId, updates);
   if (!updated) return res.status(404).json({ error: "User not found" });
 
   return res.json({ user: sanitizeUser(updated) });

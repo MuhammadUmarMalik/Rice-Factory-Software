@@ -27,7 +27,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useAuthStore } from "@/stores/auth.store";
 
 type UserRow = {
@@ -75,6 +76,8 @@ export default function UsersAdminPage() {
   });
 
   const createMutation = useMutation({
+    mutationKey: ["/api/users", "create"],
+    meta: scopedInvalidation,
     mutationFn: async (payload: UserFormData) =>
       apiRequest("POST", "/api/users", {
         username: payload.username,
@@ -84,7 +87,7 @@ export default function UsersAdminPage() {
         isActive: payload.isActive === "active",
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      await invalidateApi(invalidationGroups.users);
       setOpen(false);
       form.reset();
       toast({ title: "User created" });
@@ -94,6 +97,8 @@ export default function UsersAdminPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/users", "update"],
+    meta: scopedInvalidation,
     mutationFn: async (payload: { id: number; data: UserFormData }) => {
       const body: Record<string, any> = {
         fullName: payload.data.fullName,
@@ -104,7 +109,7 @@ export default function UsersAdminPage() {
       return apiRequest("PATCH", `/api/users/${payload.id}`, body);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      await invalidateApi(invalidationGroups.users);
       setOpen(false);
       setEditingUser(null);
       form.reset();
