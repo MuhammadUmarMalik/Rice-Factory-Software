@@ -1,4 +1,4 @@
-import { storage } from "../models/storage";
+import * as reportsModel from "../models/reports.model";
 import * as cashService from "./cash-in-hand.service";
 
 export async function getStockReport(params: {
@@ -8,15 +8,15 @@ export async function getStockReport(params: {
   category?: string;
   unit?: string;
 }) {
-  return storage.getStockReport(params);
+  return reportsModel.getStockReport(params);
 }
 
 export async function getTrialBalance(asOfDate?: Date) {
-  return storage.getTrialBalance(asOfDate);
+  return reportsModel.getTrialBalance(asOfDate);
 }
 
 export async function getProfitLoss(startDate?: Date, endDate?: Date) {
-  return storage.getProfitLoss(startDate, endDate);
+  return reportsModel.getProfitLoss(startDate, endDate);
 }
 
 export async function getPurchaseReport(params: {
@@ -26,7 +26,7 @@ export async function getPurchaseReport(params: {
   productId?: number;
   paymentStatus?: any;
 }) {
-  return storage.getPurchaseReport(params);
+  return reportsModel.getPurchaseReport(params);
 }
 
 export async function getSalesReport(params: {
@@ -36,31 +36,31 @@ export async function getSalesReport(params: {
   productId?: number;
   paymentStatus?: any;
 }) {
-  return storage.getSalesReport(params);
+  return reportsModel.getSalesReport(params);
 }
 
 export async function getPeriodPurchases(fromDate: Date, toDate: Date, supplierId?: number, groupBy?: any) {
-  return storage.getPeriodPurchases(fromDate, toDate, supplierId, groupBy);
+  return reportsModel.getPeriodPurchases(fromDate, toDate, supplierId, groupBy);
 }
 
 export async function getPeriodSales(fromDate: Date, toDate: Date, customerId?: number, groupBy?: any) {
-  return storage.getPeriodSales(fromDate, toDate, customerId, groupBy);
+  return reportsModel.getPeriodSales(fromDate, toDate, customerId, groupBy);
 }
 
 export async function getGrossProfit(fromDate: Date, toDate: Date) {
-  return storage.getGrossProfit(fromDate, toDate);
+  return reportsModel.getGrossProfit(fromDate, toDate);
 }
 
 export async function getDayBook(date: Date) {
-  return storage.getDayBook(date);
+  return reportsModel.getDayBook(date);
 }
 
 export async function getOutstandingCustomers(asOfDate: Date, customerId?: number) {
-  return storage.getOutstandingCustomers(asOfDate, customerId);
+  return reportsModel.getOutstandingCustomers(asOfDate, customerId);
 }
 
 export async function getOutstandingSuppliers(asOfDate: Date, supplierId?: number) {
-  return storage.getOutstandingSuppliers(asOfDate, supplierId);
+  return reportsModel.getOutstandingSuppliers(asOfDate, supplierId);
 }
 
 export async function getBardanaReport(params: {
@@ -68,7 +68,7 @@ export async function getBardanaReport(params: {
   toDate?: Date;
   supplierId?: number;
 }) {
-  return storage.getBardanaReport(params);
+  return reportsModel.getBardanaReport(params);
 }
 
 export async function getLessReport(params: {
@@ -76,11 +76,11 @@ export async function getLessReport(params: {
   toDate?: Date;
   supplierId?: number;
 }) {
-  return storage.getLessReport(params);
+  return reportsModel.getLessReport(params);
 }
 
 export async function getReportDetail(type: string, id: number) {
-  const detail = await storage.getReportDetail(type, id);
+  const detail = await reportsModel.getReportDetail(type, id);
   if (type.toLowerCase() === "sale" && detail?.sale) {
     const cashReceiptId = (detail.sale as { cashReceiptId?: number }).cashReceiptId;
     if (cashReceiptId) {

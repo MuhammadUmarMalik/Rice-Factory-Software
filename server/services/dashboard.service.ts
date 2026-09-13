@@ -1,6 +1,14 @@
 import { format } from "date-fns";
-import { storage } from "../models/storage";
+import * as accountsModel from "../models/accounts.model";
+import * as expensesModel from "../models/expenses.model";
+import * as jvModel from "../models/journal-vouchers.model";
+import * as ledgerModel from "../models/ledger.model";
+import * as productsModel from "../models/products.model";
+import * as purchasesModel from "../models/purchases.model";
+import * as reportsModel from "../models/reports.model";
+import * as salesModel from "../models/sales.model";
 import { isBankAccount, isCashAccount, isCashOrBankAccount } from "../utils/cash-accounts";
+import { sumAmounts, toDecimal } from "../utils/money";
 
 type DashboardRange = { fromDate: Date; toDate: Date };
 type DashboardSummaryScope = "core" | "details" | "full";
@@ -56,6 +64,8 @@ type DashboardSummaryDetails = {
 
 type DashboardSummaryFull = DashboardSummaryCore & DashboardSummaryDetails;
 
+// Single-value coercion only. Anything that adds amounts together goes through
+// sumAmounts() so the arithmetic stays exact instead of accumulating float drift.
 function parseAmount(value: string | number | null | undefined) {
   const num = typeof value === "number" ? value : parseFloat(value || "0");
   return Number.isFinite(num) ? num : 0;
@@ -200,9 +210,9 @@ export async function getDashboardSummary(
   const includeCore = scope === "full" || scope === "core";
   const includeDetails = scope === "full" || scope === "details";
 
-  let stockReport: Awaited<ReturnType<typeof storage.getStockReport>> | null = null;
+  let stockReport: Awaited<ReturnType<typeof reportsModel.getStockReport>> | null = null;
   try {
-    stockReport = includeCore || includeDetails ? await storage.getStockReport({ fromDate, toDate }) : null;
+    stockReport = includeCore || includeDetails ? await reportsModel.getStockReport({ fromDate, toDate }) : null;
   } catch (err) {
     console.error("[dashboard summary] getStockReport failed:", err instanceof Error ? err.message : err);
   }
@@ -214,35 +224,36 @@ export async function getDashboardSummary(
     const asOfDate = toDate ?? new Date();
     const [profitLoss, trialBalance, purchasesReport, salesReport, accounts, outstandingCustomers, outstandingSuppliers] =
       await Promise.all([
-        storage.getProfitLoss(fromDate, toDate),
-        storage.getTrialBalance(asOfDate),
-        storage.getPurchaseReport({ fromDate, toDate }),
-        storage.getSalesReport({ fromDate, toDate }),
-        storage.getAccounts(),
-        storage.getOutstandingCustomers(asOfDate),
-        storage.getOutstandingSuppliers(asOfDate),
+        reportsModel.getProfitLoss(fromDate, toDate),
+        reportsModel.getTrialBalance(asOfDate),
+        reportsModel.getPurchaseReport({ fromDate, toDate }),
+        reportsModel.getSalesReport({ fromDate, toDate }),
+        accountsModel.getAccounts(),
+        reportsModel.getOutstandingCustomers(asOfDate),
+        reportsModel.getOutstandingSuppliers(asOfDate),
       ]);
 
     const cashBankAccounts = accounts.filter(isCashOrBankAccount);
     const cashAccountIds = new Set(cashBankAccounts.filter(isCashAccount).map((a) => a.id));
     const bankAccountIds = new Set(cashBankAccounts.filter(isBankAccount).map((a) => a.id));
 
-    const ledgerToDate = await storage.getLedgerEntries(undefined, undefined, undefined, toDate ?? undefined);
-    let cashBalance = cashBankAccounts
+    const ledgerToDate = await ledgerModel.getLedgerEntries(undefined, undefined, undefined, toDate ?? undefined);
+    // Opening balances plus every signed ledger movement, summed exactly and
+    // converted to a number once at the end for the response shape.
+    const cashAmounts: unknown[] = cashBankAccounts
       .filter((a) => cashAccountIds.has(a.id))
-      .reduce((sum, a) => sum + parseAmount(a.openingBalance || "0"), 0);
-    let bankBalance = cashBankAccounts
+      .map((a) => a.openingBalance || "0");
+    const bankAmounts: unknown[] = cashBankAccounts
       .filter((a) => bankAccountIds.has(a.id))
-      .reduce((sum, a) => sum + parseAmount(a.openingBalance || "0"), 0);
+      .map((a) => a.openingBalance || "0");
     for (const entry of ledgerToDate) {
-      const amount = parseAmount(entry.amount);
-      if (cashAccountIds.has(entry.accountId)) {
-        cashBalance += entry.transactionType === "debit" ? amount : -amount;
-      }
-      if (bankAccountIds.has(entry.accountId)) {
-        bankBalance += entry.transactionType === "debit" ? amount : -amount;
-      }
+      const amount = toDecimal(entry.amount);
+      const signed = entry.transactionType === "debit" ? amount : amount.negated();
+      if (cashAccountIds.has(entry.accountId)) cashAmounts.push(signed);
+      if (bankAccountIds.has(entry.accountId)) bankAmounts.push(signed);
     }
+    const cashBalance = Number(sumAmounts(cashAmounts));
+    const bankBalance = Number(sumAmounts(bankAmounts));
 
     const pt = purchasesReport?.totals;
     const st = salesReport?.totals;
@@ -281,34 +292,36 @@ export async function getDashboardSummary(
   if (includeDetails) {
     try {
     const [products, purchases, sales] = await Promise.all([
-      storage.getProducts(),
-      storage.getPurchases(),
-      storage.getSales(),
+      productsModel.getProducts(),
+      purchasesModel.getPurchases(),
+      salesModel.getSales(),
     ]);
 
     let dayBookDate = toDate ?? new Date();
-    let dayBook = await storage.getDayBook(dayBookDate);
+    let dayBook = await reportsModel.getDayBook(dayBookDate);
 
     // If dashboard is unfiltered and today's day book is empty, fall back to the latest ledger date.
     if (!hasDateFilter && (dayBook.rows?.length ?? 0) === 0) {
-      const allLedger = await storage.getLedgerEntries();
+      const allLedger = await ledgerModel.getLedgerEntries();
       const latestEntry = allLedger.at(-1);
       if (latestEntry?.entryDate) {
         const latestDate = new Date(latestEntry.entryDate as unknown as string | number | Date);
         if (!Number.isNaN(latestDate.getTime())) {
           dayBookDate = latestDate;
-          dayBook = await storage.getDayBook(dayBookDate);
+          dayBook = await reportsModel.getDayBook(dayBookDate);
         }
       }
     }
 
-    const charges = {
-      freight: 0,
-      loading: 0,
-      marketFee: 0,
-      brokerage: 0,
-      bardana: 0,
-      processing: 0,
+    // Collect the raw amounts per bucket and add them once with sumAmounts();
+    // these buckets take hundreds of charge lines, where += on floats drifts.
+    const chargeAmounts: Record<keyof DashboardSummaryDetails["charges"], unknown[]> = {
+      freight: [],
+      loading: [],
+      marketFee: [],
+      brokerage: [],
+      bardana: [],
+      processing: [],
     };
 
     const filteredPurchases = purchases.filter((p) =>
@@ -322,55 +335,70 @@ export async function getDashboardSummary(
     const purchaseChargeLists = await Promise.all(
       filteredPurchases.map(async (p) => ({
         purchase: p,
-        charges: await storage.getPurchaseCharges(p.id),
+        charges: await purchasesModel.getPurchaseCharges(p.id),
       })),
     );
 
     for (const { purchase, charges: lines } of purchaseChargeLists) {
       for (const charge of lines) {
-        const amount = parseAmount(charge.amount);
-        if (amount <= 0) continue;
+        const amount = toDecimal(charge.amount);
+        if (amount.lte(0)) continue;
         const type = normalizePurchaseChargeType(charge.type);
 
-        if (type === "freight") charges.freight += amount;
-        if (type === "loading_filling" || type === "weight") charges.loading += amount;
-        if (type === "market_fee") charges.marketFee += amount;
-        if (type === "brokerage" || type === "commission") charges.brokerage += amount;
-        if (type === "bardana") charges.bardana += amount;
-        if (type === "accountant_clerk") charges.processing += amount;
+        if (type === "freight") chargeAmounts.freight.push(amount);
+        if (type === "loading_filling" || type === "weight") chargeAmounts.loading.push(amount);
+        if (type === "market_fee") chargeAmounts.marketFee.push(amount);
+        if (type === "brokerage" || type === "commission") chargeAmounts.brokerage.push(amount);
+        if (type === "bardana") chargeAmounts.bardana.push(amount);
+        if (type === "accountant_clerk") chargeAmounts.processing.push(amount);
       }
 
       // Broker commission also exists as a normalized top-level purchase field.
-      charges.brokerage += parseAmount(purchase.brokerCommissionAmount);
+      chargeAmounts.brokerage.push(purchase.brokerCommissionAmount);
     }
 
     // Sales-side charge fields.
     for (const sale of filteredSales) {
-      charges.loading += parseAmount(sale.loadingCharges) + parseAmount(sale.weighingCharges);
-      charges.processing += parseAmount(sale.rentCharges);
+      chargeAmounts.loading.push(sale.loadingCharges, sale.weighingCharges);
+      chargeAmounts.processing.push(sale.rentCharges);
     }
 
-    const stockTotals = {
-      paddy: 0,
-      rice: 0,
-      broken: 0,
-      bardana: 0,
+    const charges = {
+      freight: Number(sumAmounts(chargeAmounts.freight)),
+      loading: Number(sumAmounts(chargeAmounts.loading)),
+      marketFee: Number(sumAmounts(chargeAmounts.marketFee)),
+      brokerage: Number(sumAmounts(chargeAmounts.brokerage)),
+      bardana: Number(sumAmounts(chargeAmounts.bardana)),
+      processing: Number(sumAmounts(chargeAmounts.processing)),
+    };
+
+    const stockQuantities: Record<"paddy" | "rice" | "broken" | "bardana", unknown[]> = {
+      paddy: [],
+      rice: [],
+      broken: [],
+      bardana: [],
     };
     for (const product of products) {
-      const qty = parseAmount(product.currentStock || "0");
+      const qty = product.currentStock || "0";
       const category = classifyProduct(product.name || "");
-      if (category === "paddy") stockTotals.paddy += qty;
-      else if (category === "broken") stockTotals.broken += qty;
-      else if (category === "bardana") stockTotals.bardana += qty;
-      else stockTotals.rice += qty;
+      if (category === "paddy") stockQuantities.paddy.push(qty);
+      else if (category === "broken") stockQuantities.broken.push(qty);
+      else if (category === "bardana") stockQuantities.bardana.push(qty);
+      else stockQuantities.rice.push(qty);
     }
+    const stockTotals = {
+      paddy: Number(sumAmounts(stockQuantities.paddy)),
+      rice: Number(sumAmounts(stockQuantities.rice)),
+      broken: Number(sumAmounts(stockQuantities.broken)),
+      bardana: Number(sumAmounts(stockQuantities.bardana)),
+    };
 
     const bardanaRows = (stockReport?.rows || []).filter(
       (row) => classifyProduct(row.itemName || row.itemName) === "bardana",
     );
-    const bardanaIn = bardanaRows.reduce((sum, r) => sum + parseAmount(r.inQty), 0);
-    const bardanaOut = bardanaRows.reduce((sum, r) => sum + parseAmount(r.outQty), 0);
-    const bardanaBalance = bardanaRows.reduce((sum, r) => sum + parseAmount(r.closingQty), 0);
+    const bardanaIn = Number(sumAmounts(bardanaRows.map((r) => r.inQty)));
+    const bardanaOut = Number(sumAmounts(bardanaRows.map((r) => r.outQty)));
+    const bardanaBalance = Number(sumAmounts(bardanaRows.map((r) => r.closingQty)));
 
     const lowStock = products
       .filter((p) => parseAmount(p.currentStock || "0") <= parseAmount(p.reorderLevel || process.env.LOW_STOCK_THRESHOLD || "10"))
@@ -433,9 +461,9 @@ export async function getDashboardCharts(params: Partial<DashboardRange>) {
   const fromDate = resolved.fromDate ?? new Date(1980, 0, 1);
   const toDate = resolved.toDate ?? endOfDay(now);
   const [purchasePeriods, salesPeriods, stockReport] = await Promise.all([
-    storage.getPeriodPurchases(fromDate, toDate, undefined, "month"),
-    storage.getPeriodSales(fromDate, toDate, undefined, "month"),
-    storage.getStockReport({ fromDate, toDate }),
+    reportsModel.getPeriodPurchases(fromDate, toDate, undefined, "month"),
+    reportsModel.getPeriodSales(fromDate, toDate, undefined, "month"),
+    reportsModel.getStockReport({ fromDate, toDate }),
   ]);
 
   const byMonth = new Map<string, { label: string; periodStart: Date; purchases: number; sales: number }>();
@@ -481,17 +509,17 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
   const asOfDate = toDate ?? new Date();
   const alerts: Array<{ key: string; severity: "info" | "warning" | "critical"; message: string }> = [];
 
-  let trialBalance: Awaited<ReturnType<typeof storage.getTrialBalance>> | null = null;
-  let products: Awaited<ReturnType<typeof storage.getProducts>> = [];
-  let outstandingCustomers: Awaited<ReturnType<typeof storage.getOutstandingCustomers>> | null = null;
-  let outstandingSuppliers: Awaited<ReturnType<typeof storage.getOutstandingSuppliers>> | null = null;
+  let trialBalance: Awaited<ReturnType<typeof reportsModel.getTrialBalance>> | null = null;
+  let products: Awaited<ReturnType<typeof productsModel.getProducts>> = [];
+  let outstandingCustomers: Awaited<ReturnType<typeof reportsModel.getOutstandingCustomers>> | null = null;
+  let outstandingSuppliers: Awaited<ReturnType<typeof reportsModel.getOutstandingSuppliers>> | null = null;
 
   try {
     [trialBalance, products, outstandingCustomers, outstandingSuppliers] = await Promise.all([
-      storage.getTrialBalance(asOfDate),
-      storage.getProducts(),
-      storage.getOutstandingCustomers(asOfDate),
-      storage.getOutstandingSuppliers(asOfDate),
+      reportsModel.getTrialBalance(asOfDate),
+      productsModel.getProducts(),
+      reportsModel.getOutstandingCustomers(asOfDate),
+      reportsModel.getOutstandingSuppliers(asOfDate),
     ]);
   } catch (err) {
     console.error("[dashboard alerts] failed to load base data:", err instanceof Error ? err.message : err);
@@ -537,11 +565,11 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
   let duplicateCount = 0;
   try {
     const [purchases, sales, receipts, journals, expenses] = await Promise.all([
-      storage.getPurchases(),
-      storage.getSales(),
-      storage.getReceiptVouchers(),
-      storage.getJournalVouchers(),
-      storage.getExpenses(),
+      purchasesModel.getPurchases(),
+      salesModel.getSales(),
+      ledgerModel.getReceiptVouchers(),
+      jvModel.getJournalVouchers(),
+      expensesModel.getExpenses(),
     ]);
     const duplicates = (items: Array<{ value?: string | null }>) => {
       const seen = new Set<string>();
@@ -586,6 +614,6 @@ export async function getDashboardStats() {
 }
 
 export async function getRecentActivity() {
-  const dayBook = await storage.getDayBook(new Date());
+  const dayBook = await reportsModel.getDayBook(new Date());
   return dayBook.rows.slice(0, 10);
 }

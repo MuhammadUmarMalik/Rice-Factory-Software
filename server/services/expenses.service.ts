@@ -1,17 +1,17 @@
-import { storage } from "../models/storage";
+import * as expensesModel from "../models/expenses.model";
 
 export async function listExpenses() {
-  return storage.getExpenses();
+  return expensesModel.getExpenses();
 }
 
 export async function createExpense(data: any, meta?: { userId?: number; role?: string }) {
-  return storage.createExpense(data, meta);
+  return expensesModel.createExpense(data, meta);
 }
 
 export async function updateExpense(id: number, data: any, meta?: { userId?: number; role?: string }) {
-  return storage.updateExpense(id, data, meta);
+  return expensesModel.updateExpense(id, data, meta);
 }
 
 export async function deleteExpense(id: number) {
-  return storage.deleteExpense(id);
+  return expensesModel.deleteExpense(id);
 }

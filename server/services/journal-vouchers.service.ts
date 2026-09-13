@@ -1,4 +1,5 @@
-import { storage } from "../models/storage";
+import * as accountsModel from "../models/accounts.model";
+import * as jvModel from "../models/journal-vouchers.model";
 import * as cashService from "./cash-in-hand.service";
 
 function buildJournalEntries(body: any) {
@@ -10,8 +11,8 @@ function buildJournalEntries(body: any) {
 
 export async function listJournalVouchers() {
   const [vouchers, accountsList] = await Promise.all([
-    storage.getJournalVouchers(),
-    storage.getAccounts(),
+    jvModel.getJournalVouchers(),
+    accountsModel.getAccounts(),
   ]);
   const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
 
@@ -27,16 +28,16 @@ export async function listJournalVouchers() {
 }
 
 export async function getNextJournalNumber() {
-  return storage.getNextJournalVoucherNumber();
+  return jvModel.getNextJournalVoucherNumber();
 }
 
 export async function getJournalVoucher(id: number) {
-  return storage.getJournalVoucher(id);
+  return jvModel.getJournalVoucher(id);
 }
 
 export async function createJournalVoucher(data: any) {
   const { debitAccountId, debitAmount, creditAccountId, creditAmount, ...header } = data;
-  const voucher = await storage.createJournalVoucher(header, buildJournalEntries(data));
+  const voucher = await jvModel.createJournalVoucher(header, buildJournalEntries(data));
   if (voucher.status === "approved") {
     try {
       await cashService.syncCashFromJournalVoucher(voucher.id);
@@ -49,11 +50,11 @@ export async function createJournalVoucher(data: any) {
 
 export async function updateJournalVoucher(id: number, data: any) {
   const { debitAccountId, debitAmount, creditAccountId, creditAmount, ...header } = data;
-  return storage.updateJournalVoucher(id, header, buildJournalEntries(data));
+  return jvModel.updateJournalVoucher(id, header, buildJournalEntries(data));
 }
 
 export async function approveJournalVoucher(id: number, approverId?: number) {
-  const voucher = await storage.approveJournalVoucher(id, approverId);
+  const voucher = await jvModel.approveJournalVoucher(id, approverId);
   if (voucher) {
     try {
       await cashService.syncCashFromJournalVoucher(id);
@@ -65,5 +66,5 @@ export async function approveJournalVoucher(id: number, approverId?: number) {
 }
 
 export async function deleteJournalVoucher(id: number) {
-  return storage.deleteJournalVoucher(id);
+  return jvModel.deleteJournalVoucher(id);
 }

@@ -27,8 +27,15 @@ export async function closePdfBrowser(): Promise<void> {
 async function getBrowser() {
   if (!browserPromise) {
     const { chromium } = await import("playwright");
+    /*
+     * Chromium's sandbox stays on by default. It used to be disabled
+     * unconditionally, which also gave up the sandbox on the desktop/Electron
+     * build, where it works fine. Only containerised or root deployments that
+     * genuinely cannot start the sandbox should opt out via PDF_DISABLE_SANDBOX=1.
+     */
+    const noSandbox = process.env.PDF_DISABLE_SANDBOX === "1";
     browserPromise = chromium.launch({
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      args: noSandbox ? ["--no-sandbox", "--disable-setuid-sandbox"] : [],
     });
   }
   return browserPromise;

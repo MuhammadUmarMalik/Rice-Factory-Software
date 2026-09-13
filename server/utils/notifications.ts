@@ -1,4 +1,6 @@
-import { storage } from "../models/storage";
+import * as notificationsModel from "../models/notifications.model";
+import * as productsModel from "../models/products.model";
+import * as usersModel from "../models/users.model";
 
 type NotificationInput = {
   title: string;
@@ -10,12 +12,12 @@ type NotificationInput = {
 };
 
 export async function notifyUsers(input: NotificationInput) {
-  const users = await storage.getUsers();
+  const users = await usersModel.getUsers();
   const roleFilter = input.roles?.map((r) => r.toLowerCase());
   const targets = users.filter((u) => u.isActive && (!roleFilter || roleFilter.includes(u.role.toLowerCase())));
   await Promise.all(
     targets.map((u) =>
-      storage.createNotification({
+      notificationsModel.createNotification({
         userId: u.id,
         title: input.title,
         message: input.message,
@@ -29,7 +31,7 @@ export async function notifyUsers(input: NotificationInput) {
 }
 
 export async function notifyLowStock(productId: number) {
-  const product = await storage.getProduct(productId);
+  const product = await productsModel.getProduct(productId);
   if (!product) return;
   const threshold = Number(product.reorderLevel ?? process.env.LOW_STOCK_THRESHOLD ?? "10");
   const current = Number(product.currentStock || "0");
