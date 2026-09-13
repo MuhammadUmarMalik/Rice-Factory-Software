@@ -4,7 +4,8 @@ import { Plus, Eye, Edit, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useLanguage } from "@/contexts/language-context";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -132,6 +133,8 @@ export default function ExpensesPage() {
   };
 
   const createMutation = useMutation({
+    mutationKey: ["/api/expenses", "create"],
+    meta: scopedInvalidation,
     mutationFn: async (data: ExpenseFormData) => {
       const expenseAccountId = await ensureExpenseCategoryId(data.expenseAccountId, data.newExpenseName);
 
@@ -144,9 +147,7 @@ export default function ExpensesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      invalidateApi(invalidationGroups.expenses);
       setIsDialogOpen(false);
       setEditingExpense(null);
       resetForm();
@@ -168,6 +169,8 @@ export default function ExpensesPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/expenses", "update"],
+    meta: scopedInvalidation,
     mutationFn: async (data: ExpenseFormData & { id: number }) => {
       const expenseAccountId = await ensureExpenseCategoryId(data.expenseAccountId, data.newExpenseName);
       return apiRequest("PATCH", `/api/expenses/${data.id}`, {
@@ -179,9 +182,7 @@ export default function ExpensesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      invalidateApi(invalidationGroups.expenses);
       setIsDialogOpen(false);
       setEditingExpense(null);
       resetForm();
@@ -203,10 +204,11 @@ export default function ExpensesPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/expenses", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/expenses/${id}`),
     onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      invalidateApi(invalidationGroups.expenses);
       if (viewingExpense?.id === id) {
         setViewingExpense(null);
       }
@@ -376,8 +378,7 @@ export default function ExpensesPage() {
         return;
       }
       setNewCategoryName("");
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      invalidateApi(invalidationGroups.accounts);
       form.setValue("expenseAccountId", String(created.id), { shouldValidate: true });
       toast({ title: "Expense category created" });
     } catch (error: any) {
@@ -399,8 +400,7 @@ export default function ExpensesPage() {
         await createExpenseCategory(name);
       }
       setBulkCategoryInput("");
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      invalidateApi(invalidationGroups.accounts);
       toast({ title: `${names.length} category(s) processed` });
     } catch (error: any) {
       toast({ title: "Failed to create categories", description: String(error?.message || error), variant: "destructive" });

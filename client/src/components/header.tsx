@@ -16,7 +16,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 
 type NotificationRow = {
   id: number;
@@ -43,16 +44,20 @@ export function Header({ title }: HeaderProps) {
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 
   const markReadMutation = useMutation({
+    mutationKey: ["/api/notifications", "mark-read"],
+    meta: scopedInvalidation,
     mutationFn: async (id: number) => apiRequest("PATCH", `/api/notifications/${id}/read`),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+      await invalidateApi(invalidationGroups.notifications);
     },
   });
 
   const markAllMutation = useMutation({
+    mutationKey: ["/api/notifications", "mark-all-read"],
+    meta: scopedInvalidation,
     mutationFn: async () => apiRequest("POST", "/api/notifications/read-all"),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
+      await invalidateApi(invalidationGroups.notifications);
     },
   });
 

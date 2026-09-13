@@ -1,6 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { productsApi } from "@/api/products.api";
 import { apiKeys } from "@/api/keys";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 
 export function useProducts() {
   return useQuery({
@@ -18,32 +19,35 @@ export function useProduct(id: number | null) {
 }
 
 export function useCreateProduct() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/products", "create"],
+    meta: scopedInvalidation,
     mutationFn: productsApi.create,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.products });
+      invalidateApi(invalidationGroups.products);
     },
   });
 }
 
 export function useUpdateProduct() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/products", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: Parameters<typeof productsApi.update>[1] }) =>
       productsApi.update(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.products });
+      invalidateApi(invalidationGroups.products);
     },
   });
 }
 
 export function useDeleteProduct() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/products", "delete"],
+    meta: scopedInvalidation,
     mutationFn: productsApi.delete,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: apiKeys.products });
+      invalidateApi(invalidationGroups.products);
     },
   });
 }

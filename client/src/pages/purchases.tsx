@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
+import { invalidateApi, invalidationGroups } from "@/api/invalidation";
 import { Plus, Calculator, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/language-context";
-import { queryClient } from "@/lib/queryClient";
 import {
   usePurchases,
   useNextBillNumber,
@@ -268,7 +268,7 @@ export default function PurchasesPage() {
         currentStock: "0",
         avgPurchasePrice: "0",
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      invalidateApi(invalidationGroups.products);
       form.setValue(`items.${index}.productId`, product.id.toString(), { shouldDirty: true, shouldValidate: true });
       setCustomProductDrafts((prev) => {
         const copy = { ...prev };

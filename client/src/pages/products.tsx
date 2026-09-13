@@ -7,6 +7,7 @@ import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -35,6 +36,16 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import type { Product } from "@/types/schema";
+import {
+  displayUnit,
+  formatPricePerUnit,
+  formatStock,
+  formatStockKgHint,
+  stockInUnit,
+  pricePerUnit,
+  unitPriceToPerKg,
+  unitToKg,
+} from "@/lib/units";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 // Mirrors the server rule: amounts must be complete, non-negative numbers.
@@ -83,6 +94,10 @@ export default function ProductsPage() {
     },
   });
 
+  // Opening stock and opening average are entered in whichever unit is selected
+  // above them in the same dialog, so their labels have to track it live.
+  const selectedUnit = displayUnit(form.watch("unit"));
+
   const {
     data: products = [],
     isLoading,
@@ -123,12 +138,17 @@ export default function ProductsPage() {
   }, [products, searchQuery, sortOption, typeFilter]);
 
   const createMutation = useMutation({
+    mutationKey: ["/api/products", "create"],
+    meta: scopedInvalidation,
     mutationFn: async (data: ProductFormData) => {
+      // Opening stock and the opening average are typed in the product's own
+      // unit, but the server keeps both in kg — convert before posting so a
+      // "50 mound @ 8000" opening doesn't land as 50 kg @ 8000/kg.
       const payload = {
         ...data,
         productType: (data.productType || "raw").toLowerCase() as "raw" | "bio",
-        currentStock: data.currentStock || "0",
-        avgPurchasePrice: data.avgPurchasePrice || "0",
+        currentStock: String(unitToKg(data.currentStock || "0", data.unit)),
+        avgPurchasePrice: String(unitPriceToPerKg(data.avgPurchasePrice || "0", data.unit)),
         salePrice: data.salePrice || "0",
       };
       const response = await apiRequest("POST", "/api/products", payload);
@@ -138,7 +158,7 @@ export default function ProductsPage() {
       queryClient.setQueryData<Product[]>(["/api/products"], (current = []) =>
         [...current.filter((product) => product.id !== createdProduct.id), createdProduct],
       );
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      invalidateApi(invalidationGroups.products);
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -153,6 +173,8 @@ export default function ProductsPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/products", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/products/${id}`),
     onMutate: async (id: number) => {
       await queryClient.cancelQueries({ queryKey: ["/api/products"] });
@@ -178,11 +200,13 @@ export default function ProductsPage() {
       toast({ title: t("deletedSuccessfully") });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      invalidateApi(invalidationGroups.products);
     },
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/products", "update"],
+    meta: scopedInvalidation,
     mutationFn: async ({ id, currentStock: _currentStock, avgPurchasePrice: _avgPurchasePrice, ...data }: ProductFormData & { id: number }) => {
       const payload = {
         ...data,
@@ -196,7 +220,7 @@ export default function ProductsPage() {
       queryClient.setQueryData<Product[]>(["/api/products"], (current = []) =>
         current.map((product) => product.id === updatedProduct.id ? updatedProduct : product),
       );
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      invalidateApi(invalidationGroups.products);
       setIsDialogOpen(false);
       setEditingProduct(null);
       form.reset();
@@ -229,8 +253,10 @@ export default function ProductsPage() {
       productType: normalizedType,
       unit: product.unit,
       salePrice: product.salePrice || "0",
-      currentStock: product.currentStock || "0",
-      avgPurchasePrice: product.avgPurchasePrice || "0",
+      // Read-only while editing, but still shown under a unit-labelled field —
+      // so convert out of the stored kg the same way the table does.
+      currentStock: String(stockInUnit(product.currentStock, product.unit)),
+      avgPurchasePrice: String(pricePerUnit(product.avgPurchasePrice, product.unit)),
     });
     setIsDialogOpen(true);
   };
@@ -312,13 +338,14 @@ export default function ProductsPage() {
       titleUrdu: "موجودہ سٹاک",
       align: "right",
       render: (item) => {
-        const stock = parseFloat(item.currentStock || "0");
+        const kgHint = formatStockKgHint(item.currentStock, item.unit);
         return (
           <div className={`flex items-center gap-2 justify-end ${isRTL ? "flex-row-reverse" : ""}`}>
             <Scale className="h-3 w-3 text-muted-foreground" />
-            <span className="font-mono font-medium">
-              {stock.toLocaleString()} {item.unit}
-            </span>
+            <div className={isRTL ? "text-left" : "text-right"}>
+              <div className="font-mono font-medium">{formatStock(item.currentStock, item.unit)}</div>
+              {kgHint && <div className="font-mono text-xs text-muted-foreground">{kgHint}</div>}
+            </div>
           </div>
         );
       },
@@ -330,7 +357,7 @@ export default function ProductsPage() {
       align: "right",
       render: (item) => (
         <span className="font-mono text-sm text-muted-foreground">
-          Rs. {parseFloat(item.avgPurchasePrice || "0").toLocaleString()}/{item.unit}
+          {formatPricePerUnit(item.avgPurchasePrice, item.unit)}
         </span>
       ),
     },
@@ -578,7 +605,9 @@ export default function ProductsPage() {
                   name="salePrice"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{language === "ur" ? "فروخت قیمت (فی یونٹ)" : "Sale Price (per unit)"}</FormLabel>
+                      <FormLabel>
+                        {language === "ur" ? "فروخت قیمت" : "Sale Price"} (per {selectedUnit})
+                      </FormLabel>
                       <FormControl>
                         <Input {...field} type="number" step="0.01" data-testid="input-sale-price" />
                       </FormControl>
@@ -593,7 +622,9 @@ export default function ProductsPage() {
                   name="currentStock"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{language === "ur" ? "ابتدائی اسٹاک" : "Opening Stock"}</FormLabel>
+                      <FormLabel>
+                        {language === "ur" ? "ابتدائی اسٹاک" : "Opening Stock"} ({selectedUnit})
+                      </FormLabel>
                       <FormControl>
                         <Input
                           {...field}
@@ -619,7 +650,9 @@ export default function ProductsPage() {
                   name="avgPurchasePrice"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{language === "ur" ? "اوسط خرید قیمت" : "Avg. Purchase Price"}</FormLabel>
+                      <FormLabel>
+                        {language === "ur" ? "اوسط خرید قیمت" : "Avg. Purchase Price"} (per {selectedUnit})
+                      </FormLabel>
                       <FormControl>
                         <Input
                           {...field}

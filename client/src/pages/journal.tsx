@@ -30,7 +30,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { Eye, Pencil, CheckCircle, Loader2, Plus, Trash2, X } from "lucide-react";
@@ -208,17 +209,15 @@ export default function JournalVoucherPage() {
   });
 
   const createMutation = useMutation({
+    mutationKey: ["/api/journal-vouchers", "create"],
+    meta: scopedInvalidation,
     mutationFn: async (data: JournalFormData) => {
       const res = await apiRequest("POST", "/api/journal-vouchers", buildPayload(data));
       return res.json();
     },
     onSuccess: () => {
       toast({ title: "Journal voucher saved" });
-      queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({
-        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
-      });
+      invalidateApi(invalidationGroups.journal);
       setDialogOpen(false);
       resetForm();
     },
@@ -226,17 +225,15 @@ export default function JournalVoucherPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/journal-vouchers", "update"],
+    meta: scopedInvalidation,
     mutationFn: async ({ id, data }: { id: number; data: JournalFormData }) => {
       const res = await apiRequest("PATCH", `/api/journal-vouchers/${id}`, buildPayload(data));
       return res.json();
     },
     onSuccess: () => {
       toast({ title: "Journal voucher updated" });
-      queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({
-        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
-      });
+      invalidateApi(invalidationGroups.journal);
       setDialogOpen(false);
       resetForm();
     },
@@ -244,17 +241,15 @@ export default function JournalVoucherPage() {
   });
 
   const approveMutation = useMutation({
+    mutationKey: ["/api/journal-vouchers", "approve"],
+    meta: scopedInvalidation,
     mutationFn: async (id: number) => {
       const res = await apiRequest("POST", `/api/journal-vouchers/${id}/approve`, { approvedBy: undefined });
       return res.json();
     },
     onSuccess: () => {
       toast({ title: "Voucher approved" });
-      queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({
-        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
-      });
+      invalidateApi(invalidationGroups.journal);
       setDialogOpen(false);
       resetForm();
     },
@@ -262,14 +257,12 @@ export default function JournalVoucherPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/journal-vouchers", "delete"],
+    meta: scopedInvalidation,
     mutationFn: async (id: number) => apiRequest("DELETE", `/api/journal-vouchers/${id}`),
     onSuccess: () => {
       toast({ title: "Voucher deleted" });
-      queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({
-        predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/payrolls"),
-      });
+      invalidateApi(invalidationGroups.journal);
       setDialogOpen(false);
       resetForm();
     },

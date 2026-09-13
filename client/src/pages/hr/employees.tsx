@@ -7,7 +7,8 @@ import { useForm } from "react-hook-form";
 import type { Employee, EmployeeSalaryStructure } from "@/types/schema";
 
 import { useLanguage } from "@/contexts/language-context";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -126,13 +127,15 @@ export default function EmployeesPage() {
   });
 
   const createEmployeeMutation = useMutation({
+    mutationKey: ["/api/employees", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: EmployeeFormData) =>
       apiRequest("POST", "/api/employees", {
         ...data,
         joiningDate: data.joiningDate ? new Date(data.joiningDate) : undefined,
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+      await invalidateApi(invalidationGroups.employees);
       setOpenEmployeeDialog(false);
       setEditingEmployee(null);
       employeeForm.reset();
@@ -142,13 +145,15 @@ export default function EmployeesPage() {
   });
 
   const updateEmployeeMutation = useMutation({
+    mutationKey: ["/api/employees", "update"],
+    meta: scopedInvalidation,
     mutationFn: (data: EmployeeFormData & { id: number }) =>
       apiRequest("PATCH", `/api/employees/${data.id}`, {
         ...data,
         joiningDate: data.joiningDate ? new Date(data.joiningDate) : undefined,
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/employees"] });
+      await invalidateApi(invalidationGroups.employees);
       setOpenEmployeeDialog(false);
       setEditingEmployee(null);
       employeeForm.reset();
@@ -158,15 +163,15 @@ export default function EmployeesPage() {
   });
 
   const createStructureMutation = useMutation({
+    mutationKey: ["/api/employees", "salary-structure", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: SalaryStructureFormData & { employeeId: number }) =>
       apiRequest("POST", `/api/employees/${data.employeeId}/salary-structures`, {
         ...data,
         effectiveFrom: new Date(data.effectiveFrom),
       }),
     onSuccess: async () => {
-      if (salaryEmployee) {
-        await queryClient.invalidateQueries({ queryKey: [`/api/employees/${salaryEmployee.id}/salary-structures`] });
-      }
+      await invalidateApi(invalidationGroups.employees);
       salaryForm.reset({
         effectiveFrom: new Date().toISOString().slice(0, 10),
         basicSalary: "0",
@@ -179,15 +184,15 @@ export default function EmployeesPage() {
   });
 
   const updateStructureMutation = useMutation({
+    mutationKey: ["/api/employees", "salary-structure", "update"],
+    meta: scopedInvalidation,
     mutationFn: (data: SalaryStructureFormData & { employeeId: number; id: number }) =>
       apiRequest("PATCH", `/api/employees/${data.employeeId}/salary-structures/${data.id}`, {
         ...data,
         effectiveFrom: new Date(data.effectiveFrom),
       }),
     onSuccess: async () => {
-      if (salaryEmployee) {
-        await queryClient.invalidateQueries({ queryKey: [`/api/employees/${salaryEmployee.id}/salary-structures`] });
-      }
+      await invalidateApi(invalidationGroups.employees);
       setEditingStructure(null);
       salaryForm.reset({
         effectiveFrom: new Date().toISOString().slice(0, 10),
@@ -201,12 +206,12 @@ export default function EmployeesPage() {
   });
 
   const deleteStructureMutation = useMutation({
+    mutationKey: ["/api/employees", "salary-structure", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (data: { employeeId: number; id: number }) =>
       apiRequest("DELETE", `/api/employees/${data.employeeId}/salary-structures/${data.id}`),
     onSuccess: async () => {
-      if (salaryEmployee) {
-        await queryClient.invalidateQueries({ queryKey: [`/api/employees/${salaryEmployee.id}/salary-structures`] });
-      }
+      await invalidateApi(invalidationGroups.employees);
       if (editingStructure) setEditingStructure(null);
       toast({ title: "Deleted" });
     },

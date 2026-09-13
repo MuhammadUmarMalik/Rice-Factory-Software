@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -59,11 +60,12 @@ export default function BanksPage() {
   });
 
   const createMutation = useMutation({
+    mutationKey: ["/api/accounts", "bank", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: BankFormData) =>
       apiRequest("POST", "/api/accounts", { ...data, type: "bank" }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank&active=true"] });
+      invalidateApi(invalidationGroups.accounts);
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -71,11 +73,12 @@ export default function BanksPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/accounts", "bank", "update"],
+    meta: scopedInvalidation,
     mutationFn: (data: BankFormData & { id: number }) =>
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank&active=true"] });
+      invalidateApi(invalidationGroups.accounts);
       setIsDialogOpen(false);
       setEditingBank(null);
       form.reset();
@@ -84,10 +87,11 @@ export default function BanksPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/accounts", "bank", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/accounts/${id}`),
     onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=bank&active=true"] });
+      invalidateApi(invalidationGroups.accounts);
       if (viewingBank?.id === id) {
         setViewingBank(null);
       }

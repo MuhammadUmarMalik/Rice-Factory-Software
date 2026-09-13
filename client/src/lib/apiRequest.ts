@@ -1,29 +1,5 @@
-import { useAuthStore } from "@/stores/auth.store";
-import { toApiError } from "@/lib/apiError";
-
-async function throwIfResNotOk(res: Response) {
-  if (!res.ok) {
-    throw await toApiError(res);
-  }
-}
-
-export async function apiRequest(
-  method: string,
-  url: string,
-  data?: unknown | undefined,
-): Promise<Response> {
-  const token = useAuthStore.getState().token;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      ...(data ? { "Content-Type": "application/json" } : {}),
-      "X-Requested-With": "Mill-Manager",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
-  });
-
-  await throwIfResNotOk(res);
-  return res;
-}
+// Re-export only. This module used to carry its own copy of apiRequest, identical
+// to queryClient.ts's except that it silently dropped errors instead of forwarding
+// them to window.electronLog. Callers keep importing from here; there is one
+// implementation.
+export { apiRequest } from "./queryClient";
