@@ -7,6 +7,10 @@ const router = Router();
 const finance = requireRoles(Roles.finance);
 
 router.get("/api/cash/balance", finance, ctrl.getBalance);
+// Rewriting the opening balance shifts every figure the module reports, but
+// `finance` is still the right guard: the same roles can create and delete
+// receipts and payments, which already moves the balance by any amount.
+router.put("/api/cash/opening-balance", finance, ctrl.setOpeningBalance);
 router.get("/api/cash/receipts", finance, ctrl.getReceipts);
 router.post("/api/cash/receipts", finance, ctrl.createReceipt);
 router.get("/api/cash/receipts/:id", finance, ctrl.getReceiptById);

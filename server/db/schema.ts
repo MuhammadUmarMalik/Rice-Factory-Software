@@ -20,6 +20,10 @@ export const users = sqliteTable("users", {
   fullNameUrdu: text("full_name_urdu"),
   role: text("role", { enum: ["admin", "manager", "accountant", "hr", "operator"] }).notNull().default("operator"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  // Set when an account is created with the known fallback password (the seeded
+  // admin). The client blocks the app shell until the password is replaced; any
+  // password update clears it.
+  mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
@@ -612,6 +616,28 @@ export const insertReceiptVoucherLineSchema = createInsertSchema(receiptVoucherL
 });
 export type InsertReceiptVoucherLine = z.infer<typeof insertReceiptVoucherLineSchema>;
 export type ReceiptVoucherLine = typeof receiptVoucherLines.$inferSelect;
+
+// Audit trail for receipt/payment vouchers. Modeled on daybookAuditLogs so the
+// money-moving voucher flows get the same before/after record the daybooks have.
+export const receiptVoucherAuditLogs = sqliteTable("receipt_voucher_audit_logs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  voucherType: text("voucher_type").notNull(),
+  recordId: integer("record_id").notNull(),
+  action: text("action").notNull(),
+  beforeJson: text("before_json"),
+  afterJson: text("after_json"),
+  // No FK to users, matching daybookAuditLogs: an audit row must never be
+  // rejected because the acting user id can't be resolved.
+  changedBy: integer("changed_by"),
+  changedAt: integer("changed_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertReceiptVoucherAuditLogSchema = createInsertSchema(receiptVoucherAuditLogs).omit({
+  id: true,
+  changedAt: true,
+});
+export type InsertReceiptVoucherAuditLog = z.infer<typeof insertReceiptVoucherAuditLogSchema>;
+export type ReceiptVoucherAuditLog = typeof receiptVoucherAuditLogs.$inferSelect;
 
 // FIXED: 12
 // Journal Vouchers
@@ -1864,6 +1890,13 @@ export const purchaseReturnsDaybookRelations = relations(purchaseReturnsDaybook,
 export const daybookAuditLogsRelations = relations(daybookAuditLogs, ({ one }) => ({
   changedByUser: one(users, {
     fields: [daybookAuditLogs.changedBy],
+    references: [users.id],
+  }),
+}));
+
+export const receiptVoucherAuditLogsRelations = relations(receiptVoucherAuditLogs, ({ one }) => ({
+  changedByUser: one(users, {
+    fields: [receiptVoucherAuditLogs.changedBy],
     references: [users.id],
   }),
 }));

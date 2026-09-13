@@ -1,42 +1,42 @@
-import { storage } from "../models/storage";
+import * as ledgerModel from "../models/ledger.model";
+import { insertVoucherAuditLog } from "./voucher-audit.service";
 
 export async function listReceipts() {
-  const [vouchers, accountsList] = await Promise.all([
-    storage.getReceiptVouchers(),
-    storage.getAccounts(),
-  ]);
-  const accountMap = new Map(accountsList.map((a) => [a.id, a.name]));
-
-  const detailed = await Promise.all(
-    vouchers
-      .filter((v) => v.voucherType === "CR")
-      .map(async (v) => {
-        const withLines = await storage.getReceiptVoucher(v.id);
-        const lines = withLines?.lines || [];
-        const primaryAccountName = lines.length > 0 ? accountMap.get(lines[0].accountId) || "" : "";
-        return { ...v, lines, primaryAccountName };
-      })
-  );
-
-  return detailed;
+  // One join instead of a query per voucher; the type filter runs in SQL too.
+  return ledgerModel.getReceiptVouchersWithLines("CR");
 }
 
 export async function getNextReceiptNumber(type: "CR" | "CP" | "BR" | "BP") {
-  return storage.getNextReceiptVoucherNumber(type);
+  return ledgerModel.getNextReceiptVoucherNumber(type);
 }
 
 export async function getReceipt(id: number) {
-  return storage.getReceiptVoucher(id);
+  return ledgerModel.getReceiptVoucher(id);
 }
 
-export async function createReceipt(header: any, lines: any[]) {
-  return storage.createReceiptVoucher(header, lines);
+export async function createReceipt(header: any, lines: any[], userId?: number) {
+  const voucher = await ledgerModel.createReceiptVoucher(header, lines);
+  // Receipts move money; record who created what, same as every daybook write.
+  const after = await ledgerModel.getReceiptVoucher(voucher.id);
+  insertVoucherAuditLog("CR", voucher.id, "create", null, after ?? voucher, userId);
+  return voucher;
 }
 
-export async function updateReceipt(id: number, header: any, lines: any[]) {
-  return storage.updateReceiptVoucher(id, header, lines);
+export async function updateReceipt(id: number, header: any, lines: any[], userId?: number) {
+  // Snapshot before the write; storage mutates the voucher and its lines in place.
+  const before = await ledgerModel.getReceiptVoucher(id);
+  const voucher = await ledgerModel.updateReceiptVoucher(id, header, lines);
+  if (!voucher) return voucher;
+  const after = await ledgerModel.getReceiptVoucher(id);
+  insertVoucherAuditLog("CR", id, "update", before, after ?? voucher, userId);
+  return voucher;
 }
 
-export async function deleteReceipt(id: number) {
-  return storage.deleteReceiptVoucher(id);
+export async function deleteReceipt(id: number, userId?: number) {
+  // The row is soft-deleted, but capture it first so the audit row keeps the
+  // full voucher (header + lines) regardless of how storage removes it.
+  const before = await ledgerModel.getReceiptVoucher(id);
+  const ok = await ledgerModel.deleteReceiptVoucher(id);
+  if (ok) insertVoucherAuditLog("CR", id, "delete", before, null, userId);
+  return ok;
 }

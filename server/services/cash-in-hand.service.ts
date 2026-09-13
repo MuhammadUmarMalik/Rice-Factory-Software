@@ -27,7 +27,21 @@ import {
   preferManualNarration,
   summarizeNarrationValues,
 } from "../utils/narration";
+import { formatMoney, sumAmounts, toDecimal } from "../utils/money";
+import { ensureCashAccount as ensureCashLedgerAccount } from "../models/ledger.model";
+import { recomputeAccountBalances } from "../models/accounts.model";
 
+/** Either the shared client or a transaction-scoped one. */
+type DbClient = typeof db;
+
+/**
+ * The cash account every receipt and payment defaults to, and the only one the
+ * ledger's single "Cash in Hand" account can correspond to.
+ */
+const PRIMARY_CASH_ACCOUNT_ID = 1;
+
+// Single-value coercion only. Anything that adds amounts together goes through
+// sumAmounts() so the arithmetic stays exact instead of accumulating float drift.
 const parseNum = (v: string | number | null | undefined): number => {
   if (v == null || v === "") return 0;
   const n = typeof v === "string" ? parseFloat(v) : v;
@@ -119,12 +133,13 @@ export async function getBalance(cashAccountId = 1, asOfDate?: string): Promise<
       : eq(cashPayments.cashAccountId, cashAccountId))
     .all();
 
-  let totalReceipts = 0;
-  let totalPayments = 0;
-  for (const r of receiptRows) totalReceipts += parseNum(r.amount);
-  for (const p of paymentRows) totalPayments += parseNum(p.amount);
+  const totalReceipts = Number(sumAmounts(receiptRows.map((r) => r.amount)));
+  const totalPayments = Number(sumAmounts(paymentRows.map((p) => p.amount)));
 
-  const currentBalance = opening + totalReceipts - totalPayments;
+  // opening + receipts - payments, done in Decimal so the balance can't drift.
+  const currentBalance = Number(
+    sumAmounts([opening, ...receiptRows.map((r) => r.amount), ...paymentRows.map((p) => toDecimal(p.amount).negated())]),
+  );
   return { openingBalance: opening, totalReceipts, totalPayments, currentBalance };
 }
 
@@ -343,7 +358,12 @@ export async function getLedger(filters?: { from?: string; to?: string; cashAcco
     : undefined;
   const balance = await getBalance(cashAccountId, openingAsOf);
   const rows: LedgerRow[] = [];
-  let runningBalance = balance.openingBalance;
+  // The running balance is the longest addition chain in the module — one row
+  // of float error here shifts every subsequent balance. Carried as a Decimal
+  // accumulator (rather than re-summing the whole list per row) so it stays
+  // exact without going quadratic on long ledgers.
+  let runningTotal = toDecimal(balance.openingBalance);
+  let runningBalance = Number(formatMoney(runningTotal));
 
   const receipts = await getReceipts(filters);
   const payments = await getPayments(filters);
@@ -389,7 +409,8 @@ export async function getLedger(filters?: { from?: string; to?: string; cashAcco
   });
 
   for (const e of entries) {
-    runningBalance += e.debit - e.credit;
+    runningTotal = runningTotal.plus(toDecimal(e.debit)).minus(toDecimal(e.credit));
+    runningBalance = Number(formatMoney(runningTotal));
     rows.push({
       date: e.date,
       voucherNo: e.voucherNo,
@@ -429,11 +450,17 @@ export async function getTodaySummary(cashAccountId = 1): Promise<{
       gte(cashPayments.paymentDate, new Date(today)),
       lte(cashPayments.paymentDate, new Date(today + "T23:59:59"))
     )).all();
-  let todayReceipts = 0;
-  let todayPayments = 0;
-  for (const r of receiptRows) todayReceipts += parseNum(r.amount);
-  for (const p of paymentRows) todayPayments += parseNum(p.amount);
-  const closingBalance = balance.openingBalance + balance.totalReceipts - balance.totalPayments + todayReceipts - todayPayments;
+  const todayReceipts = Number(sumAmounts(receiptRows.map((r) => r.amount)));
+  const todayPayments = Number(sumAmounts(paymentRows.map((p) => p.amount)));
+  const closingBalance = Number(
+    sumAmounts([
+      balance.openingBalance,
+      balance.totalReceipts,
+      toDecimal(balance.totalPayments).negated(),
+      todayReceipts,
+      toDecimal(todayPayments).negated(),
+    ]),
+  );
   return {
     openingBalance: balance.openingBalance,
     todayReceipts,
@@ -464,13 +491,11 @@ export async function createJournalVoucher(data: {
   narration?: string;
   items: CashJournalItemInput[];
 }): Promise<{ id: number; voucherNo: string }> {
-  let totalDebit = 0;
-  let totalCredit = 0;
-  for (const it of data.items) {
-    totalDebit += parseNum(it.debitAmount);
-    totalCredit += parseNum(it.creditAmount);
-  }
-  if (Math.abs(totalDebit - totalCredit) > 0.001) {
+  const totalDebit = Number(sumAmounts(data.items.map((it) => it.debitAmount)));
+  const totalCredit = Number(sumAmounts(data.items.map((it) => it.creditAmount)));
+  // Tolerance kept at 0.001 so the accepted/rejected boundary is unchanged;
+  // the comparison itself is now exact rather than a float subtraction.
+  if (toDecimal(totalDebit).minus(toDecimal(totalCredit)).abs().gt("0.001")) {
     throw new Error("Total debit must equal total credit");
   }
   const voucherNo = getNextVoucherNo("JV");
@@ -581,9 +606,45 @@ export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
   }
 }
 
+/**
+ * Sets the mill's opening cash balance.
+ *
+ * cash_accounts.openingBalance is the single source of truth, but the
+ * double-entry ledger keeps its own "Cash in Hand" system account and the two
+ * used to default to "0" independently — so this page and the trial balance
+ * could disagree about how much cash the mill started with. Both are written
+ * here, in one transaction, so they cannot drift apart.
+ *
+ * The ledger account's currentBalance is rebuilt by recomputeAccountBalances
+ * rather than assigned the opening figure directly. currentBalance is
+ * `opening + posted movement`, so copying the opening balance over it would
+ * discard every cash entry already in the ledger. On an untouched ledger the
+ * two are the same number; once receipts exist they are not.
+ */
 export async function updateCashAccountOpeningBalance(cashAccountId: number, openingBalance: number): Promise<void> {
   await ensureCashAccount(cashAccountId);
-  db.update(cashAccounts).set({ openingBalance: String(openingBalance) }).where(eq(cashAccounts.id, cashAccountId)).run();
+  db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
+    client
+      .update(cashAccounts)
+      .set({ openingBalance: String(openingBalance) })
+      .where(eq(cashAccounts.id, cashAccountId))
+      .run();
+
+    // The ledger has exactly one "Cash in Hand" account, so only the primary
+    // cash account — the one every receipt and payment defaults to — maps onto
+    // it. Syncing a secondary cash account would overwrite the ledger's opening
+    // balance with an unrelated figure.
+    if (cashAccountId !== PRIMARY_CASH_ACCOUNT_ID) return;
+
+    const ledgerCash = ensureCashLedgerAccount(client);
+    client
+      .update(accounts)
+      .set({ openingBalance: String(openingBalance) })
+      .where(eq(accounts.id, ledgerCash.id))
+      .run();
+    recomputeAccountBalances(client, [ledgerCash.id]);
+  });
 }
 
 /** Update sale paid amount and balance due (so Sales list shows correct paid) */
@@ -592,7 +653,9 @@ function syncSalePaidAmount(saleId: number, paidAmount: number) {
   if (!row) return;
   const total = parseNum(row.totalAmount);
   const paid = Math.min(Math.max(0, paidAmount), total);
-  const balanceDue = Math.max(total - paid, 0);
+  // total - paid in Decimal: a float subtraction here writes balances like
+  // 0.009999999999990905 straight into the sales row.
+  const balanceDue = Math.max(Number(sumAmounts([total, toDecimal(paid).negated()])), 0);
   db.update(sales).set({
     paidAmount: String(paid),
     balanceDue: String(balanceDue),

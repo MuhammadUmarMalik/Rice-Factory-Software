@@ -7,7 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -212,15 +213,15 @@ export default function ReceiptsPage() {
   };
 
   const createMutation = useMutation({
+    mutationKey: ["/api/receipts", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: ReceiptFormData) => apiRequest("POST", "/api/receipts", {
       ...data,
       voucherDate: data.voucherDate || undefined,
       lines: normalizeLines(data),
     }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
+      invalidateApi(invalidationGroups.receipts);
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -233,15 +234,15 @@ export default function ReceiptsPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/receipts", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: ReceiptFormData }) => apiRequest("PATCH", `/api/receipts/${id}`, {
       ...data,
       voucherDate: data.voucherDate || undefined,
       lines: normalizeLines(data),
     }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
+      invalidateApi(invalidationGroups.receipts);
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -254,11 +255,11 @@ export default function ReceiptsPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/receipts", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/receipts/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/receipts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/sales"] });
+      invalidateApi(invalidationGroups.receipts);
       toast({ title: "Deleted" });
     },
   });

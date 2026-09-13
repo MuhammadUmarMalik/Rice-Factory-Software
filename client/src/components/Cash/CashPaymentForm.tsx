@@ -19,7 +19,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { createPayment } from "@/api/cash.api";
 import { useToast } from "@/hooks/use-toast";
 
@@ -44,7 +45,6 @@ export function CashPaymentForm({
   purchaseRef?: { invoiceNumber: string; supplierName?: string };
 }) {
   const { toast } = useToast();
-  const queryClient = useQueryClient();
   const [submitting, setSubmitting] = useState(false);
 
   const form = useForm<FormData>({
@@ -58,11 +58,11 @@ export function CashPaymentForm({
   });
 
   const mutate = useMutation({
+    mutationKey: ["/api/cash/payments", "create"],
+    meta: scopedInvalidation,
     mutationFn: createPayment,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/payments"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] });
+      invalidateApi(invalidationGroups.cash);
       form.reset({ paymentDate: today(), paidTo: "", amount: "", description: "" });
       onOpenChange(false);
       toast({ title: "Payment saved successfully" });

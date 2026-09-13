@@ -6,6 +6,7 @@ import {
   receiptLinesSchema,
 } from "../schemas/receipts.schema";
 import * as receiptsService from "../services/receipts.service";
+import { getUserId } from "../utils/auth";
 import { notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
 import { isBusinessRuleError } from "../utils/errors";
@@ -52,7 +53,7 @@ export async function createReceipt(req: Request, res: Response) {
     const header = receiptHeaderSchema.parse({ ...payload, voucherType: "CR" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
     // Balance is enforced in storage (settlement line is added server-side for CR)
-    const voucher = await receiptsService.createReceipt(header, parsedLines);
+    const voucher = await receiptsService.createReceipt(header, parsedLines, getUserId(req));
     await notifyUsers({
       title: "Payment received",
       message: `Receipt ${voucher.voucherNumber} recorded.`,
@@ -85,7 +86,7 @@ export async function updateReceipt(req: Request, res: Response) {
     const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "CR" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
     // Balance is enforced in storage (settlement line is added server-side for CR)
-    const voucher = await receiptsService.updateReceipt(id, header, parsedLines);
+    const voucher = await receiptsService.updateReceipt(id, header, parsedLines, getUserId(req));
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
   } catch (error) {
@@ -108,7 +109,7 @@ export async function deleteReceipt(req: Request, res: Response) {
     if (!current || current.voucherType !== "CR") {
       return res.status(404).json({ error: "Voucher not found" });
     }
-    const ok = await receiptsService.deleteReceipt(id);
+    const ok = await receiptsService.deleteReceipt(id, getUserId(req));
     if (!ok) return res.status(404).json({ error: "Voucher not found" });
     res.status(204).send();
   } catch (error) {
