@@ -8,7 +8,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -207,15 +208,15 @@ export default function PaymentsPage() {
   };
 
   const createMutation = useMutation({
+    mutationKey: ["/api/payments", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: PaymentFormData) => apiRequest("POST", "/api/payments", {
       ...data,
       voucherDate: data.voucherDate || undefined,
       lines: normalizeLines(data),
     }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      invalidateApi(invalidationGroups.payments);
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -228,15 +229,15 @@ export default function PaymentsPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/payments", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: PaymentFormData }) => apiRequest("PATCH", `/api/payments/${id}`, {
       ...data,
       voucherDate: data.voucherDate || undefined,
       lines: normalizeLines(data),
     }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      invalidateApi(invalidationGroups.payments);
       setIsDialogOpen(false);
       setEditingId(null);
       setViewId(null);
@@ -249,11 +250,11 @@ export default function PaymentsPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/payments", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/payments/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/purchases"] });
+      invalidateApi(invalidationGroups.payments);
       toast({ title: t("deletedSuccessfully") });
     },
   });

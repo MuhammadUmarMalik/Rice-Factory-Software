@@ -62,6 +62,16 @@ export async function getBalance(date?: string): Promise<CashBalance> {
   return res.json();
 }
 
+/**
+ * Rewrites the cash account's stored opening balance and returns the recomputed
+ * balance. Note this is not the "Opening Balance" the summary card shows — that
+ * one is yesterday's closing balance, which this figure feeds into.
+ */
+export async function setOpeningBalance(openingBalance: string, cashAccountId = 1): Promise<CashBalance> {
+  const res = await apiRequest("PUT", "/api/cash/opening-balance", { openingBalance, cashAccountId });
+  return res.json();
+}
+
 export async function getSummary(): Promise<CashSummary> {
   const res = await apiRequest("GET", "/api/cash/summary");
   return res.json();

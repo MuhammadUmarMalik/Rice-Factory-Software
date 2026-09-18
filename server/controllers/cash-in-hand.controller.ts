@@ -1,5 +1,7 @@
 import type { Request, Response } from "express";
+import { z } from "zod";
 import { parseRequiredInt } from "../utils/parse";
+import { cashOpeningBalanceSchema } from "../schemas/cash.schema";
 import * as cashService from "../services/cash-in-hand.service";
 
 export async function getBalance(req: Request, res: Response) {
@@ -11,6 +13,29 @@ export async function getBalance(req: Request, res: Response) {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch cash balance" });
+  }
+}
+
+/**
+ * Rewrites the cash account's opening balance.
+ *
+ * Responds with the recomputed balance rather than 204 so the caller can show
+ * the effect immediately: the opening balance is the base of every figure the
+ * module reports, so changing it shifts the current balance by the same amount.
+ */
+export async function setOpeningBalance(req: Request, res: Response) {
+  try {
+    const { openingBalance, cashAccountId } = cashOpeningBalanceSchema.parse(req.body);
+    const accountId = cashAccountId ?? 1;
+    await cashService.updateCashAccountOpeningBalance(accountId, Number(openingBalance));
+    const balance = await cashService.getBalance(accountId);
+    res.json(balance);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.errors });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to update opening balance" });
   }
 }
 
