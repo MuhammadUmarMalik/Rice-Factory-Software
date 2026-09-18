@@ -1,11 +1,11 @@
-import { storage } from "../models/storage";
+import * as fiscalYearsModel from "../models/fiscal-years.model";
 
 export async function listFiscalYears() {
-  return storage.getFiscalYears();
+  return fiscalYearsModel.getFiscalYears();
 }
 
 export async function listFiscalPeriods(fiscalYearId: number) {
-  return storage.getFiscalPeriods(fiscalYearId);
+  return fiscalYearsModel.getFiscalPeriods(fiscalYearId);
 }
 
 export async function createFiscalYear(data: {
@@ -14,7 +14,7 @@ export async function createFiscalYear(data: {
   endDate: Date;
   status?: "draft" | "open" | "closed";
 }, performedBy?: { userId?: number; role?: string }) {
-  return storage.createFiscalYear(data as any, performedBy);
+  return fiscalYearsModel.createFiscalYear(data as any, performedBy);
 }
 
 export async function setFiscalYearStatus(
@@ -22,7 +22,7 @@ export async function setFiscalYearStatus(
   status: "draft" | "open" | "closed",
   performedBy?: { userId?: number; role?: string },
 ) {
-  return storage.setFiscalYearStatus(fiscalYearId, status, performedBy);
+  return fiscalYearsModel.setFiscalYearStatus(fiscalYearId, status, performedBy);
 }
 
 export async function setFiscalPeriodClosed(
@@ -30,5 +30,5 @@ export async function setFiscalPeriodClosed(
   isClosed: boolean,
   performedBy?: { userId?: number; role?: string },
 ) {
-  return storage.setFiscalPeriodClosed(periodId, isClosed, performedBy);
+  return fiscalYearsModel.setFiscalPeriodClosed(periodId, isClosed, performedBy);
 }

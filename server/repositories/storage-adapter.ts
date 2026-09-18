@@ -1,8 +1,11 @@
 /**
- * Repository implementations that delegate to the existing storage.
- * This provides abstraction for DI and future extraction.
+ * Repository implementations that delegate to the domain model modules.
+ * This provides the abstraction the DI container hands to services.
  */
-import { storage } from "../models/storage";
+import * as accountsModel from "../models/accounts.model";
+import * as productsModel from "../models/products.model";
+import * as purchasesModel from "../models/purchases.model";
+import * as salesModel from "../models/sales.model";
 import type {
   IAccountsRepository,
   IProductsRepository,
@@ -16,52 +19,58 @@ import type { InsertAccount, InsertProduct, InsertPurchase, InsertSale } from ".
 
 export class AccountsRepositoryAdapter implements IAccountsRepository {
   getAccounts = (type?: string, active?: boolean) =>
-    storage.getAccounts(type, active);
-  getAccount = (id: number) => storage.getAccount(id);
-  createAccount = (account: InsertAccount) => storage.createAccount(account);
+    accountsModel.getAccounts(type, active);
+  getAccount = (id: number) => accountsModel.getAccount(id);
+  createAccount = (account: InsertAccount) => accountsModel.createAccount(account);
   updateAccount = (id: number, account: Partial<InsertAccount>) =>
-    storage.updateAccount(id, account);
-  deleteAccount = (id: number) => storage.deleteAccount(id);
+    accountsModel.updateAccount(id, account);
+  deleteAccount = (id: number) => accountsModel.deleteAccount(id);
 }
 
 export class ProductsRepositoryAdapter implements IProductsRepository {
-  getProducts = () => storage.getProducts();
-  getActiveProducts = () => storage.getActiveProducts();
-  getProduct = (id: number) => storage.getProduct(id);
-  createProduct = (product: InsertProduct) => storage.createProduct(product);
+  getProducts = () => productsModel.getProducts();
+  getActiveProducts = () => productsModel.getActiveProducts();
+  getProduct = (id: number) => productsModel.getProduct(id);
+  createProduct = (product: InsertProduct) => productsModel.createProduct(product);
   updateProduct = (id: number, product: Partial<InsertProduct>) =>
-    storage.updateProduct(id, product);
-  deleteProduct = (id: number) => storage.deleteProduct(id);
+    productsModel.updateProduct(id, product);
+  deleteProduct = (id: number) => productsModel.deleteProduct(id);
 }
 
 export class PurchasesRepositoryAdapter implements IPurchasesRepository {
-  getPurchases = () => storage.getPurchases();
-  getPurchase = (id: number) => storage.getPurchase(id);
-  getPurchaseWithDetails = (id: number) => storage.getPurchaseWithDetails(id);
+  getPurchases = () => purchasesModel.getPurchases();
+  getPurchase = (id: number) => purchasesModel.getPurchase(id);
+  getPurchaseWithDetails = (id: number) => purchasesModel.getPurchaseWithDetails(id);
   createPurchase = (
     purchase: InsertPurchase,
     items: PurchaseItemInput[],
     charges: PurchaseChargeInput[],
     moundBaseKg = 40
-  ) => storage.createPurchase(purchase, items, charges, moundBaseKg);
+  ) => purchasesModel.createPurchase(purchase, items, charges, moundBaseKg);
   updatePurchase = (
     id: number,
     purchase: Partial<InsertPurchase>,
     items: PurchaseItemInput[],
     charges: PurchaseChargeInput[],
     moundBaseKg = 40
-  ) => storage.updatePurchase(id, purchase, items, charges, moundBaseKg);
+  ) => purchasesModel.updatePurchase(id, purchase, items, charges, moundBaseKg);
   deletePurchase = (id: number, deletedBy?: number, options?: { force?: boolean }) =>
-    storage.deletePurchase(id, deletedBy, options);
-  getNextPurchaseBillNumber = () => storage.getNextPurchaseBillNumber();
+    purchasesModel.deletePurchase(id, deletedBy, options);
+  getPurchaseItems = (purchaseId: number) => purchasesModel.getPurchaseItems(purchaseId);
+  getPurchaseCharges = (purchaseId: number) => purchasesModel.getPurchaseCharges(purchaseId);
+  getNextPurchaseInvoiceNumber = () => purchasesModel.getNextPurchaseInvoiceNumber();
+  getNextPurchaseBillNumber = () => purchasesModel.getNextPurchaseBillNumber();
 }
 
 export class SalesRepositoryAdapter implements ISalesRepository {
-  getSales = () => storage.getSales();
-  getSale = (id: number) => storage.getSale(id);
+  getSales = () => salesModel.getSales();
+  getSale = (id: number) => salesModel.getSale(id);
   createSale = (sale: InsertSale, items: SaleItemInput[]) =>
-    storage.createSale(sale, items);
+    salesModel.createSale(sale, items);
   updateSale = (id: number, sale: Partial<InsertSale>, items: SaleItemInput[]) =>
-    storage.updateSale(id, sale, items);
-  deleteSale = (id: number) => storage.deleteSale(id);
+    salesModel.updateSale(id, sale, items);
+  deleteSale = (id: number) => salesModel.deleteSale(id);
+  getSaleItems = (saleId: number) => salesModel.getSaleItems(saleId);
+  getNextSaleInvoiceNumber = () => salesModel.getNextSaleInvoiceNumber();
+  getNextGatePassNumber = () => salesModel.getNextGatePassNumber();
 }

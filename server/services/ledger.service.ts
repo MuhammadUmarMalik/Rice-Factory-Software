@@ -1,4 +1,4 @@
-import { storage } from "../models/storage";
+import * as ledgerModel from "../models/ledger.model";
 
 function normalizeVoucherType(value?: string) {
   if (!value) return undefined;
@@ -36,7 +36,7 @@ export async function getLedgerReport(params: {
   const voucherRef = normalizeVoucherType(params.voucherType);
   const referenceType = voucherRef || scopeRef;
 
-  return storage.getLedgerReport({
+  return ledgerModel.getLedgerReport({
     accountId: params.accountId,
     referenceType,
     startDate: params.startDate,

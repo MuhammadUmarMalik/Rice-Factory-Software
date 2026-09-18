@@ -1,25 +1,25 @@
-import { storage } from "../models/storage";
+import * as payrollModel from "../models/payroll.model";
 
 export async function listPayrolls(params: { month?: string; status?: string; employeeId?: number }) {
-  const rows = await storage.getPayrolls(params);
-  const employeesList = await storage.getEmployees();
+  const rows = await payrollModel.getPayrolls(params);
+  const employeesList = await payrollModel.getEmployees();
   const employeeMap = new Map(employeesList.map((e) => [e.id, e]));
   return rows.map((p) => ({ ...p, employee: employeeMap.get(p.employeeId) || null }));
 }
 
 export async function getPayrollById(id: number) {
-  const payroll = await storage.getPayrollById(id);
+  const payroll = await payrollModel.getPayrollById(id);
   if (!payroll) return undefined;
-  const employee = await storage.getEmployee(payroll.employeeId);
+  const employee = await payrollModel.getEmployee(payroll.employeeId);
   return { ...payroll, employee: employee || null };
 }
 
 export async function generatePayroll(month: string, meta?: { userId?: number; role?: string }) {
-  return storage.generateMonthlyPayroll(month, meta);
+  return payrollModel.generateMonthlyPayroll(month, meta);
 }
 
 export async function approvePayroll(id: number, meta?: { userId?: number; role?: string }, postingDate?: Date) {
-  return storage.approvePayroll(id, meta, postingDate);
+  return payrollModel.approvePayroll(id, meta, postingDate);
 }
 
 export async function paySalary(
@@ -27,11 +27,11 @@ export async function paySalary(
   payload: { method: "Cash" | "Bank"; paymentAccountId?: number; paymentDate?: Date },
   meta?: { userId?: number; role?: string },
 ) {
-  return storage.paySalary(id, payload, meta);
+  return payrollModel.paySalary(id, payload, meta);
 }
 
 export async function getPayrollAudit(id: number) {
-  return storage.getPayrollAudit(id);
+  return payrollModel.getPayrollAudit(id);
 }
 
 export async function updatePayroll(
@@ -39,9 +39,9 @@ export async function updatePayroll(
   payload: { basicSalary?: number; allowances?: number; deductions?: number },
   meta?: { userId?: number; role?: string },
 ) {
-  return storage.updatePayroll(id, payload, meta);
+  return payrollModel.updatePayroll(id, payload, meta);
 }
 
 export async function deletePayroll(id: number, meta?: { userId?: number; role?: string }) {
-  return storage.deletePayroll(id, meta);
+  return payrollModel.deletePayroll(id, meta);
 }

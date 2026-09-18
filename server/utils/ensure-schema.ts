@@ -67,6 +67,11 @@ function ensureSalesColumns(): void {
 
   try {
     const itemColumns = sqlite.prepare("PRAGMA table_info(sale_items)").all() as Array<{ name: string }>;
+    // Must come before the quantity_kg backfill below, which reads `unit`.
+    if (!itemColumns.some((column) => column.name === "unit")) {
+      sqlite.prepare(`ALTER TABLE sale_items ADD COLUMN "unit" TEXT NOT NULL DEFAULT 'kg'`).run();
+      itemColumns.push({ name: "unit" });
+    }
     if (!itemColumns.some((column) => column.name === "quantity_kg")) {
       sqlite.prepare("ALTER TABLE sale_items ADD COLUMN quantity_kg TEXT NOT NULL DEFAULT '0'").run();
       sqlite.prepare(`UPDATE sale_items SET quantity_kg = CAST(CAST(quantity AS REAL) * CASE LOWER(unit) WHEN 'mound' THEN 40 WHEN 'quintal' THEN 100 WHEN 'ton' THEN 1000 ELSE 1 END AS TEXT)`).run();

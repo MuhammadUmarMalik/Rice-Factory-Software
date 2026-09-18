@@ -1,13 +1,13 @@
-import { storage } from "../models/storage";
+import * as periodLocksModel from "../models/period-locks.model";
 
 export async function listPeriodLocks() {
-  return storage.getPeriodLocks();
+  return periodLocksModel.getPeriodLocks();
 }
 
 export async function createPeriodLock(data: any) {
-  return storage.createPeriodLock(data as any);
+  return periodLocksModel.createPeriodLock(data as any);
 }
 
 export async function deletePeriodLock(id: number) {
-  return storage.deletePeriodLock(id);
+  return periodLocksModel.deletePeriodLock(id);
 }
