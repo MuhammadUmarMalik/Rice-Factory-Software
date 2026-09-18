@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -65,11 +66,12 @@ export default function SuppliersPage() {
   });
 
   const createMutation = useMutation({
+    mutationKey: ["/api/accounts", "supplier", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: SupplierFormData) =>
       apiRequest("POST", "/api/accounts", { ...data, type: "supplier" }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier&active=true"] });
+      invalidateApi(invalidationGroups.accounts);
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -77,11 +79,12 @@ export default function SuppliersPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/accounts", "supplier", "update"],
+    meta: scopedInvalidation,
     mutationFn: (data: SupplierFormData & { id: number }) =>
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier&active=true"] });
+      invalidateApi(invalidationGroups.accounts);
       setIsDialogOpen(false);
       setEditingSupplier(null);
       form.reset();
@@ -90,10 +93,11 @@ export default function SuppliersPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/accounts", "supplier", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/accounts/${id}`),
     onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=supplier&active=true"] });
+      invalidateApi(invalidationGroups.accounts);
       if (viewingSupplier?.id === id) {
         setViewingSupplier(null);
       }
