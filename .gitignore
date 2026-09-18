@@ -64,3 +64,4 @@ vite.config.ts.*
 CODEBASE_AUDIT.md
 CODEBASE_REAUDIT.md
 prompt.md
+ARCHITECTURE_REVIEW.md

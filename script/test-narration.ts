@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { loadModels } from "./load-models";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,8 +34,8 @@ async function getIntegrationContext(): Promise<IntegrationContext> {
   const tempDb = join(integrationTempDir, "data.db");
   copyFileSync(resolve(".local/data.db"), tempDb);
   process.env.DATABASE_URL = tempDb;
-  const [{ storage }, { sqlite }, daybooks, printService, pdfEngine] = await Promise.all([
-    import("../server/models/storage"),
+  const [storage, { sqlite }, daybooks, printService, pdfEngine] = await Promise.all([
+    loadModels(),
     import("../server/models/db"),
     import("../server/services/daybooks.service"),
     import("../server/services/print.service"),
