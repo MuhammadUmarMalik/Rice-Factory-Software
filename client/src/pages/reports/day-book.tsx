@@ -176,7 +176,7 @@ export default function DayBookPage(props: any = {}) {
           particulars: [r.party_name || "-", r.description || r.notes || "-"].join("\n"),
           receipt: (r.transaction_type || "").toLowerCase() === "receipt" ? formatAmount(r.amount) : "0.00",
           payment: (r.transaction_type || "").toLowerCase() === "payment" ? formatAmount(r.amount) : "0.00",
-          balance: "",
+          balance: formatBalance(r.runningBalance),
           isTotal: false,
         }));
       case "sales-returns":
@@ -263,10 +263,44 @@ export default function DayBookPage(props: any = {}) {
         balance: "",
         isTotal: true,
       };
-      return [...mapped, totalRow];
+      // Only the cash book carries a balance forward; the sales/purchase/journal
+      // registers are lists of documents with nothing to open from. Each row is
+      // stamped with its bucket's opening balance, so any cash row will do —
+      // with none, there is no opening figure to state and the row is dropped
+      // rather than printed as a misleading 0.00.
+      if (initialTab !== "cash" || !mapped.length) return [...mapped, totalRow];
+      const openingCash = (specializedData as any[]).find(
+        (r) => r.account_type !== "Bank" && r.openingBalance != null,
+      )?.openingBalance;
+      if (openingCash == null) return [...mapped, totalRow];
+      const openingRow: DayBookDisplayRow = {
+        srNo: "",
+        id: "",
+        type: "",
+        particulars: "Opening Balance",
+        receipt: "",
+        payment: "",
+        balance: formatBalance(openingCash),
+        isOpening: true,
+      };
+      return [openingRow, ...mapped, totalRow];
     }
     const rows = combinedData?.rows || [];
     const totals = combinedData?.totals || { receipt: "0", payment: "0" };
+    const opening = combinedData?.openingBalance;
+    // Cash carried into the day. Without this row the first voucher's balance
+    // looks like it came out of nowhere, and a mill that opened with a float
+    // has no way to see it on the report at all.
+    const openingRow: DayBookDisplayRow = {
+      srNo: "",
+      id: "",
+      type: "",
+      particulars: "Opening Balance",
+      receipt: "",
+      payment: "",
+      balance: formatBalance(opening?.amount, opening?.type),
+      isOpening: true,
+    };
     const voucherRows = rows.map((row) => ({
       srNo: String(row.srNo),
       id: row.id || "-",
@@ -287,7 +321,7 @@ export default function DayBookPage(props: any = {}) {
       balance: "",
       isTotal: true,
     };
-    return [...voucherRows, totalRow];
+    return [openingRow, ...voucherRows, totalRow];
   }, [isSpecialized, combinedData, specializedData, initialTab, specializedTotals]);
 
   const columns: Column<DayBookDisplayRow>[] = [
@@ -298,7 +332,7 @@ export default function DayBookPage(props: any = {}) {
       key: "particulars",
       title: "Particulars",
       render: (row) => (
-        <div className={row.isTotal ? "font-semibold whitespace-pre-line" : "whitespace-pre-line"}>
+        <div className={row.isTotal || row.isOpening ? "font-semibold whitespace-pre-line" : "whitespace-pre-line"}>
           {row.particulars}
         </div>
       ),
@@ -319,7 +353,9 @@ export default function DayBookPage(props: any = {}) {
       key: "balance",
       title: "Balance",
       align: "right",
-      render: (row) => <span className={row.isTotal ? "font-mono font-semibold" : "font-mono"}>{row.balance}</span>,
+      render: (row) => (
+        <span className={row.isTotal || row.isOpening ? "font-mono font-semibold" : "font-mono"}>{row.balance}</span>
+      ),
     },
   ];
 

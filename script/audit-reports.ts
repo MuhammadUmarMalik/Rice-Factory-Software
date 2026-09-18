@@ -10,7 +10,13 @@
  * DATABASE_URL is set by the runner script so the live .local/data.db is never
  * touched.
  */
-import { storage } from "../server/models/storage";
+import * as accountsModel from "../server/models/accounts.model";
+import * as expensesModel from "../server/models/expenses.model";
+import * as ledgerModel from "../server/models/ledger.model";
+import * as productsModel from "../server/models/products.model";
+import * as purchasesModel from "../server/models/purchases.model";
+import * as reportsModel from "../server/models/reports.model";
+import * as salesModel from "../server/models/sales.model";
 import { db, sqlite } from "../server/models/db";
 import * as daybooks from "../server/services/daybooks.service";
 import * as ledgerService from "../server/services/ledger.service";
@@ -57,23 +63,23 @@ async function seed() {
   sqlite.prepare("UPDATE products SET current_stock='0', avg_purchase_price='0'").run();
   sqlite.prepare("DELETE FROM sequences").run();
 
-  const supplier = await storage.createAccount({
+  const supplier = await accountsModel.createAccount({
     name: "AUDIT Supplier A", type: "supplier", openingBalance: "0", isActive: true,
   } as any);
-  const customer = await storage.createAccount({
+  const customer = await accountsModel.createAccount({
     name: "AUDIT Customer A", type: "customer", openingBalance: "0", isActive: true,
   } as any);
 
-  let wheat = (await storage.getProducts()).find((p) => p.name === "AUDIT Wheat");
+  let wheat = (await productsModel.getProducts()).find((p) => p.name === "AUDIT Wheat");
   if (!wheat) {
-    wheat = await storage.createProduct({
+    wheat = await productsModel.createProduct({
       name: "AUDIT Wheat", productType: "raw", unit: "kg", currentStock: "0",
       avgPurchasePrice: "0", salePrice: "60", reorderLevel: "0", isActive: true,
     } as any);
   }
 
   // Purchase: 1000 kg @ 50/kg = 50,000 with 500 add charge and 200 less charge.
-  const purchase = await storage.createPurchase(
+  const purchase = await purchasesModel.createPurchase(
     {
       supplierId: supplier.id, purchaseDate: D(2025, 1, 10), paymentMode: "credit",
       paidAmount: "0", notes: "audit purchase 1",
@@ -90,7 +96,7 @@ async function seed() {
   );
 
   // Sale: 400 kg @ 80/kg, half paid in cash.
-  const sale = await storage.createSale(
+  const sale = await salesModel.createSale(
     {
       customerId: customer.id, saleDate: D(2025, 2, 5), paymentMode: "cash",
       paidAmount: "10000", loadingCharges: "300", weighingCharges: "100",
@@ -99,15 +105,15 @@ async function seed() {
     [{ productId: wheat.id, quantity: "400", unit: "kg", pricePerUnit: "80" }] as any,
   );
 
-  const allAccounts = await storage.getAccounts();
+  const allAccounts = await accountsModel.getAccounts();
   const cashAccount = allAccounts.find((a) => a.name === "Cash in Hand")
-    ?? (await storage.createAccount({ name: "Cash in Hand", type: "asset", openingBalance: "0", isActive: true } as any));
+    ?? (await accountsModel.createAccount({ name: "Cash in Hand", type: "asset", openingBalance: "0", isActive: true } as any));
   let expenseAccount = allAccounts.find((a) => String(a.type).toLowerCase() === "expense" && a.name === "AUDIT Utilities");
   if (!expenseAccount) {
-    expenseAccount = await storage.createAccount({ name: "AUDIT Utilities", type: "expense", openingBalance: "0", isActive: true } as any);
+    expenseAccount = await accountsModel.createAccount({ name: "AUDIT Utilities", type: "expense", openingBalance: "0", isActive: true } as any);
   }
 
-  const expense = await storage.createExpense({
+  const expense = await expensesModel.createExpense({
     description: "AUDIT electricity", amount: "1500", expenseDate: D(2025, 2, 12),
     expenseAccountId: expenseAccount.id, payFromAccountId: cashAccount.id,
   } as any);
@@ -129,7 +135,7 @@ async function main() {
   console.log("product", { stock: prod.current_stock, avg: prod.avg_purchase_price });
 
   console.log("\n=== 1. STOCK REPORT ===");
-  const stock = await storage.getStockReport({ fromDate: from, toDate: to });
+  const stock = await reportsModel.getStockReport({ fromDate: from, toDate: to });
   const stockRow = stock.rows.find((r: any) => r.productId === ctx.wheat.id)!;
   console.log(stockRow);
   // net kg = (bags 20 * filling 50) - lessKg 5 - bardanaKatKg 5 = 990 (see normalizePurchaseItem)
@@ -145,41 +151,41 @@ async function main() {
   check("stock avgCost == closingValue/closingQty",
     num(stockRow.avgCost), num(stockRow.closingValue) / num(stockRow.closingQty));
 
-  const stockNoDates = await storage.getStockReport({});
+  const stockNoDates = await reportsModel.getStockReport({});
   const stockRowND = stockNoDates.rows.find((r: any) => r.productId === ctx.wheat.id)!;
   check("stock (no date filter) closingQty == currentStock", num(stockRowND.closingQty), num(prod.current_stock));
   check("stock validation.stockMatchesLedger is asserted", (stockNoDates.validation as any).stockMatchesLedger === true ? 1 : 0, 1);
   check("stock validation not evaluated on bounded window", (stock.validation as any).stockMatchesLedger === null ? 1 : 0, 1);
 
-  const stockEmpty = await storage.getStockReport({ fromDate: D(2030, 1, 1), toDate: D(2030, 12, 31) });
+  const stockEmpty = await reportsModel.getStockReport({ fromDate: D(2030, 1, 1), toDate: D(2030, 12, 31) });
   const seRow = stockEmpty.rows.find((r: any) => r.productId === ctx.wheat.id)!;
   check("stock empty-range inQty", num(seRow.inQty), 0);
   check("stock empty-range openingQty == closing", num(seRow.openingQty), num(prod.current_stock));
 
   console.log("\n=== 2. PURCHASE REPORT ===");
-  const purchaseRep = await storage.getPurchaseReport({ fromDate: from, toDate: to });
+  const purchaseRep = await reportsModel.getPurchaseReport({ fromDate: from, toDate: to });
   console.log(purchaseRep.totals);
   check("purchase total == raw total", num(purchaseRep.totals.total), num(rawPurchase.total_amount));
   check("purchase subtotal+add-less+tax == total",
     num(purchaseRep.totals.subtotal) + num(purchaseRep.totals.otherCharges) - num(purchaseRep.totals.discount) + num(purchaseRep.totals.tax),
     num(purchaseRep.totals.total));
-  const purchaseBySupplier = await storage.getPurchaseReport({ fromDate: from, toDate: to, supplierId: ctx.supplier.id });
+  const purchaseBySupplier = await reportsModel.getPurchaseReport({ fromDate: from, toDate: to, supplierId: ctx.supplier.id });
   check("purchase supplier filter keeps row", purchaseBySupplier.rows.length, 1);
-  const purchaseOther = await storage.getPurchaseReport({ fromDate: from, toDate: to, supplierId: ctx.customer.id });
+  const purchaseOther = await reportsModel.getPurchaseReport({ fromDate: from, toDate: to, supplierId: ctx.customer.id });
   check("purchase wrong-supplier filter empty", purchaseOther.rows.length, 0);
-  const purchaseCombo = await storage.getPurchaseReport({ fromDate: from, toDate: to, supplierId: ctx.supplier.id, productId: ctx.wheat.id, paymentStatus: "unpaid" });
+  const purchaseCombo = await reportsModel.getPurchaseReport({ fromDate: from, toDate: to, supplierId: ctx.supplier.id, productId: ctx.wheat.id, paymentStatus: "unpaid" });
   check("purchase combined AND filter", purchaseCombo.rows.length, 1);
   // every row's own status must be exactly what the corresponding filter selects
   for (const st of ["paid", "partial", "unpaid"] as const) {
-    const filtered = await storage.getPurchaseReport({ fromDate: from, toDate: to, paymentStatus: st });
+    const filtered = await reportsModel.getPurchaseReport({ fromDate: from, toDate: to, paymentStatus: st });
     const expected = purchaseRep.rows.filter((r: any) => r.status === st).length;
     check(`purchase status filter '${st}' matches row status`, filtered.rows.length, expected);
   }
   check("purchase balance == total - paid", num(purchaseRep.totals.total) - num(purchaseRep.totals.paid), num(purchaseRep.totals.balance));
 
   console.log("\n=== 3/4. BARDANA + LESS ===");
-  const bardana = await storage.getBardanaReport({ fromDate: from, toDate: to });
-  const less = await storage.getLessReport({ fromDate: from, toDate: to });
+  const bardana = await reportsModel.getBardanaReport({ fromDate: from, toDate: to });
+  const less = await reportsModel.getLessReport({ fromDate: from, toDate: to });
   console.log("bardana", JSON.stringify(bardana).slice(0, 400));
   console.log("less", JSON.stringify(less).slice(0, 400));
   const rawDeduct: any = sqlite
@@ -208,21 +214,21 @@ async function main() {
     .get();
   check("bardana purchaseCount counts only purchases with bardana",
     bardana.totals.purchaseCount, Number(rawBardanaPurchases.c));
-  const bardanaBySupplier = await storage.getBardanaReport({ fromDate: from, toDate: to, supplierId: ctx.supplier.id });
+  const bardanaBySupplier = await reportsModel.getBardanaReport({ fromDate: from, toDate: to, supplierId: ctx.supplier.id });
   check("bardana supplier filter keeps totals", num(bardanaBySupplier.totals.totalKg), num(bardana.totals.totalKg));
-  const bardanaOther = await storage.getBardanaReport({ fromDate: from, toDate: to, supplierId: ctx.customer.id });
+  const bardanaOther = await reportsModel.getBardanaReport({ fromDate: from, toDate: to, supplierId: ctx.customer.id });
   check("bardana wrong-supplier filter empties", num(bardanaOther.totals.totalKg), 0);
   check("bardana wrong-supplier avgPerBag safe (no div by zero)", num(bardanaOther.totals.avgPerBag), 0);
-  const bardanaEmpty = await storage.getBardanaReport({ fromDate: D(2030, 1, 1), toDate: D(2030, 12, 31) });
+  const bardanaEmpty = await reportsModel.getBardanaReport({ fromDate: D(2030, 1, 1), toDate: D(2030, 12, 31) });
   check("bardana empty range totals zero", num(bardanaEmpty.totals.totalKg), 0);
   check("bardana empty range purchaseCount zero", bardanaEmpty.totals.purchaseCount, 0);
   // Unfiltered must agree with the wide-window run — a left join would let
   // orphan purchase_items leak in only when no date filter is supplied.
-  const bardanaNoFilter = await storage.getBardanaReport({});
+  const bardanaNoFilter = await reportsModel.getBardanaReport({});
   check("bardana unfiltered == wide-window", num(bardanaNoFilter.totals.totalKg), num(bardana.totals.totalKg));
 
   console.log("\n=== 5. SALES REPORT ===");
-  const salesRep = await storage.getSalesReport({ fromDate: from, toDate: to });
+  const salesRep = await reportsModel.getSalesReport({ fromDate: from, toDate: to });
   console.log(salesRep.totals);
   check("sales total == raw total", num(salesRep.totals.total), num(rawSale.total_amount));
   check("sales subtotal+charges-discount+tax == total",
@@ -231,30 +237,30 @@ async function main() {
   check("sales received == raw paid", num(salesRep.totals.received), num(rawSale.paid_amount));
   check("sales balance == total - received",
     num(salesRep.totals.balance), num(salesRep.totals.total) - num(salesRep.totals.received));
-  const salesByCustomer = await storage.getSalesReport({ fromDate: from, toDate: to, customerId: ctx.customer.id });
+  const salesByCustomer = await reportsModel.getSalesReport({ fromDate: from, toDate: to, customerId: ctx.customer.id });
   check("sales customer filter keeps row", salesByCustomer.rows.length, 1);
-  const salesWrongCustomer = await storage.getSalesReport({ fromDate: from, toDate: to, customerId: ctx.supplier.id });
+  const salesWrongCustomer = await reportsModel.getSalesReport({ fromDate: from, toDate: to, customerId: ctx.supplier.id });
   check("sales wrong-customer filter empty", salesWrongCustomer.rows.length, 0);
-  const salesCombo = await storage.getSalesReport({
+  const salesCombo = await reportsModel.getSalesReport({
     fromDate: from, toDate: to, customerId: ctx.customer.id, productId: ctx.wheat.id, paymentStatus: "partial",
   });
   check("sales combined AND filter", salesCombo.rows.length, 1);
-  const salesWrongProduct = await storage.getSalesReport({ fromDate: from, toDate: to, productId: 999999 });
+  const salesWrongProduct = await reportsModel.getSalesReport({ fromDate: from, toDate: to, productId: 999999 });
   check("sales unknown-product filter empty", salesWrongProduct.rows.length, 0);
   check("sales unknown-product totals zero", num(salesWrongProduct.totals.total), 0);
   // every row's own status must be exactly what the corresponding filter selects
   for (const st of ["paid", "partial", "unpaid"] as const) {
-    const filtered = await storage.getSalesReport({ fromDate: from, toDate: to, paymentStatus: st });
+    const filtered = await reportsModel.getSalesReport({ fromDate: from, toDate: to, paymentStatus: st });
     const expected = salesRep.rows.filter((r: any) => r.status === st).length;
     check(`sales status filter '${st}' matches row status`, filtered.rows.length, expected);
   }
-  const salesEmptyRange = await storage.getSalesReport({ fromDate: D(2030, 1, 1), toDate: D(2030, 12, 31) });
+  const salesEmptyRange = await reportsModel.getSalesReport({ fromDate: D(2030, 1, 1), toDate: D(2030, 12, 31) });
   check("sales empty range returns no rows", salesEmptyRange.rows.length, 0);
   check("sales empty range totals zero", num(salesEmptyRange.totals.total), 0);
 
   console.log("\n=== 6/7. PERIOD PURCHASES / SALES ===");
-  const pp = await storage.getPeriodPurchases(from, to, undefined, "month");
-  const ps = await storage.getPeriodSales(from, to, undefined, "month");
+  const pp = await reportsModel.getPeriodPurchases(from, to, undefined, "month");
+  const ps = await reportsModel.getPeriodSales(from, to, undefined, "month");
   check("period purchases total == purchase report total", num(pp.totals.totalAmount), num(purchaseRep.totals.total));
   check("period sales total == sales report total", num(ps.totals.totalAmount), num(salesRep.totals.total));
   check("period purchases invoiceCount == purchase rows", pp.totals.invoiceCount, purchaseRep.rows.length);
@@ -263,13 +269,13 @@ async function main() {
     num(pp.totals.balanceAmount), num(pp.totals.totalAmount) - num(pp.totals.paidAmount));
   // grouping must not change the totals, only how they are bucketed
   for (const g of ["day", "week", "month", "year"] as const) {
-    const gpp = await storage.getPeriodPurchases(from, to, undefined, g);
-    const gps = await storage.getPeriodSales(from, to, undefined, g);
+    const gpp = await reportsModel.getPeriodPurchases(from, to, undefined, g);
+    const gps = await reportsModel.getPeriodSales(from, to, undefined, g);
     check(`period purchases total stable across groupBy '${g}'`, num(gpp.totals.totalAmount), num(pp.totals.totalAmount));
     check(`period sales total stable across groupBy '${g}'`, num(gps.totals.totalAmount), num(ps.totals.totalAmount));
   }
   // the day-grouped label must be the *local* purchase date, not a UTC-shifted one
-  const ppDay = await storage.getPeriodPurchases(from, to, undefined, "day");
+  const ppDay = await reportsModel.getPeriodPurchases(from, to, undefined, "day");
   // purchases.purchase_date is stored in unix *seconds*; take the already-decoded
   // Date off the purchase report rather than re-parsing the raw column.
   const expectedDayKey = (() => {
@@ -278,14 +284,14 @@ async function main() {
   })();
   check("period purchases day key == local purchase date",
     ppDay.rows.some((r: any) => r.period === expectedDayKey) ? 1 : 0, 1);
-  const ppEmpty = await storage.getPeriodPurchases(D(2030, 1, 1), D(2030, 12, 31), undefined, "month");
+  const ppEmpty = await reportsModel.getPeriodPurchases(D(2030, 1, 1), D(2030, 12, 31), undefined, "month");
   check("period purchases empty range no rows", ppEmpty.rows.length, 0);
   check("period purchases empty range totals zero", num(ppEmpty.totals.totalAmount), 0);
-  const ppSupplier = await storage.getPeriodPurchases(from, to, ctx.customer.id, "month");
+  const ppSupplier = await reportsModel.getPeriodPurchases(from, to, ctx.customer.id, "month");
   check("period purchases wrong-supplier filter empty", ppSupplier.rows.length, 0);
 
   console.log("\n=== 8. GROSS PROFIT ===");
-  const gp = await storage.getGrossProfit(from, to);
+  const gp = await reportsModel.getGrossProfit(from, to);
   console.log(gp);
   check("gross profit == netSales - COGS", num(gp.grossProfit), num(gp.netSales) - num(gp.costOfGoodsSold));
   check("gross profit rows sum to netSales",
@@ -295,13 +301,13 @@ async function main() {
   check("gross margin == profit/netSales*100",
     num(gp.grossMarginPercent), Math.round((num(gp.grossProfit) / num(gp.netSales)) * 10000) / 100);
   // an empty period must report zeros, not silently fall back to ledger balances
-  const gpEmpty = await storage.getGrossProfit(D(2030, 1, 1), D(2030, 12, 31));
+  const gpEmpty = await reportsModel.getGrossProfit(D(2030, 1, 1), D(2030, 12, 31));
   check("gross profit empty range netSales zero", num(gpEmpty.netSales), 0);
   check("gross profit empty range margin zero", num(gpEmpty.grossMarginPercent), 0);
 
   console.log("\n=== 21/22. PROFIT & LOSS / INCOME STATEMENT ===");
-  const pl = await storage.getProfitLoss(from, to);
-  const is = await storage.getIncomeStatement(from, to);
+  const pl = await reportsModel.getProfitLoss(from, to);
+  const is = await reportsModel.getIncomeStatement(from, to);
   console.log(pl);
   check("P&L revenue == GrossProfit netSales", num(pl.revenue), num(gp.netSales));
   check("P&L COGS == GrossProfit COGS", num(pl.costOfSales), num(gp.costOfGoodsSold));
@@ -311,7 +317,7 @@ async function main() {
   check("P&L opex == expense + purchase charges", num(pl.operatingExpenses), 1800);
 
   console.log("\n=== 20. TRIAL BALANCE ===");
-  const tb = await storage.getTrialBalance(to);
+  const tb = await reportsModel.getTrialBalance(to);
   console.log(tb.totals, tb.validation);
   check("trial balance debit == credit", num(tb.totals.debit), num(tb.totals.credit));
 
@@ -326,8 +332,8 @@ async function main() {
   }
 
   console.log("\n=== 16/17. OUTSTANDING ===");
-  const oc = await storage.getOutstandingCustomers(to);
-  const os = await storage.getOutstandingSuppliers(to);
+  const oc = await reportsModel.getOutstandingCustomers(to);
+  const os = await reportsModel.getOutstandingSuppliers(to);
   console.log("customers", oc.totals);
   console.log("suppliers", os.totals);
   const tbCustomer: any = tb.rows.find((r: any) => r.account.id === ctx.customer.id);
@@ -339,34 +345,34 @@ async function main() {
 
   console.log("\n=== 9. GENERAL DAY BOOK ===");
   for (const d of [D(2025, 1, 10), D(2025, 2, 5), D(2025, 2, 12)]) {
-    const dbk = await storage.getDayBook(d);
+    const dbk = await reportsModel.getDayBook(d);
     console.log(d.toDateString(), "opening", dbk.openingBalance, "totals", dbk.totals, "rows", dbk.rows.length);
   }
 
   console.log("\n=== 12/18. CASH DAY BOOK / CASH LEDGER / CASH IN HAND ===");
-  const cashAcc = await storage.getOrCreateCashAccount();
-  const cashSummary = await storage.getCashSummary();
+  const cashAcc = await ledgerModel.getOrCreateCashAccount();
+  const cashSummary = await ledgerModel.getCashSummary();
   console.log("cash account", cashAcc.id, cashAcc.name, "summary", cashSummary);
   const cashLedger: any = await ledgerService.getLedgerReport({ accountId: cashAcc.id, startDate: from, endDate: to });
   const cashLedgerClosing = num(cashLedger.totals?.closingBalance);
   console.log("cash ledger closing", cashLedgerClosing);
   check("cash ledger closing == cash summary closing", cashLedgerClosing, cashSummary.closing);
 
-  const dayBookFeb5 = await storage.getDayBook(D(2025, 2, 5));
+  const dayBookFeb5 = await reportsModel.getDayBook(D(2025, 2, 5));
   check("general day book receipt on sale day == cash received", num(dayBookFeb5.totals.receipt), num(rawSale.paid_amount));
 
   console.log("\n=== 23. BALANCE SHEET ===");
-  const bs = await storage.getBalanceSheet(to);
+  const bs = await reportsModel.getBalanceSheet(to);
   console.log(JSON.stringify(bs, null, 2));
   check("balance sheet assets == liabilities+equity", num(bs.totals.assets), num(bs.totals.liabilitiesAndEquity));
 
   console.log("\n=== 24. CAPITAL ===");
-  const cap = await storage.getCapitalStatement(from, to);
+  const cap = await reportsModel.getCapitalStatement(from, to);
   console.log(cap);
   check("capital netProfit == P&L netProfit", num(cap.netProfit), num(pl.netProfit));
 
   console.log("\n=== 25. SALARY ===");
-  const sal = await storage.getSalaryAccount(from, to);
+  const sal = await reportsModel.getSalaryAccount(from, to);
   console.log(sal.totals, "rows", sal.rows.length);
 
   console.log("\n=== 10-15. SPECIALISED DAY BOOKS ===");

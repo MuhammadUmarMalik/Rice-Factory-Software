@@ -1,14 +1,15 @@
-import { storage } from "../models/storage";
+import * as processingModel from "../models/processing.model";
+import * as productsModel from "../models/products.model";
 
 export async function listProcessing() {
   const [batches, products] = await Promise.all([
-    storage.getProcessingBatches(),
-    storage.getProducts(),
+    processingModel.getProcessingBatches(),
+    productsModel.getProducts(),
   ]);
 
   const withOutputs = await Promise.all(
     batches.map(async (batch) => {
-      const outputs = await storage.getProcessingOutputs(batch.id);
+      const outputs = await processingModel.getProcessingOutputs(batch.id);
       return {
         ...batch,
         sourceProduct: products.find((p) => p.id === batch.sourceProductId),
@@ -27,16 +28,16 @@ export async function listProcessing() {
 }
 
 export async function getProcessing(id: number) {
-  return storage.getProcessingBatch(id);
+  return processingModel.getProcessingBatch(id);
 }
 
 export async function getProcessingWithOutputs(id: number) {
-  const batch = await storage.getProcessingBatch(id);
+  const batch = await processingModel.getProcessingBatch(id);
   if (!batch) return undefined;
 
   const [outputs, products] = await Promise.all([
-    storage.getProcessingOutputs(id),
-    storage.getProducts(),
+    processingModel.getProcessingOutputs(id),
+    productsModel.getProducts(),
   ]);
 
   return {
@@ -53,29 +54,29 @@ export async function getProcessingWithOutputs(id: number) {
 }
 
 export async function createProcessing(data: any) {
-  return storage.createProcessing(data);
+  return processingModel.createProcessing(data);
 }
 
 export async function updateProcessing(id: number, data: any) {
-  return storage.updateProcessing(id, data);
+  return processingModel.updateProcessing(id, data);
 }
 
 export async function listProcessingOutputs(processingId: number) {
-  return storage.getProcessingOutputs(processingId);
+  return processingModel.getProcessingOutputs(processingId);
 }
 
 export async function setProcessingOutputs(processingId: number, outputs: any[]) {
-  return storage.setProcessingOutputs(processingId, outputs);
+  return processingModel.setProcessingOutputs(processingId, outputs);
 }
 
 export async function addProcessingOutput(processingId: number, output: any) {
-  return storage.addProcessingOutput(processingId, output);
+  return processingModel.addProcessingOutput(processingId, output);
 }
 
 export async function updateProcessingOutput(id: number, output: any) {
-  return storage.updateProcessingOutput(id, output);
+  return processingModel.updateProcessingOutput(id, output);
 }
 
 export async function deleteProcessingOutput(id: number) {
-  return storage.deleteProcessingOutput(id);
+  return processingModel.deleteProcessingOutput(id);
 }

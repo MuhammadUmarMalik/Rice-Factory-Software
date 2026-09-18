@@ -1,8 +1,8 @@
 import { container } from "../container";
+import * as accountsModel from "../models/accounts.model";
 import * as cashService from "./cash-in-hand.service";
 
 const repo = container.purchases;
-const storage = container.storage;
 
 export async function getNextBillNumber() {
   return repo.getNextPurchaseBillNumber();
@@ -37,7 +37,7 @@ export async function createPurchase(
   const paidAmount = parseFloat((data as any).paidAmount || (result as any).paidAmount || "0");
   if (paymentMode === "cash" && paidAmount > 0) {
     try {
-      const supplier = await storage.getAccount(result.supplierId);
+      const supplier = await accountsModel.getAccount(result.supplierId);
       const paymentDate = result.purchaseDate instanceof Date ? result.purchaseDate.toISOString().slice(0, 10) : new Date((result.purchaseDate as number) || Date.now()).toISOString().slice(0, 10);
       await cashService.createPaymentForPurchase({
         purchaseId: result.id,
@@ -68,7 +68,7 @@ export async function updatePurchase(
   const paidAmount = parseFloat((data as { paidAmount?: string })?.paidAmount ?? (result as { paidAmount?: string })?.paidAmount ?? "0");
   if (paymentMode === "cash" && paidAmount > 0) {
     try {
-      const supplier = await storage.getAccount(result.supplierId);
+      const supplier = await accountsModel.getAccount(result.supplierId);
       const paymentDate = result.purchaseDate instanceof Date ? result.purchaseDate : (result.purchaseDate as number);
       const dateStr = typeof paymentDate === "number" ? new Date(paymentDate).toISOString().slice(0, 10) : new Date(paymentDate).toISOString().slice(0, 10);
       await cashService.updateOrCreatePaymentForPurchase({

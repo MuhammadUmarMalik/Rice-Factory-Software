@@ -1,3 +1,34 @@
+/**
+ * Amounts are stored as decimal strings. Throws rather than yielding NaN so a
+ * malformed row fails loudly instead of poisoning a balance.
+ */
+export function parseAmount(value: string | number | null | undefined): number {
+  const num = typeof value === "number" ? value : parseFloat(value || "0");
+  if (!Number.isFinite(num)) {
+    throw new Error("Invalid numeric value");
+  }
+  return num;
+}
+
+/**
+ * Money is stored as decimal strings; binary floats such as 3 * 33.33 =
+ * 99.99000000000001 were being written verbatim, which looked wrong in the UI
+ * and made debit/credit totals fail to net to zero. Round to paisa at every
+ * persistence boundary.
+ */
+export function roundMoney(value: number): number {
+  if (!Number.isFinite(value)) throw new Error("Invalid numeric value");
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/** Paisa-precision display formatting for amounts embedded in report text. */
+export function formatMoney(value: string | number | null | undefined): string {
+  return parseAmount(value).toLocaleString("en-PK", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function parseRequiredDate(value: unknown, label: string): Date {
   if (!value || typeof value !== "string") throw new Error(`${label} is required`);
   const d = new Date(value);

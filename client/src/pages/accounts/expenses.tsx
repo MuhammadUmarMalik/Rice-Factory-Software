@@ -6,6 +6,7 @@ import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
@@ -54,11 +55,12 @@ export default function ExpensesPage() {
   });
 
   const createMutation = useMutation({
+    mutationKey: ["/api/accounts", "expense", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: ExpenseFormData) =>
       apiRequest("POST", "/api/accounts", { ...data, type: "expense" }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      invalidateApi(invalidationGroups.accounts);
       setIsDialogOpen(false);
       form.reset();
       toast({ title: t("savedSuccessfully") });
@@ -66,6 +68,8 @@ export default function ExpensesPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/accounts", "expense", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => apiRequest("DELETE", `/api/accounts/${id}`),
     onMutate: async (id: number) => {
       await queryClient.cancelQueries({ queryKey: ["/api/accounts?type=expense"] });
@@ -87,17 +91,17 @@ export default function ExpensesPage() {
       toast({ title: t("deletedSuccessfully") });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      invalidateApi(invalidationGroups.accounts);
     },
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/accounts", "expense", "update"],
+    meta: scopedInvalidation,
     mutationFn: (data: ExpenseFormData & { id: number }) =>
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/accounts?type=expense"] });
+      invalidateApi(invalidationGroups.accounts);
       setIsDialogOpen(false);
       setEditingExpense(null);
       form.reset();

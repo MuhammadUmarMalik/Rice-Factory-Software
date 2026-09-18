@@ -1,5 +1,13 @@
 import { format } from "date-fns";
-import { storage } from "../../../models/storage";
+import * as accountsModel from "../../../models/accounts.model";
+import * as expensesModel from "../../../models/expenses.model";
+import * as jvModel from "../../../models/journal-vouchers.model";
+import * as ledgerModel from "../../../models/ledger.model";
+import * as processingModel from "../../../models/processing.model";
+import * as productsModel from "../../../models/products.model";
+import * as purchasesModel from "../../../models/purchases.model";
+import * as reportsModel from "../../../models/reports.model";
+import * as salesModel from "../../../models/sales.model";
 import * as daybooksService from "../../daybooks.service";
 import * as cashInHandService from "../../cash-in-hand.service";
 import type { PrintableDocumentPayload, PrintableSection, PrintableTableColumn } from "../../../types/print";
@@ -84,7 +92,7 @@ async function lookupAccountName(id: unknown) {
   const numericId = Number(id);
   if (!Number.isFinite(numericId)) return null;
   try {
-    const account = await storage.getAccount(numericId);
+    const account = await accountsModel.getAccount(numericId);
     return account?.name || null;
   } catch {
     return null;
@@ -96,7 +104,7 @@ async function lookupProductName(id: unknown) {
   const numericId = Number(id);
   if (!Number.isFinite(numericId)) return null;
   try {
-    const product = await storage.getProduct(numericId);
+    const product = await productsModel.getProduct(numericId);
     return product?.name || null;
   } catch {
     return null;
@@ -105,12 +113,12 @@ async function lookupProductName(id: unknown) {
 
 export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const saleId = Number(params.saleId);
-  const sale = await storage.getSale(saleId);
+  const sale = await salesModel.getSale(saleId);
   if (!sale) throw new Error("Sale not found");
-  const items = await storage.getSaleItems(saleId);
-  const customer = await storage.getAccount(sale.customerId);
+  const items = await salesModel.getSaleItems(saleId);
+  const customer = await accountsModel.getAccount(sale.customerId);
   const narration = displayNarration(sale.notes);
-  const products = await storage.getProducts();
+  const products = await productsModel.getProducts();
   const productMap = new Map(products.map((p) => [p.id, p]));
 
   const tableColumns = buildColumns([
@@ -257,11 +265,11 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
 
 export async function mapPurchaseInvoice(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const purchaseId = Number(params.purchaseId);
-  const purchase = await storage.getPurchaseWithDetails(purchaseId);
+  const purchase = await purchasesModel.getPurchaseWithDetails(purchaseId);
   if (!purchase) throw new Error("Purchase not found");
-  const supplier = await storage.getAccount(purchase.supplierId);
+  const supplier = await accountsModel.getAccount(purchase.supplierId);
   const narration = displayNarration(purchase.notes);
-  const products = await storage.getProducts();
+  const products = await productsModel.getProducts();
   const productMap = new Map(products.map((p) => [p.id, p]));
 
   const tableColumns = buildColumns([
@@ -424,9 +432,9 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
 }
 export async function mapCashVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const voucherId = Number(params.voucherId);
-  const voucher = await storage.getReceiptVoucher(voucherId);
+  const voucher = await ledgerModel.getReceiptVoucher(voucherId);
   if (!voucher) throw new Error("Voucher not found");
-  const accounts = await storage.getAccounts();
+  const accounts = await accountsModel.getAccounts();
   const accountMap = new Map(accounts.map((a) => [a.id, a.name]));
   const isReceipt = voucher.voucherType === "CR" || voucher.voucherType === "BR";
   const title = isReceipt ? "Cash Receipt Voucher" : "Cash Payment Voucher";
@@ -479,9 +487,9 @@ export async function mapCashVoucher(params: Record<string, any>, ctx: PrintCont
 
 export async function mapJournalVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const voucherId = Number(params.voucherId);
-  const voucher = await storage.getJournalVoucher(voucherId);
+  const voucher = await jvModel.getJournalVoucher(voucherId);
   if (!voucher) throw new Error("Journal voucher not found");
-  const accounts = await storage.getAccounts();
+  const accounts = await accountsModel.getAccounts();
   const accountMap = new Map(accounts.map((a) => [a.id, a.name]));
 
   const tableColumns = buildColumns([
@@ -589,9 +597,9 @@ export async function mapCashModulePayment(params: Record<string, any>, ctx: Pri
 
 export async function mapExpenseVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const expenseId = Number(params.expenseId);
-  const expense = await storage.getExpense(expenseId);
+  const expense = await expensesModel.getExpense(expenseId);
   if (!expense) throw new Error("Expense not found");
-  const accounts = await storage.getAccounts();
+  const accounts = await accountsModel.getAccounts();
   const accountMap = new Map(accounts.map((account) => [account.id, account.name]));
   return {
     docType: "VOUCHER",
@@ -623,9 +631,9 @@ export async function mapExpenseVoucher(params: Record<string, any>, ctx: PrintC
 
 export async function mapProcessingVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const processingId = Number(params.processingId);
-  const batch = await storage.getProcessingBatch(processingId);
+  const batch = await processingModel.getProcessingBatch(processingId);
   if (!batch) throw new Error("Processing batch not found");
-  const products = await storage.getProducts();
+  const products = await productsModel.getProducts();
   const productMap = new Map(products.map((product) => [product.id, product.name]));
   return {
     docType: "VOUCHER",
@@ -739,7 +747,7 @@ export async function mapLedgerReport(params: Record<string, any>, ctx: PrintCon
   const language = params.language ? String(params.language) : "en";
   const useUrdu = language.toLowerCase() === "ur";
 
-  const report = await storage.getLedgerReport({
+  const report = await ledgerModel.getLedgerReport({
     accountId,
     referenceType,
     startDate,
@@ -847,7 +855,7 @@ export async function mapLedgerReport(params: Record<string, any>, ctx: PrintCon
 
 export async function mapTrialBalance(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const asOfDate = params.asOfDate ? new Date(String(params.asOfDate)) : undefined;
-  const report = await storage.getTrialBalance(asOfDate);
+  const report = await reportsModel.getTrialBalance(asOfDate);
 
   const columns = buildColumns([
     { key: "account", label: "Account" },
@@ -892,7 +900,7 @@ export async function mapTrialBalance(params: Record<string, any>, ctx: PrintCon
 
 export async function mapBalanceSheet(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const asOfDate = params.asOfDate ? new Date(String(params.asOfDate)) : undefined;
-  const report = await storage.getBalanceSheet(asOfDate ?? new Date());
+  const report = await reportsModel.getBalanceSheet(asOfDate ?? new Date());
 
   const columns = buildColumns([
     { key: "account", label: "Account" },
@@ -939,7 +947,7 @@ export async function mapBalanceSheet(params: Record<string, any>, ctx: PrintCon
   };
 }
 export async function mapStockReport(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  const report = await storage.getStockReport({
+  const report = await reportsModel.getStockReport({
     fromDate: params.fromDate ? new Date(String(params.fromDate)) : undefined,
     toDate: params.toDate ? new Date(String(params.toDate)) : undefined,
     productId: params.productId ? Number(params.productId) : undefined,
@@ -1021,7 +1029,7 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
 }
 
 export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  const report = await storage.getPurchaseReport({
+  const report = await reportsModel.getPurchaseReport({
     fromDate: params.fromDate ? new Date(String(params.fromDate)) : undefined,
     toDate: params.toDate ? new Date(String(params.toDate)) : undefined,
     supplierId: params.supplierId ? Number(params.supplierId) : undefined,
@@ -1097,7 +1105,7 @@ export async function mapPurchaseReport(params: Record<string, any>, ctx: PrintC
 }
 
 export async function mapSalesReport(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  const report = await storage.getSalesReport({
+  const report = await reportsModel.getSalesReport({
     fromDate: params.fromDate ? new Date(String(params.fromDate)) : undefined,
     toDate: params.toDate ? new Date(String(params.toDate)) : undefined,
     customerId: params.customerId ? Number(params.customerId) : undefined,
@@ -1180,8 +1188,8 @@ export async function mapBardanaReport(params: Record<string, any>, ctx: PrintCo
   const fromDate = params.fromDate ? new Date(String(params.fromDate)) : undefined;
   const toDate = params.toDate ? new Date(String(params.toDate)) : undefined;
   const supplierId = params.supplierId ? Number(params.supplierId) : undefined;
-  const supplier = supplierId ? await storage.getAccount(supplierId) : undefined;
-  const report = await storage.getBardanaReport({ fromDate, toDate, supplierId });
+  const supplier = supplierId ? await accountsModel.getAccount(supplierId) : undefined;
+  const report = await reportsModel.getBardanaReport({ fromDate, toDate, supplierId });
 
   return {
     docType: "REPORT",
@@ -1209,8 +1217,8 @@ export async function mapLessReport(params: Record<string, any>, ctx: PrintConte
   const fromDate = params.fromDate ? new Date(String(params.fromDate)) : undefined;
   const toDate = params.toDate ? new Date(String(params.toDate)) : undefined;
   const supplierId = params.supplierId ? Number(params.supplierId) : undefined;
-  const supplier = supplierId ? await storage.getAccount(supplierId) : undefined;
-  const report = await storage.getLessReport({ fromDate, toDate, supplierId });
+  const supplier = supplierId ? await accountsModel.getAccount(supplierId) : undefined;
+  const report = await reportsModel.getLessReport({ fromDate, toDate, supplierId });
 
   return {
     docType: "REPORT",
@@ -1239,7 +1247,7 @@ export async function mapPeriodPurchases(params: Record<string, any>, ctx: Print
   const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const supplierId = params.supplierId ? Number(params.supplierId) : undefined;
   const groupBy = (params.groupBy as "day" | "week" | "month") || "month";
-  const report = await storage.getPeriodPurchases(fromDate, toDate, supplierId, groupBy);
+  const report = await reportsModel.getPeriodPurchases(fromDate, toDate, supplierId, groupBy);
 
   const columns = buildColumns([
     { key: "period", label: "Period" },
@@ -1295,7 +1303,7 @@ export async function mapPeriodSales(params: Record<string, any>, ctx: PrintCont
   const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
   const customerId = params.customerId ? Number(params.customerId) : undefined;
   const groupBy = (params.groupBy as "day" | "week" | "month") || "month";
-  const report = await storage.getPeriodSales(fromDate, toDate, customerId, groupBy);
+  const report = await reportsModel.getPeriodSales(fromDate, toDate, customerId, groupBy);
 
   const columns = buildColumns([
     { key: "period", label: "Period" },
@@ -1348,7 +1356,7 @@ export async function mapPeriodSales(params: Record<string, any>, ctx: PrintCont
 export async function mapGrossProfit(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
   const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
-  const report = await storage.getGrossProfit(fromDate, toDate);
+  const report = await reportsModel.getGrossProfit(fromDate, toDate);
 
   return {
     docType: "REPORT",
@@ -1382,7 +1390,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
 
   if (!["sales", "purchases", "cash", "sales-returns", "purchase-returns", "general-journal", "all"].includes(type)) {
     const date = params.date ? new Date(String(params.date)) : new Date();
-    const report = await storage.getDayBook(date);
+    const report = await reportsModel.getDayBook(date);
     const balanceLabel = (amount?: string | number | null, side?: string) => {
       const n = typeof amount === "number" ? amount : parseFloat(String(amount ?? "0"));
       if (!Number.isFinite(n) || n === 0) return "0.00";
@@ -1735,7 +1743,7 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
 export async function mapOutstandingCustomers(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const asOfDate = params.asOfDate ? new Date(String(params.asOfDate)) : new Date();
   const customerId = params.customerId ? Number(params.customerId) : undefined;
-  const report = await storage.getOutstandingCustomers(asOfDate, customerId);
+  const report = await reportsModel.getOutstandingCustomers(asOfDate, customerId);
 
   const columns = buildColumns([
     { key: "invoiceNo", label: "Invoice No" },
@@ -1786,7 +1794,7 @@ export async function mapOutstandingCustomers(params: Record<string, any>, ctx: 
 export async function mapOutstandingSuppliers(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const asOfDate = params.asOfDate ? new Date(String(params.asOfDate)) : new Date();
   const supplierId = params.supplierId ? Number(params.supplierId) : undefined;
-  const report = await storage.getOutstandingSuppliers(asOfDate, supplierId);
+  const report = await reportsModel.getOutstandingSuppliers(asOfDate, supplierId);
 
   const columns = buildColumns([
     { key: "billNo", label: "Bill No" },
@@ -1837,7 +1845,7 @@ export async function mapOutstandingSuppliers(params: Record<string, any>, ctx: 
 export async function mapIncomeStatement(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
   const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
-  const report = await storage.getIncomeStatement(fromDate, toDate);
+  const report = await reportsModel.getIncomeStatement(fromDate, toDate);
 
   const columns = buildColumns([
     { key: "label", label: "Description" },
@@ -1872,7 +1880,7 @@ export async function mapIncomeStatement(params: Record<string, any>, ctx: Print
 export async function mapProfitLoss(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const fromDate = params.startDate ? new Date(String(params.startDate)) : undefined;
   const toDate = params.endDate ? new Date(String(params.endDate)) : undefined;
-  const report = await storage.getProfitLoss(fromDate, toDate);
+  const report = await reportsModel.getProfitLoss(fromDate, toDate);
 
   return {
     docType: "STATEMENT",
@@ -1897,7 +1905,7 @@ export async function mapProfitLoss(params: Record<string, any>, ctx: PrintConte
 export async function mapCapital(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
   const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
-  const report = await storage.getCapitalStatement(fromDate, toDate);
+  const report = await reportsModel.getCapitalStatement(fromDate, toDate);
 
   const rows = [
     { label: "Opening Capital", amount: report.openingCapital },
@@ -1930,7 +1938,7 @@ export async function mapCapital(params: Record<string, any>, ctx: PrintContext)
 export async function mapSalary(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
   const fromDate = params.fromDate ? new Date(String(params.fromDate)) : new Date(0);
   const toDate = params.toDate ? new Date(String(params.toDate)) : new Date(9999, 11, 31);
-  const report = await storage.getSalaryAccount(fromDate, toDate);
+  const report = await reportsModel.getSalaryAccount(fromDate, toDate);
 
   const columns = buildColumns([
     { key: "employee", label: "Employee" },

@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import { SkeletonBox } from "@/components/ui/skeletons";
 import { DataTable, type Column } from "@/components/data-table";
@@ -37,6 +38,7 @@ import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import type { Processing, ProcessingOutput, Product } from "@/types/schema";
+import { formatStock } from "@/lib/units";
 import { format } from "date-fns";
 
 const processingFormSchema = z.object({
@@ -159,6 +161,8 @@ export default function ProcessingPage() {
   };
 
   const createMutation = useMutation({
+    mutationKey: ["/api/processing", "create"],
+    meta: scopedInvalidation,
     mutationFn: (data: ProcessingFormData) =>
       apiRequest("POST", "/api/processing", {
         ...data,
@@ -168,8 +172,7 @@ export default function ProcessingPage() {
           : null,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/processing"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      invalidateApi(invalidationGroups.processing);
       setIsDialogOpen(false);
       form.reset({
         sourceProductId: "",
@@ -185,10 +188,12 @@ export default function ProcessingPage() {
   });
 
   const startMutation = useMutation({
+    mutationKey: ["/api/processing", "start"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) =>
       apiRequest("PATCH", `/api/processing/${id}/start`, {}),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/processing"] });
+      invalidateApi(invalidationGroups.processing);
       toast({ title: language === "ur" ? "???????? ???? ?? ???" : "Processing started" });
     },
     onError: (err: any) => {
@@ -197,6 +202,8 @@ export default function ProcessingPage() {
   });
 
   const completeMutation = useMutation({
+    mutationKey: ["/api/processing", "complete"],
+    meta: scopedInvalidation,
     mutationFn: (data: CompleteFormData & { id: number }) =>
       apiRequest("PATCH", `/api/processing/${data.id}/complete`, {
         outputs: data.outputs.map((output) => ({
@@ -208,8 +215,7 @@ export default function ProcessingPage() {
         outputCategory: data.outputCategory,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/processing"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/products"] });
+      invalidateApi(invalidationGroups.processing);
       setIsCompleteDialogOpen(false);
       setSelectedProcessing(null);
       completeForm.reset();
@@ -583,7 +589,7 @@ export default function ProcessingPage() {
                       <SelectContent>
                         {products.map((p) => (
                           <SelectItem key={p.id} value={p.id.toString()}>
-                            {p.name} ({parseFloat(p.currentStock).toLocaleString()} {p.unit})
+                            {p.name} ({formatStock(p.currentStock, p.unit)})
                           </SelectItem>
                         ))}
                       </SelectContent>

@@ -1,7 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import { storage } from "../models/storage";
+import * as usersModel from "../models/users.model";
 import { ensureDesktopSecret } from "./desktop-secret";
 
 ensureDesktopSecret();
@@ -23,6 +23,7 @@ export type AuthUser = {
   fullName: string;
   role: string;
   isActive?: boolean;
+  mustChangePassword?: boolean;
 };
 
 export function signAccessToken(user: AuthUser): string {
@@ -66,7 +67,7 @@ export const authenticate: RequestHandler = async (req, res, next) => {
     if (req.user) return next();
 
     if (req.session?.userId) {
-      const user = await storage.getUser(req.session.userId);
+      const user = await usersModel.getUser(req.session.userId);
       if (user && user.isActive) {
         req.user = {
           id: user.id,
@@ -74,6 +75,9 @@ export const authenticate: RequestHandler = async (req, res, next) => {
           fullName: user.fullName,
           role: user.role,
           isActive: user.isActive,
+          // Carried through so /api/auth/me reports it; the client re-reads the
+          // user on every mount and would otherwise lose the forced-change flag.
+          mustChangePassword: user.mustChangePassword,
         };
         return next();
       }
@@ -90,7 +94,7 @@ export const authenticate: RequestHandler = async (req, res, next) => {
         if (typeof payload === "object" && payload?.sub) {
           const userId = Number(payload.sub);
           if (Number.isFinite(userId)) {
-            const user = await storage.getUser(userId);
+            const user = await usersModel.getUser(userId);
             if (user && user.isActive) {
               req.user = {
                 id: user.id,
@@ -98,6 +102,7 @@ export const authenticate: RequestHandler = async (req, res, next) => {
                 fullName: user.fullName,
                 role: user.role,
                 isActive: user.isActive,
+                mustChangePassword: user.mustChangePassword,
               };
             }
           }

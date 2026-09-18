@@ -1,8 +1,9 @@
 import { container } from "../container";
+import * as accountsModel from "../models/accounts.model";
+import * as salesModel from "../models/sales.model";
 import * as cashService from "./cash-in-hand.service";
 
 const repo = container.sales;
-const storage = container.storage;
 
 export async function listSales() {
   const sales = await repo.getSales();
@@ -17,7 +18,7 @@ export async function listSales() {
 export async function getSale(id: number) {
   const sale = await repo.getSale(id);
   if (!sale) return undefined;
-  const items = await storage.getSaleItems(id);
+  const items = await salesModel.getSaleItems(id);
   const cashReceiptId = (sale as any).cashReceiptId;
   const cashReceiptVoucherNo = cashReceiptId ? await cashService.getCashReceiptVoucherNo(cashReceiptId) : null;
   return { ...sale, items, cashReceiptVoucherNo: cashReceiptVoucherNo ?? undefined };
@@ -32,7 +33,7 @@ export async function createSale(
   const paidAmount = parseFloat((data as any).paidAmount || "0");
   if (paymentMode === "cash" && paidAmount > 0) {
     try {
-      const customer = await storage.getAccount(sale.customerId);
+      const customer = await accountsModel.getAccount(sale.customerId);
       const receiptDate = sale.saleDate instanceof Date ? sale.saleDate.toISOString().slice(0, 10) : new Date((sale.saleDate as number) || Date.now()).toISOString().slice(0, 10);
       await cashService.createReceiptForSale({
         saleId: sale.id,
@@ -60,7 +61,7 @@ export async function updateSale(
   const paidAmount = parseFloat((data as any).paidAmount ?? sale.paidAmount ?? "0");
   if (paymentMode === "cash" && paidAmount > 0) {
     try {
-      const customer = await storage.getAccount(sale.customerId);
+      const customer = await accountsModel.getAccount(sale.customerId);
       const receiptDate = sale.saleDate instanceof Date ? sale.saleDate.toISOString().slice(0, 10) : new Date((sale.saleDate as number) || Date.now()).toISOString().slice(0, 10);
       await cashService.updateOrCreateReceiptForSale({
         saleId: sale.id,

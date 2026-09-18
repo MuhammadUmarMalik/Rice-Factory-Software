@@ -1,6 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { accountsApi } from "@/api/accounts.api";
 import { apiKeys } from "@/api/keys";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 
 export function useAccounts(params?: { type?: string; active?: boolean }) {
   return useQuery({
@@ -18,32 +19,35 @@ export function useAccount(id: number | null) {
 }
 
 export function useCreateAccount() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/accounts", "create"],
+    meta: scopedInvalidation,
     mutationFn: accountsApi.create,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/accounts"] });
+      invalidateApi(invalidationGroups.accounts);
     },
   });
 }
 
 export function useUpdateAccount() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/accounts", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: Parameters<typeof accountsApi.update>[1] }) =>
       accountsApi.update(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/accounts"] });
+      invalidateApi(invalidationGroups.accounts);
     },
   });
 }
 
 export function useDeleteAccount() {
-  const qc = useQueryClient();
   return useMutation({
+    mutationKey: ["/api/accounts", "delete"],
+    meta: scopedInvalidation,
     mutationFn: accountsApi.delete,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/accounts"] });
+      invalidateApi(invalidationGroups.accounts);
     },
   });
 }
