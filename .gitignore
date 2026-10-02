@@ -24,6 +24,7 @@ cookies.txt
 # Local runtime data (live SQLite databases, settings, backups)
 .local/
 server/.local/
+app-data/
 *.db
 *.db-journal
 *.db-wal

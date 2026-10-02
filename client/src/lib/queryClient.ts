@@ -24,6 +24,12 @@ export async function apiRequest(
   try {
     res = await fetch(url, {
       method,
+      // Every GET /api response carries `Cache-Control: private, max-age=60`
+      // (server/index.ts), so without this the HTTP cache answers a refetch
+      // triggered by invalidateApi() with the pre-mutation body — the cash
+      // cards kept showing the old opening balance until the window reloaded.
+      // getQueryFn does the same for default-queryFn queries.
+      cache: "no-store",
       headers: {
         ...(data ? { "Content-Type": "application/json" } : {}),
         "X-Requested-With": "Mill-Manager",

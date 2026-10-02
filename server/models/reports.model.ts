@@ -26,7 +26,7 @@ import {
   type LedgerEntry,
 } from "../db/schema";
 import { cashOrBankAccountIds } from "../utils/cash-accounts";
-import { formatMoney, parseAmount } from "../utils/parse";
+import { formatMoneyDisplayDisplay, parseAmount } from "../utils/parse";
 import {
   endOfDay,
   endOfMonth,
@@ -1654,12 +1654,12 @@ export async function getBalanceSheet(asOfDate: Date) {
   const reasons: string[] = [];
   if (!validation.balanced) {
     reasons.push(
-      `Assets and Liabilities+Equity differ by Rs. ${formatMoney(Math.abs(parseAmount(validation.difference)))}.`,
+      `Assets and Liabilities+Equity differ by Rs. ${formatMoneyDisplay(Math.abs(parseAmount(validation.difference)))}.`,
     );
   }
   if (cashGapCents !== 0) {
     reasons.push(
-      `Cash book vs ledger mismatch: Rs. ${formatMoney(fromCents(Math.abs(cashGapCents)))}. This usually means some cash receipts/payments were saved in Cash in Hand but not posted to ledger.`,
+      `Cash book vs ledger mismatch: Rs. ${formatMoneyDisplay(fromCents(Math.abs(cashGapCents)))}. This usually means some cash receipts/payments were saved in Cash in Hand but not posted to ledger.`,
     );
   }
 

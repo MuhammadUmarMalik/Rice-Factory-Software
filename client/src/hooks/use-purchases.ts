@@ -10,14 +10,6 @@ export function usePurchases() {
   });
 }
 
-export function usePurchase(id: number | null) {
-  return useQuery({
-    queryKey: id != null ? apiKeys.purchase(id) : ["/api/purchases", "none"],
-    queryFn: () => (id != null ? purchasesApi.get(id) : Promise.reject("No id")),
-    enabled: id != null,
-  });
-}
-
 export function useNextBillNumber(enabled = true) {
   return useQuery({
     queryKey: apiKeys.purchasesNextBill,
