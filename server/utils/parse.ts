@@ -22,7 +22,7 @@ export function roundMoney(value: number): number {
 }
 
 /** Paisa-precision display formatting for amounts embedded in report text. */
-export function formatMoney(value: string | number | null | undefined): string {
+export function formatMoneyDisplay(value: string | number | null | undefined): string {
   return parseAmount(value).toLocaleString("en-PK", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

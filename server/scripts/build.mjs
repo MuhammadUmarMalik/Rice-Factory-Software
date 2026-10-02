@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import { mkdir, rm, readFile } from "fs/promises";
+import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -11,6 +12,7 @@ const allowlist = [
   "compression",
   "cors",
   "date-fns",
+  "decimal.js",
   "drizzle-orm",
   "drizzle-zod",
   "express",
@@ -54,6 +56,38 @@ async function buildServer() {
     logLevel: "info",
   });
   console.log("server built to dist/index.cjs");
+  await assertExternalsResolvable(serverBundlePath);
+}
+
+/*
+ * Externals are required at runtime from the bundle's own directory, which in
+ * the packaged app is app.asar/dist - so only root node_modules is on the
+ * resolution path, not server/node_modules. Anything left external that only
+ * exists under server/ ships broken ("Cannot find module 'decimal.js'"), so
+ * fail the build here instead of at the user's first launch.
+ */
+async function assertExternalsResolvable(bundlePath) {
+  const bundle = await readFile(bundlePath, "utf-8");
+  const requested = new Set(
+    Array.from(bundle.matchAll(/require\("([^".][^"]*)"\)/g), (m) => m[1])
+      .filter((id) => !id.startsWith(".") && !id.startsWith("node:")),
+  );
+  const requireFromBundle = createRequire(bundlePath);
+  const missing = [];
+  for (const id of requested) {
+    try {
+      requireFromBundle.resolve(id);
+    } catch {
+      missing.push(id);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `These modules stay external but cannot be resolved from dist/: ${missing.join(", ")}. ` +
+        "Either add them to the bundle allowlist in server/scripts/build.mjs, " +
+        "or install them in the root package.json so they ship next to the bundle.",
+    );
+  }
 }
 
 buildServer().catch((err) => {
