@@ -368,6 +368,12 @@ Print Doc Keys
 - `LOW_STOCK_THRESHOLD` (default 10).
 - `DEFAULT_ADMIN_USERNAME`, `DEFAULT_ADMIN_PASSWORD`, `DEFAULT_ADMIN_FULLNAME` (desktop bootstrap).
 - `DEFAULT_ADMIN_NAME` (script seed admin name).
+  If `DEFAULT_ADMIN_PASSWORD` is unset, the seed scripts fall back to `admin123` and mark the
+  account `must_change_password`; the app then blocks everything except the change-password
+  screen until that admin sets a new password.
+- `PDF_DISABLE_SANDBOX` (set to "1" to launch the PDF Chromium with `--no-sandbox
+  --disable-setuid-sandbox`). Only needed where the sandbox cannot start, such as a container
+  running as root; leave unset on desktop/Electron so PDF rendering stays sandboxed.
 - `DESKTOP_BUILD` (set to "1" inside Electron packaged app).
 - `SERVER_WAIT_TIMEOUT_MS` (Electron startup timeout, default 90000).
 - `DISABLE_GPU` ("true" disables GPU in Electron).

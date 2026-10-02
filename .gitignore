@@ -24,6 +24,7 @@ cookies.txt
 # Local runtime data (live SQLite databases, settings, backups)
 .local/
 server/.local/
+app-data/
 *.db
 *.db-journal
 *.db-wal
@@ -64,3 +65,4 @@ vite.config.ts.*
 CODEBASE_AUDIT.md
 CODEBASE_REAUDIT.md
 prompt.md
+ARCHITECTURE_REVIEW.md

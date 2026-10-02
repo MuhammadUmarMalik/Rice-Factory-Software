@@ -7,7 +7,8 @@ import { CheckCircle2, CircleDollarSign, Eye, Pencil, RefreshCw, Trash2 } from "
 
 import type { Account, Employee, Payroll } from "@/types/schema";
 import { useLanguage } from "@/contexts/language-context";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -89,9 +90,11 @@ export default function PayrollPage() {
   });
 
   const generateMutation = useMutation({
+    mutationKey: ["/api/payrolls", "generate"],
+    meta: scopedInvalidation,
     mutationFn: async () => apiRequest("POST", "/api/payrolls/generate", { payrollMonth: month }),
     onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: [`/api/payrolls?month=${month}`] });
+      await invalidateApi(invalidationGroups.payroll);
       const body = await res.json().catch(() => null);
       const created = Number(body?.created ?? 0);
       const updated = Number(body?.updated ?? 0);
@@ -108,18 +111,19 @@ export default function PayrollPage() {
   });
 
   const approveMutation = useMutation({
+    mutationKey: ["/api/payrolls", "approve"],
+    meta: scopedInvalidation,
     mutationFn: async (id: number) => apiRequest("POST", `/api/payrolls/${id}/approve`, { postingDate: new Date().toISOString() }),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: [`/api/payrolls?month=${month}`] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/ledger"] }),
-      ]);
+      await invalidateApi(invalidationGroups.payroll);
       toast({ title: "Payroll approved (JV posted)" });
     },
     onError: (err: any) => toast({ title: "Error", description: err?.message || "Failed", variant: "destructive" }),
   });
 
   const payMutation = useMutation({
+    mutationKey: ["/api/payrolls", "pay"],
+    meta: scopedInvalidation,
     mutationFn: async (payload: { id: number; data: PaymentFormData }) =>
       apiRequest("POST", `/api/payrolls/${payload.id}/pay`, {
         method: payload.data.method,
@@ -130,13 +134,7 @@ export default function PayrollPage() {
         paymentDate: payload.data.paymentDate || undefined,
       }),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: [`/api/payrolls?month=${month}`] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/cash/payments"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/ledger"] }),
-      ]);
+      await invalidateApi(invalidationGroups.payroll);
       setPayDialogOpen(false);
       setPayrollToPay(null);
       toast({ title: "Salary paid (JV posted)" });
@@ -145,6 +143,8 @@ export default function PayrollPage() {
   });
 
   const updateMutation = useMutation({
+    mutationKey: ["/api/payrolls", "update"],
+    meta: scopedInvalidation,
     mutationFn: async (payload: { id: number; data: EditFormData }) =>
       apiRequest("PATCH", `/api/payrolls/${payload.id}`, {
         basicSalary: payload.data.basicSalary,
@@ -152,12 +152,7 @@ export default function PayrollPage() {
         deductions: payload.data.deductions,
       }),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: [`/api/payrolls?month=${month}`] }),
-        queryClient.invalidateQueries({
-          predicate: (q) => typeof q.queryKey[0] === "string" && (q.queryKey[0] as string).startsWith("/api/reports/salary-account"),
-        }),
-      ]);
+      await invalidateApi(invalidationGroups.payroll);
       setEditDialogOpen(false);
       setSelectedPayroll(null);
       toast({ title: "Payroll updated" });
@@ -166,16 +161,11 @@ export default function PayrollPage() {
   });
 
   const deleteMutation = useMutation({
+    mutationKey: ["/api/payrolls", "delete"],
+    meta: scopedInvalidation,
     mutationFn: async (id: number) => apiRequest("DELETE", `/api/payrolls/${id}`),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: [`/api/payrolls?month=${month}`] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/journal-vouchers"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/ledger"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/cash/payments"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] }),
-      ]);
+      await invalidateApi(invalidationGroups.payroll);
       toast({ title: "Payroll deleted" });
     },
     onError: (err: any) => toast({ title: "Delete failed", description: err?.message || "Failed to delete payroll", variant: "destructive" }),

@@ -24,17 +24,23 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/language-context";
-import { Plus, FileText } from "lucide-react";
+import { Plus, FileText, Wallet } from "lucide-react";
 import { Link } from "wouter";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import {
   deletePayment,
   deleteReceipt,
+  getBalance,
   getPayments,
   getReceipts,
+  setOpeningBalance,
   updatePayment,
   updateReceipt,
+  type CashBalance,
 } from "@/api/cash.api";
+import { useAuthStore } from "@/stores/auth.store";
+import { can, Roles } from "@/lib/roles";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
@@ -112,7 +118,6 @@ function toInputDate(value: unknown): string {
 export default function CashDashboardPage() {
   const { t } = useLanguage();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [viewReceipt, setViewReceipt] = useState<CashReceiptRow | null>(null);
@@ -133,6 +138,21 @@ export default function CashDashboardPage() {
     amount: "",
     description: "",
   });
+  const [openingOpen, setOpeningOpen] = useState(false);
+  const [openingForm, setOpeningForm] = useState("");
+
+  const role = useAuthStore((state) => state.user?.role || "operator");
+  const canSetOpeningBalance = can(role, Roles.finance);
+
+  // The stored opening balance only comes back from /api/cash/balance. The card
+  // above reads /api/cash/summary, whose openingBalance is yesterday's closing
+  // balance — prefilling the form from that would overwrite the real figure
+  // with a derived one.
+  const { data: cashBalance } = useQuery<CashBalance>({
+    queryKey: ["/api/cash/balance"],
+    queryFn: () => getBalance(),
+    enabled: canSetOpeningBalance,
+  });
 
   const { data: receiptsData, isLoading: receiptsLoading, isError: receiptsError } = useQuery<CashReceiptRow[]>({
     queryKey: ["/api/cash/receipts"],
@@ -146,16 +166,11 @@ export default function CashDashboardPage() {
   const receipts = Array.isArray(receiptsData) ? receiptsData : [];
   const payments = Array.isArray(paymentsData) ? paymentsData : [];
 
-  const invalidateCashQueries = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/summary"] }),
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/receipts"] }),
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/payments"] }),
-      queryClient.invalidateQueries({ queryKey: ["/api/cash/ledger"] }),
-    ]);
-  };
+  const invalidateCashQueries = () => invalidateApi(invalidationGroups.cash);
 
   const updateReceiptMutation = useMutation({
+    mutationKey: ["/api/cash/receipts", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: { receiptDate: string; receivedFrom: string; amount: string; description?: string } }) =>
       updateReceipt(id, data),
     onSuccess: async () => {
@@ -170,6 +185,8 @@ export default function CashDashboardPage() {
   });
 
   const updatePaymentMutation = useMutation({
+    mutationKey: ["/api/cash/payments", "update"],
+    meta: scopedInvalidation,
     mutationFn: ({ id, data }: { id: number; data: { paymentDate: string; paidTo: string; amount: string; description?: string } }) =>
       updatePayment(id, data),
     onSuccess: async () => {
@@ -183,7 +200,26 @@ export default function CashDashboardPage() {
     },
   });
 
+  const openingBalanceMutation = useMutation({
+    mutationKey: ["/api/cash/opening-balance"],
+    meta: scopedInvalidation,
+    mutationFn: (openingBalance: string) => setOpeningBalance(openingBalance),
+    // invalidationGroups.cash covers both /api/cash/balance and
+    // /api/cash/summary, so the four cards above redraw straight away.
+    onSuccess: async () => {
+      await invalidateCashQueries();
+      setOpeningOpen(false);
+      toast({ title: "Opening balance updated successfully" });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : "Failed to update opening balance";
+      toast({ title: message, variant: "destructive" });
+    },
+  });
+
   const deleteReceiptMutation = useMutation({
+    mutationKey: ["/api/cash/receipts", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => deleteReceipt(id),
     onSuccess: async () => {
       await invalidateCashQueries();
@@ -197,6 +233,8 @@ export default function CashDashboardPage() {
   });
 
   const deletePaymentMutation = useMutation({
+    mutationKey: ["/api/cash/payments", "delete"],
+    meta: scopedInvalidation,
     mutationFn: (id: number) => deletePayment(id),
     onSuccess: async () => {
       await invalidateCashQueries();
@@ -227,6 +265,20 @@ export default function CashDashboardPage() {
       amount: String(parseAmount(row.amount)),
       description: row.description ?? "",
     });
+  };
+
+  const openOpeningBalance = () => {
+    setOpeningForm(String(cashBalance?.openingBalance ?? 0));
+    setOpeningOpen(true);
+  };
+
+  const submitOpeningBalance = () => {
+    const amount = parseAmount(openingForm);
+    if (!openingForm.trim() || amount < 0) {
+      toast({ title: "Enter a valid opening balance", variant: "destructive" });
+      return;
+    }
+    openingBalanceMutation.mutate(String(amount));
   };
 
   const submitEditReceipt = () => {
@@ -281,6 +333,11 @@ export default function CashDashboardPage() {
           <Button variant="outline" onClick={() => setPaymentOpen(true)}>
             <Plus className="h-4 w-4 mr-2" /> New Payment
           </Button>
+          {canSetOpeningBalance && (
+            <Button variant="outline" onClick={openOpeningBalance}>
+              <Wallet className="h-4 w-4 mr-2" /> Set Opening Balance
+            </Button>
+          )}
           <Link href="/journal">
             <Button variant="outline">
               <FileText className="h-4 w-4 mr-2" /> Journal Voucher
@@ -404,6 +461,38 @@ export default function CashDashboardPage() {
 
       <CashReceiptForm open={receiptOpen} onOpenChange={setReceiptOpen} />
       <CashPaymentForm open={paymentOpen} onOpenChange={setPaymentOpen} />
+
+      <Dialog open={openingOpen} onOpenChange={setOpeningOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Set Opening Balance</DialogTitle>
+            <DialogDescription>
+              The cash on hand before any receipt or payment was recorded. Every balance in this
+              module is measured from this figure.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="text-sm font-medium" htmlFor="cash-opening-balance">
+              Opening Balance (Rs.)
+            </label>
+            <Input
+              id="cash-opening-balance"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              value={openingForm}
+              onChange={(e) => setOpeningForm(e.target.value)}
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setOpeningOpen(false)}>Cancel</Button>
+              <Button onClick={submitOpeningBalance} disabled={openingBalanceMutation.isPending}>
+                {openingBalanceMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!viewReceipt} onOpenChange={(v) => !v && setViewReceipt(null)}>
         <DialogContent className="sm:max-w-md">

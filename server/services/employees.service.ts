@@ -1,33 +1,33 @@
-import { storage } from "../models/storage";
+import * as payrollModel from "../models/payroll.model";
 
 export async function listEmployees() {
-  return storage.getEmployees();
+  return payrollModel.getEmployees();
 }
 
 export async function getEmployee(id: number) {
-  return storage.getEmployee(id);
+  return payrollModel.getEmployee(id);
 }
 
 export async function createEmployee(data: any, createdBy?: number) {
-  return storage.createEmployee({ ...data, createdBy } as any);
+  return payrollModel.createEmployee({ ...data, createdBy } as any);
 }
 
 export async function updateEmployee(id: number, data: any) {
-  return storage.updateEmployee(id, data);
+  return payrollModel.updateEmployee(id, data);
 }
 
 export async function getSalaryStructures(employeeId: number) {
-  return storage.getEmployeeSalaryStructures(employeeId);
+  return payrollModel.getEmployeeSalaryStructures(employeeId);
 }
 
 export async function createSalaryStructure(employeeId: number, data: any, createdBy?: number) {
-  return storage.createEmployeeSalaryStructure({ ...data, employeeId, createdBy } as any);
+  return payrollModel.createEmployeeSalaryStructure({ ...data, employeeId, createdBy } as any);
 }
 
 export async function updateSalaryStructure(employeeId: number, structureId: number, data: any) {
-  return storage.updateEmployeeSalaryStructure(employeeId, structureId, data);
+  return payrollModel.updateEmployeeSalaryStructure(employeeId, structureId, data);
 }
 
 export async function deleteSalaryStructure(employeeId: number, structureId: number) {
-  return storage.deleteEmployeeSalaryStructure(employeeId, structureId);
+  return payrollModel.deleteEmployeeSalaryStructure(employeeId, structureId);
 }

@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { format } from "date-fns";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { formatPricePerUnit, formatStock } from "@/lib/units";
 import type {
   AccountDetail,
   ExpenseDetail,
@@ -360,9 +361,12 @@ function renderDetailContent(detail: ReportDetail) {
         <div className="grid gap-3 md:grid-cols-3">
           <SummaryCard
             label="Current Stock"
-            value={`${d.product?.currentStock || 0} ${d.product?.unit || ""}`}
+            value={formatStock(d.product?.currentStock, d.product?.unit)}
           />
-          <SummaryCard label="Avg Purchase Price" value={formatMoney(d.product?.avgPurchasePrice)} />
+          <SummaryCard
+            label="Avg Purchase Price"
+            value={formatPricePerUnit(d.product?.avgPurchasePrice, d.product?.unit)}
+          />
           <SummaryCard label="Sale Price" value={formatMoney(d.product?.salePrice)} />
         </div>
         {(d.movements || []).length > 0 && (

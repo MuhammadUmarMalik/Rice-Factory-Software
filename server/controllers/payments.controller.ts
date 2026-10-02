@@ -6,6 +6,7 @@ import {
   receiptLinesSchema,
 } from "../schemas/receipts.schema";
 import * as paymentsService from "../services/payments.service";
+import { getUserId } from "../utils/auth";
 import { notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
 import { isBusinessRuleError } from "../utils/errors";
@@ -48,7 +49,7 @@ export async function createPayment(req: Request, res: Response) {
     const { lines, ...payload } = req.body;
     const header = receiptHeaderSchema.parse({ ...payload, voucherType: "CP" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
-    const voucher = await paymentsService.createPayment(header, parsedLines);
+    const voucher = await paymentsService.createPayment(header, parsedLines, getUserId(req));
     await notifyUsers({
       title: "Payment completed",
       message: `Payment voucher ${voucher.voucherNumber} recorded.`,
@@ -80,7 +81,7 @@ export async function updatePayment(req: Request, res: Response) {
     const { lines, ...payload } = req.body;
     const header = receiptHeaderSchemaPartial.parse({ ...payload, voucherType: "CP" });
     const parsedLines = receiptLinesSchema.parse(lines || []);
-    const voucher = await paymentsService.updatePayment(id, header, parsedLines);
+    const voucher = await paymentsService.updatePayment(id, header, parsedLines, getUserId(req));
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
   } catch (error) {
@@ -103,7 +104,7 @@ export async function deletePayment(req: Request, res: Response) {
     if (!current || current.voucherType !== "CP") {
       return res.status(404).json({ error: "Voucher not found" });
     }
-    const ok = await paymentsService.deletePayment(id);
+    const ok = await paymentsService.deletePayment(id, getUserId(req));
     if (!ok) return res.status(404).json({ error: "Voucher not found" });
     res.status(204).send();
   } catch (error) {

@@ -1,5 +1,6 @@
 import { sqlite } from "../models/db";
 import { buildPurchaseReturnNarration, buildSalesReturnNarration } from "../utils/narration";
+import { assertPostingAllowed } from "./posting-guard.service";
 
 type ListFilters = {
   dateFrom?: string;
@@ -694,9 +695,12 @@ function findOne(table: string, id: number) {
   return sqlite.prepare(`SELECT * FROM ${table} WHERE id = ? AND is_deleted = 0`).get(id) as any;
 }
 
-function softDelete(table: string, id: number, userId?: number) {
+function softDelete(table: string, id: number, userId?: number, dateColumn = "transaction_date", context = table) {
   const existing = findOne(table, id);
   if (!existing) return false;
+  // Closes a period-lock bypass: daybook deletes used to write without checking
+  // period locks, unlike the legacy storage.ts posting flows.
+  assertPostingAllowed(sqlite, existing[dateColumn], context);
   sqlite.prepare(`UPDATE ${table} SET is_deleted = 1, updated_by = ?, updated_at = ? WHERE id = ?`).run(userId ?? null, nowMs(), id);
   insertAuditLog(table, id, "delete", existing, null, userId);
   return true;
@@ -718,6 +722,9 @@ export function getSalesDaybook(id: number) {
 
 export function createSalesDaybook(input: any, userId?: number) {
   assertNotFutureDate(input.transactionDate, "Transaction date");
+  // Closes a period-lock bypass: this write skipped the period/fiscal checks
+  // that storage.ts applies to every other posting flow.
+  assertPostingAllowed(sqlite, input.transactionDate, "sales daybook");
   const dup = sqlite.prepare(`SELECT id FROM sales_daybook WHERE invoice_number = ? AND is_deleted = 0`).get(input.invoiceNumber) as any;
   if (dup) throw new Error("Duplicate invoice number");
   const now = nowMs();
@@ -760,6 +767,10 @@ export function updateSalesDaybook(id: number, input: any, userId?: number) {
   const existing = getSalesDaybook(id);
   if (!existing) return undefined;
   assertNotFutureDate(input.transactionDate ?? existing.transaction_date, "Transaction date");
+  // Closes a period-lock bypass: guard both the period the row sits in today and
+  // the period it would be moved into.
+  assertPostingAllowed(sqlite, existing.transaction_date, "sales daybook");
+  assertPostingAllowed(sqlite, input.transactionDate ?? existing.transaction_date, "sales daybook");
   if (input.invoiceNumber && input.invoiceNumber !== existing.invoice_number) {
     const dup = sqlite
       .prepare(`SELECT id FROM sales_daybook WHERE invoice_number = ? AND is_deleted = 0 AND id != ?`)
@@ -801,7 +812,7 @@ export function updateSalesDaybook(id: number, input: any, userId?: number) {
 }
 
 export function deleteSalesDaybook(id: number, userId?: number) {
-  return softDelete("sales_daybook", id, userId);
+  return softDelete("sales_daybook", id, userId, "transaction_date", "sales daybook");
 }
 
 export function getSalesCustomerSummary(filters: ListFilters = {}) {
@@ -854,6 +865,9 @@ export function getPurchasesDaybook(id: number) {
 
 export function createPurchasesDaybook(input: any, userId?: number) {
   assertNotFutureDate(input.transactionDate, "Transaction date");
+  // Closes a period-lock bypass: this write skipped the period/fiscal checks
+  // that storage.ts applies to every other posting flow.
+  assertPostingAllowed(sqlite, input.transactionDate, "purchases daybook");
   const dup = sqlite.prepare(`SELECT id FROM purchases_daybook WHERE invoice_number = ? AND is_deleted = 0`).get(input.invoiceNumber) as any;
   if (dup) throw new Error("Duplicate invoice number");
   const now = nowMs();
@@ -896,6 +910,10 @@ export function updatePurchasesDaybook(id: number, input: any, userId?: number) 
   const existing = getPurchasesDaybook(id);
   if (!existing) return undefined;
   assertNotFutureDate(input.transactionDate ?? existing.transaction_date, "Transaction date");
+  // Closes a period-lock bypass: guard both the period the row sits in today and
+  // the period it would be moved into.
+  assertPostingAllowed(sqlite, existing.transaction_date, "purchases daybook");
+  assertPostingAllowed(sqlite, input.transactionDate ?? existing.transaction_date, "purchases daybook");
   if (input.invoiceNumber && input.invoiceNumber !== existing.invoice_number) {
     const dup = sqlite
       .prepare(`SELECT id FROM purchases_daybook WHERE invoice_number = ? AND is_deleted = 0 AND id != ?`)
@@ -937,7 +955,7 @@ export function updatePurchasesDaybook(id: number, input: any, userId?: number) 
 }
 
 export function deletePurchasesDaybook(id: number, userId?: number) {
-  return softDelete("purchases_daybook", id, userId);
+  return softDelete("purchases_daybook", id, userId, "transaction_date", "purchases daybook");
 }
 
 export function getPurchasesSupplierSummary(filters: ListFilters = {}) {
@@ -1148,17 +1166,57 @@ export function listCashBook(filters: ListFilters = {}) {
 
   const orderedAsc = [...rows].sort((a, b) => (Number(a.transaction_date) - Number(b.transaction_date)) || (a.id - b.id));
   const balances = new Map<string, number>();
+  const openings = new Map<string, number>();
   for (const row of orderedAsc) {
-    const key = row.account_type === "Bank" ? `bank:${row.bank_account_name || row.bank_account_id || "unknown"}` : "cash";
-    const current = balances.get(key) ?? 0;
+    const key = cashBookBalanceKey(row);
+    if (!openings.has(key)) openings.set(key, cashBookOpeningBalance(key, row));
+    const current = balances.get(key) ?? openings.get(key)!;
     const amount = parseAmount(row.amount);
     const next = row.transaction_type === "Receipt" ? current + amount : current - amount;
     balances.set(key, next);
     row.runningBalance = next.toFixed(2);
     row.runningBalanceKey = key;
+    // Carried on every row (as getAccountLedger does) so the caller can show an
+    // opening line without a second round trip.
+    row.openingBalance = openings.get(key)!.toFixed(2);
   }
   const byId = new Map<number, any>(orderedAsc.map((r) => [Number(r.id), r]));
   return rows.map((r) => byId.get(Number(r.id)) || r);
+}
+
+/** Bucket a cash book row belongs to: the single cash drawer, or one bank account. */
+function cashBookBalanceKey(row: any): string {
+  return row.account_type === "Bank"
+    ? `bank:${row.bank_account_name || row.bank_account_id || "unknown"}`
+    : "cash";
+}
+
+/**
+ * Balance a bucket starts from before its first row.
+ *
+ * The register only stores movements, so without this every running balance
+ * started at zero and silently dropped whatever float the mill opened with.
+ * Cash reads `cash_accounts` — the same source of truth the Cash in Hand module
+ * uses, kept in step with the ledger's "Cash in Hand" account by
+ * updateCashAccountOpeningBalance — and banks read their own ledger account.
+ */
+function cashBookOpeningBalance(key: string, row: any): number {
+  if (key === "cash") {
+    const acc = sqlite
+      .prepare("SELECT opening_balance FROM cash_accounts WHERE id = 1")
+      .get() as { opening_balance?: string } | undefined;
+    return parseAmount(acc?.opening_balance ?? 0);
+  }
+  const bank = row.bank_account_id
+    ? (sqlite.prepare("SELECT opening_balance FROM accounts WHERE id = ?").get(row.bank_account_id) as
+        | { opening_balance?: string }
+        | undefined)
+    : row.bank_account_name
+      ? (sqlite.prepare("SELECT opening_balance FROM accounts WHERE name = ?").get(row.bank_account_name) as
+          | { opening_balance?: string }
+          | undefined)
+      : undefined;
+  return parseAmount(bank?.opening_balance ?? 0);
 }
 
 export function getCashBook(id: number) {
@@ -1167,6 +1225,9 @@ export function getCashBook(id: number) {
 
 export function createCashBook(input: any, userId?: number) {
   assertNotFutureDate(input.transactionDate, "Transaction date");
+  // Closes a period-lock bypass: this write skipped the period/fiscal checks
+  // that storage.ts applies to every other posting flow.
+  assertPostingAllowed(sqlite, input.transactionDate, "cash book");
   const now = nowMs();
   const result = sqlite
     .prepare(
@@ -1201,6 +1262,10 @@ export function updateCashBook(id: number, input: any, userId?: number) {
   const existing = getCashBook(id);
   if (!existing) return undefined;
   assertNotFutureDate(input.transactionDate ?? existing.transaction_date, "Transaction date");
+  // Closes a period-lock bypass: guard both the period the row sits in today and
+  // the period it would be moved into.
+  assertPostingAllowed(sqlite, existing.transaction_date, "cash book");
+  assertPostingAllowed(sqlite, input.transactionDate ?? existing.transaction_date, "cash book");
   sqlite
     .prepare(
       `UPDATE cash_book SET
@@ -1230,7 +1295,7 @@ export function updateCashBook(id: number, input: any, userId?: number) {
 }
 
 export function deleteCashBook(id: number, userId?: number) {
-  return softDelete("cash_book", id, userId);
+  return softDelete("cash_book", id, userId, "transaction_date", "cash book");
 }
 
 export function getCashBookBalances() {
@@ -1238,7 +1303,8 @@ export function getCashBookBalances() {
   const balances = new Map<string, number>();
   for (const row of rows) {
     const key = row.account_type === "Bank" ? (row.bank_account_name || `Bank-${row.bank_account_id || "Unknown"}`) : "Cash";
-    const curr = balances.get(key) ?? 0;
+    // Seeded from the opening balance, not zero — see cashBookOpeningBalance.
+    const curr = balances.get(key) ?? cashBookOpeningBalance(cashBookBalanceKey(row), row);
     const amt = parseAmount(row.amount);
     balances.set(key, row.transaction_type === "Receipt" ? curr + amt : curr - amt);
   }
@@ -1266,6 +1332,9 @@ export function getSalesReturnsDaybook(id: number) {
 
 export function createSalesReturnsDaybook(input: any, userId?: number) {
   assertNotFutureDate(input.returnDate, "Return date");
+  // Closes a period-lock bypass: this write skipped the period/fiscal checks
+  // that storage.ts applies to every other posting flow.
+  assertPostingAllowed(sqlite, input.returnDate, "sales returns daybook");
   const dup = sqlite
     .prepare(`SELECT id FROM sales_returns_daybook WHERE credit_note_number = ? AND is_deleted = 0`)
     .get(input.creditNoteNumber) as any;
@@ -1314,6 +1383,10 @@ export function updateSalesReturnsDaybook(id: number, input: any, userId?: numbe
   const existing = getSalesReturnsDaybook(id);
   if (!existing) return undefined;
   assertNotFutureDate(input.returnDate ?? existing.return_date, "Return date");
+  // Closes a period-lock bypass: guard both the period the row sits in today and
+  // the period it would be moved into.
+  assertPostingAllowed(sqlite, existing.return_date, "sales returns daybook");
+  assertPostingAllowed(sqlite, input.returnDate ?? existing.return_date, "sales returns daybook");
   if (input.creditNoteNumber && input.creditNoteNumber !== existing.credit_note_number) {
     const dup = sqlite
       .prepare(`SELECT id FROM sales_returns_daybook WHERE credit_note_number = ? AND is_deleted = 0 AND id != ?`)
@@ -1351,7 +1424,7 @@ export function updateSalesReturnsDaybook(id: number, input: any, userId?: numbe
 }
 
 export function deleteSalesReturnsDaybook(id: number, userId?: number) {
-  return softDelete("sales_returns_daybook", id, userId);
+  return softDelete("sales_returns_daybook", id, userId, "return_date", "sales returns daybook");
 }
 
 export function listPurchaseReturnsDaybook(filters: ListFilters = {}) {
@@ -1364,6 +1437,9 @@ export function getPurchaseReturnsDaybook(id: number) {
 
 export function createPurchaseReturnsDaybook(input: any, userId?: number) {
   assertNotFutureDate(input.returnDate, "Return date");
+  // Closes a period-lock bypass: this write skipped the period/fiscal checks
+  // that storage.ts applies to every other posting flow.
+  assertPostingAllowed(sqlite, input.returnDate, "purchase returns daybook");
   const dup = sqlite
     .prepare(`SELECT id FROM purchase_returns_daybook WHERE debit_note_number = ? AND is_deleted = 0`)
     .get(input.debitNoteNumber) as any;
@@ -1412,6 +1488,10 @@ export function updatePurchaseReturnsDaybook(id: number, input: any, userId?: nu
   const existing = getPurchaseReturnsDaybook(id);
   if (!existing) return undefined;
   assertNotFutureDate(input.returnDate ?? existing.return_date, "Return date");
+  // Closes a period-lock bypass: guard both the period the row sits in today and
+  // the period it would be moved into.
+  assertPostingAllowed(sqlite, existing.return_date, "purchase returns daybook");
+  assertPostingAllowed(sqlite, input.returnDate ?? existing.return_date, "purchase returns daybook");
   if (input.debitNoteNumber && input.debitNoteNumber !== existing.debit_note_number) {
     const dup = sqlite
       .prepare(`SELECT id FROM purchase_returns_daybook WHERE debit_note_number = ? AND is_deleted = 0 AND id != ?`)
@@ -1449,7 +1529,7 @@ export function updatePurchaseReturnsDaybook(id: number, input: any, userId?: nu
 }
 
 export function deletePurchaseReturnsDaybook(id: number, userId?: number) {
-  return softDelete("purchase_returns_daybook", id, userId);
+  return softDelete("purchase_returns_daybook", id, userId, "return_date", "purchase returns daybook");
 }
 
 function nextJournalEntryNumber() {
@@ -1503,6 +1583,9 @@ export function getGeneralJournal(id: number) {
 
 export function createGeneralJournal(input: any, userId?: number) {
   assertNotFutureDate(input.transactionDate, "Transaction date");
+  // Closes a period-lock bypass: this write skipped the period/fiscal checks
+  // that storage.ts applies to every other posting flow.
+  assertPostingAllowed(sqlite, input.transactionDate, "general journal");
   const lines = (input.lines || []) as JournalLineInput[];
   if (lines.length < 2) throw new Error("At least two journal lines are required");
   const totals = sumLines(lines);
@@ -1567,6 +1650,10 @@ export function updateGeneralJournal(id: number, input: any, userId?: number) {
   if (!existing) return undefined;
   if (existing.status === "Approved") throw new Error("Approved journal entries cannot be edited");
   assertNotFutureDate(input.transactionDate ?? existing.transaction_date, "Transaction date");
+  // Closes a period-lock bypass: guard both the period the entry sits in today
+  // and the period it would be moved into.
+  assertPostingAllowed(sqlite, existing.transaction_date, "general journal");
+  assertPostingAllowed(sqlite, input.transactionDate ?? existing.transaction_date, "general journal");
   const lines = (input.lines || existing.lines) as JournalLineInput[];
   if (lines.length < 2) throw new Error("At least two journal lines are required");
   const totals = sumLines(lines);
@@ -1628,13 +1715,17 @@ export function updateGeneralJournal(id: number, input: any, userId?: number) {
 }
 
 export function deleteGeneralJournal(id: number, userId?: number) {
-  return softDelete("general_journal", id, userId);
+  return softDelete("general_journal", id, userId, "transaction_date", "general journal");
 }
 
 export function reverseGeneralJournal(id: number, userId?: number) {
   const existing = getGeneralJournal(id);
   if (!existing) return undefined;
   if (existing.status === "Reversed") throw new Error("Journal entry already reversed");
+  // Closes a period-lock bypass: the original entry's status is rewritten here,
+  // so its own period must still be open (the reversal entry is dated today and
+  // is guarded separately by createGeneralJournal).
+  assertPostingAllowed(sqlite, existing.transaction_date, "general journal reversal");
   const reversedLines = (existing.lines || []).map((line: any) => ({
     accountId: line.account_id ?? undefined,
     accountName: line.account_name,
@@ -1663,6 +1754,9 @@ export function reverseGeneralJournal(id: number, userId?: number) {
 export function cancelGeneralJournal(id: number, userId?: number) {
   const existing = getGeneralJournal(id);
   if (!existing) return undefined;
+  // Closes a period-lock bypass: cancelling rewrites a posted entry, so its
+  // period must still be open.
+  assertPostingAllowed(sqlite, existing.transaction_date, "general journal cancellation");
   sqlite.prepare(`UPDATE general_journal SET status = 'Cancelled', updated_by = ?, updated_at = ? WHERE id = ?`).run(userId ?? null, nowMs(), id);
   const updated = getGeneralJournal(id);
   insertAuditLog("general_journal", id, "cancel", existing, updated, userId);

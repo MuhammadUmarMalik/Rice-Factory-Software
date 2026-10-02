@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { storage } from "../models/storage";
+import * as usersModel from "../models/users.model";
 import { asyncHandler, hashPassword, signAccessToken, verifyPassword } from "../utils/auth";
 
 const loginSchema = z.object({
@@ -14,12 +14,21 @@ const bootstrapSchema = z.object({
   fullName: z.string().trim().min(1).max(120),
 });
 
-function sanitizeUser(user: { id: number; username: string; fullName: string; role: string }) {
+function sanitizeUser(user: {
+  id: number;
+  username: string;
+  fullName: string;
+  role: string;
+  mustChangePassword?: boolean;
+}) {
   return {
     id: user.id,
     username: user.username,
     fullName: user.fullName,
     role: user.role,
+    // The client blocks the app shell on this, so /me must report it too — it
+    // refreshes the stored user on every mount and would otherwise clear the flag.
+    mustChangePassword: Boolean(user.mustChangePassword),
   };
 }
 
@@ -30,7 +39,7 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   }
 
   const { username, password } = parsed.data;
-  const user = await storage.getUserByUsername(username);
+  const user = await usersModel.getUserByUsername(username);
   if (!user || !user.isActive) {
     return res.status(401).json({ error: "Invalid credentials" });
   }
@@ -41,7 +50,7 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   }
 
   if (needsUpgrade) {
-    await storage.updateUser(user.id, { password: hashPassword(password) });
+    await usersModel.updateUser(user.id, { password: hashPassword(password) });
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -81,7 +90,7 @@ export const bootstrapAdmin = asyncHandler(async (req: Request, res: Response) =
     return res.status(400).json({ error: "Invalid bootstrap payload" });
   }
 
-  const created = await storage.createFirstAdmin({
+  const created = await usersModel.createFirstAdmin({
     username: parsed.data.username,
     password: hashPassword(parsed.data.password),
     fullName: parsed.data.fullName,
