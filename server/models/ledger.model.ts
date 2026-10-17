@@ -6,7 +6,7 @@
  * before either document type could move. Everything here takes an explicit
  * client because every caller runs inside its own transaction.
  */
-import { db, sqlite } from "./db";
+import { db } from "./db";
 import { eq, and, or, sql, asc, desc, lt, lte, gte, isNull, inArray } from "drizzle-orm";
 import {
   accounts,
@@ -26,6 +26,8 @@ import {
   contraVoucherLines,
   expenseEntries,
   journalVouchers,
+  cashReceipts,
+  cashPayments,
   type Account,
   type PurchaseCharge,
   type LedgerEntry,
@@ -49,8 +51,8 @@ import {
   firstMeaningfulNarration,
   joinNarration,
   preferManualNarration,
+  stripLedgerAccountName,
 } from "../utils/narration";
-import { nextDocumentSequence } from "./sequences.model";
 import * as accountsModel from "./accounts.model";
 import { normalSideForAccountType, recomputeAccountBalances } from "./accounts.model";
 import * as payrollModel from "./payroll.model";
@@ -85,6 +87,7 @@ export type LedgerReportRow = {
   runningBalance: string;
   referenceType?: string | null;
   referenceId?: number | null;
+  cleared?: boolean;
 };
 
 export type LedgerReport = {
@@ -110,7 +113,7 @@ export type CashTxInput = Omit<
 
 export function normalizeLedgerReferenceType(
   value?: string | null,
-): "sale" | "purchase" | "receipt_voucher" | "journal_voucher" | "contra_voucher" | "expense" | null {
+): "sale" | "purchase" | "receipt_voucher" | "journal_voucher" | "contra_voucher" | "expense" | "cash_receipt" | "cash_payment" | null {
   const v = (value || "").trim().toLowerCase();
   if (!v) return null;
   if (v === "sale") return "sale";
@@ -119,6 +122,8 @@ export function normalizeLedgerReferenceType(
   if (v === "journal_voucher" || v === "journal" || v === "jv") return "journal_voucher";
   if (v === "contra_voucher" || v === "contra" || v === "cv") return "contra_voucher";
   if (v === "expense" || v === "expense_entry") return "expense";
+  if (v === "cash_receipt" || v === "cashreceipt") return "cash_receipt";
+  if (v === "cash_payment" || v === "cashpayment") return "cash_payment";
   return null;
 }
 
@@ -129,6 +134,8 @@ export function getLedgerReference(entry: LedgerEntry): { referenceType: string 
   if (entry.journalVoucherId) return { referenceType: "journal_voucher", referenceId: entry.journalVoucherId };
   if (entry.contraVoucherId) return { referenceType: "contra_voucher", referenceId: entry.contraVoucherId };
   if (entry.expenseEntryId) return { referenceType: "expense", referenceId: entry.expenseEntryId };
+  if (entry.cashReceiptId) return { referenceType: "cash_receipt", referenceId: entry.cashReceiptId };
+  if (entry.cashPaymentId) return { referenceType: "cash_payment", referenceId: entry.cashPaymentId };
   return { referenceType: null, referenceId: null };
 }
 
@@ -143,6 +150,8 @@ export function getCashReferenceColumns(
   if (normalized === "journal_voucher") return { journalVoucherId: id };
   if (normalized === "contra_voucher") return { contraVoucherId: id };
   if (normalized === "expense") return { expenseEntryId: id };
+  if (normalized === "cash_receipt") return { cashReceiptId: id };
+  if (normalized === "cash_payment") return { cashPaymentId: id };
   return {};
 }
 
@@ -181,7 +190,7 @@ export function postLedgerEntry(client: DbClient, entry: Omit<InsertLedgerEntry,
     const cashCols = getCashReferenceColumns(ref.referenceType, ref.referenceId) as any;
     const txObj: CashTxInput = {
       accountId: account.id,
-      transactionType: entry.transactionType === "debit" ? "DEBIT" : "CREDIT",
+      transactionType: entry.transactionType as "debit" | "credit",
       transactionDate: entry.entryDate || new Date(),
       ...cashCols,
       amount: entry.amount,
@@ -275,7 +284,7 @@ export function ensurePurchaseChargeAccount(client: DbClient, type: string): Acc
         return "Purchase - Broken Allowance";
       case "other":
       default:
-        return "Purchase - Other Charges";
+        return "Purchase - Stitching Charges";
     }
   })();
   return ensureSystemAccount(client, label, "expense");
@@ -283,20 +292,22 @@ export function ensurePurchaseChargeAccount(client: DbClient, type: string): Acc
 
 export function ensureSalesChargeAccount(
   client: DbClient,
-  label: "LOADING" | "WEIGHING" | "OTHER" | "RENT",
+  label: "LOADING" | "WEIGHING" | "OTHER" | "RENT" | "FREIGHT",
 ): Account {
   const name = (() => {
     switch (label) {
       case "LOADING":
         return "Sales - Loading Charges";
       case "WEIGHING":
-        return "Sales - Weighing Charges";
+        return "Sales - Bardana Charges";
       case "OTHER":
-        return "Sales - Other Charges";
+        return "Sales - Stitching Charges";
       case "RENT":
         return "Sales - Rent Charges";
+      case "FREIGHT":
+        return "Sales - Freight Charges";
       default:
-        return "Sales - Other Charges";
+        return "Sales - Stitching Charges";
     }
   })();
   return ensureSystemAccount(client, name, "income");
@@ -324,25 +335,6 @@ export function calculateTaxAmount(
   return Math.round(Math.max(taxableBase, 0) * parseAmount(rate.ratePercent)) / 100;
 }
 
-/**
- * Remove a daybook projection row for a source record that is being deleted.
- * The daybook tables are optional (created lazily by daybooks.service), so a
- * missing table is not an error.
- */
-export function deleteDaybookProjection(table: string, linkColumn: string, sourceId: number) {
-  try {
-    const exists = sqlite
-      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`)
-      .get(table) as any;
-    if (!exists?.name) return;
-    const cols = sqlite.prepare(`PRAGMA table_info(${table})`).all() as any[];
-    if (!cols.some((c) => c.name === linkColumn)) return;
-    sqlite.prepare(`DELETE FROM ${table} WHERE ${linkColumn} = ?`).run(sourceId);
-  } catch (error) {
-    console.error(`Failed to clear ${table}.${linkColumn} projection for ${sourceId}`, error);
-  }
-}
-
 export function getLedgerReferenceColumns(referenceType?: string | null, referenceId?: number | null): Partial<InsertLedgerEntry> {
   const id = referenceId != null ? Number(referenceId) : null;
   if (!id) return {};
@@ -353,6 +345,8 @@ export function getLedgerReferenceColumns(referenceType?: string | null, referen
   if (normalized === "journal_voucher") return { journalVoucherId: id };
   if (normalized === "contra_voucher") return { contraVoucherId: id };
   if (normalized === "expense") return { expenseEntryId: id };
+  if (normalized === "cash_receipt") return { cashReceiptId: id };
+  if (normalized === "cash_payment") return { cashPaymentId: id };
   return {};
 }
 
@@ -366,6 +360,8 @@ export function buildLedgerReferenceWhere(referenceType?: string | null, referen
   if (normalized === "journal_voucher") return id ? eq(ledgerEntries.journalVoucherId, id) : sql`${ledgerEntries.journalVoucherId} IS NOT NULL`;
   if (normalized === "contra_voucher") return id ? eq(ledgerEntries.contraVoucherId, id) : sql`${ledgerEntries.contraVoucherId} IS NOT NULL`;
   if (normalized === "expense") return id ? eq(ledgerEntries.expenseEntryId, id) : sql`${ledgerEntries.expenseEntryId} IS NOT NULL`;
+  if (normalized === "cash_receipt") return id ? eq(ledgerEntries.cashReceiptId, id) : sql`${ledgerEntries.cashReceiptId} IS NOT NULL`;
+  if (normalized === "cash_payment") return id ? eq(ledgerEntries.cashPaymentId, id) : sql`${ledgerEntries.cashPaymentId} IS NOT NULL`;
   return undefined;
 }
 
@@ -444,13 +440,6 @@ export async function getLedgerReport(params: {
       }
     };
 
-    const saleChargeLabels = [
-      { key: "loading", label: "LOADING" },
-      { key: "weighing", label: "WEIGHING" },
-      { key: "other", label: "OTHER" },
-      { key: "rent", label: "RENT" },
-    ];
-
     const detailLabels = new Set([
       "TAX",
       "BROKER COMMISSION",
@@ -458,8 +447,8 @@ export async function getLedgerReport(params: {
       "WEIGHING",
       "OTHER",
       "RENT",
-      "WEIGHT ADD",
       "FREIGHT",
+      "WEIGHT ADD",
       "LOADING/UNLOADING",
       "MARKET FEE",
       "MITHA SUKRI",
@@ -553,7 +542,7 @@ export async function getLedgerReport(params: {
     );
     const saleMetaById = new Map<
       number,
-      { invoiceNumber?: string | null; saleDate?: Date | null; taxAmount?: string | null; loadingCharges?: string | null; weighingCharges?: string | null; otherCharges?: string | null; rentCharges?: string | null; discountAmount?: string | null }
+      { invoiceNumber?: string | null; saleDate?: Date | null; taxAmount?: string | null; loadingCharges?: string | null; loadingChargesMode?: string | null; weighingCharges?: string | null; weighingChargesMode?: string | null; otherCharges?: string | null; otherChargesMode?: string | null; rentCharges?: string | null; rentChargesMode?: string | null; freightCharges?: string | null; freightChargesMode?: string | null; discountAmount?: string | null }
     >(
       saleIds.length
         ? db
@@ -563,9 +552,15 @@ export async function getLedgerReport(params: {
               saleDate: sales.saleDate,
               taxAmount: sales.taxAmount,
               loadingCharges: sales.loadingCharges,
+              loadingChargesMode: sales.loadingChargesMode,
               weighingCharges: sales.weighingCharges,
+              weighingChargesMode: sales.weighingChargesMode,
               otherCharges: sales.otherCharges,
+              otherChargesMode: sales.otherChargesMode,
               rentCharges: sales.rentCharges,
+              rentChargesMode: sales.rentChargesMode,
+              freightCharges: sales.freightCharges,
+              freightChargesMode: sales.freightChargesMode,
               discountAmount: sales.discountAmount,
             })
             .from(sales)
@@ -705,14 +700,15 @@ export async function getLedgerReport(params: {
           );
         }
         const saleCharges = [
-          { label: saleChargeLabels[0].label, amount: parseAmount(meta?.loadingCharges || "0") },
-          { label: saleChargeLabels[1].label, amount: parseAmount(meta?.weighingCharges || "0") },
-          { label: saleChargeLabels[2].label, amount: parseAmount(meta?.otherCharges || "0") },
-          { label: saleChargeLabels[3].label, amount: parseAmount(meta?.rentCharges || "0") },
+          { label: "FREIGHT", amount: parseAmount((meta as any)?.freightCharges || "0"), mode: ((meta as any)?.freightChargesMode || "add") as "add" | "less" },
+          { label: "LOADING", amount: parseAmount(meta?.loadingCharges || "0"), mode: ((meta as any)?.loadingChargesMode || "add") as "add" | "less" },
+          { label: "WEIGHING", amount: parseAmount(meta?.weighingCharges || "0"), mode: ((meta as any)?.weighingChargesMode || "add") as "add" | "less" },
+          { label: "OTHER", amount: parseAmount(meta?.otherCharges || "0"), mode: ((meta as any)?.otherChargesMode || "add") as "add" | "less" },
+          { label: "RENT", amount: parseAmount(meta?.rentCharges || "0"), mode: ((meta as any)?.rentChargesMode || "add") as "add" | "less" },
         ];
         for (const charge of saleCharges) {
           if (charge.amount === 0) continue;
-          const transactionType = charge.amount >= 0 ? "debit" : "credit";
+          const transactionType = charge.mode === "less" ? "credit" : "debit";
           result.push(
             buildEntry({
               refType,
@@ -779,6 +775,8 @@ export async function getLedgerReport(params: {
   const journalIds = uniqueIds(byType.journal_voucher);
   const expenseIds = uniqueIds(byType.expense);
   const contraIds = uniqueIds(byType.contra);
+  const cashReceiptIds = uniqueIds(byType.cash_receipt);
+  const cashPaymentIds = uniqueIds(byType.cash_payment);
 
   const purchaseNoById = new Map<number, string>(
     purchaseIds.length
@@ -1086,6 +1084,26 @@ export async function getLedgerReport(params: {
           .map((r) => [r.id, r])
       : [],
   );
+  const cashReceiptNoById = new Map<number, string>(
+    cashReceiptIds.length
+      ? db
+          .select({ id: cashReceipts.id, no: cashReceipts.voucherNo })
+          .from(cashReceipts)
+          .where(inArray(cashReceipts.id, cashReceiptIds))
+          .all()
+          .map((r) => [r.id, r.no])
+      : [],
+  );
+  const cashPaymentNoById = new Map<number, string>(
+    cashPaymentIds.length
+      ? db
+          .select({ id: cashPayments.id, no: cashPayments.voucherNo })
+          .from(cashPayments)
+          .where(inArray(cashPayments.id, cashPaymentIds))
+          .all()
+          .map((r) => [r.id, r.no])
+      : [],
+  );
 
   const settlementAccountIds = Array.from(
     new Set(
@@ -1102,16 +1120,6 @@ export async function getLedgerReport(params: {
           .where(inArray(accounts.id, settlementAccountIds))
           .all()
           .map((r) => [r.id, r.type])
-      : [],
-  );
-  const settlementNameById = new Map<number, string>(
-    settlementAccountIds.length
-      ? db
-          .select({ id: accounts.id, name: accounts.name })
-          .from(accounts)
-          .where(inArray(accounts.id, settlementAccountIds))
-          .all()
-          .map((r) => [r.id, r.name])
       : [],
   );
   const resolveVoucher = (refType?: string | null, refId?: number | null) => {
@@ -1132,6 +1140,8 @@ export async function getLedgerReport(params: {
       const meta = contraMetaById.get(refId);
       return { vchType: "CV", vchNo: meta?.no || `CV-${refId}` };
     }
+    if (refType === "cash_receipt") return { vchType: "CR", vchNo: cashReceiptNoById.get(refId) || `CR-${refId}` };
+    if (refType === "cash_payment") return { vchType: "CP", vchNo: cashPaymentNoById.get(refId) || `CP-${refId}` };
     return { vchType: refType.toUpperCase(), vchNo: `${refType.toUpperCase()}-${refId}` };
   };
 
@@ -1196,7 +1206,6 @@ export async function getLedgerReport(params: {
     const itemTotals = refId ? purchaseItemTotals.get(refId) : undefined;
     const netKg = itemTotals?.netKg ?? parseAmount(meta?.totalNetWeightKg || "0");
     const moundQty = netKg > 0 ? netKg / 40 : (itemTotals?.moundQty ?? parseAmount(meta?.totalMoundQty || "0"));
-    const subtotal = parseAmount(meta?.itemsSubtotal || meta?.subtotal || "0");
     const qtyParts = [];
     const parts: unknown[] = [base];
     const amountLabel = parseAmount(entry.amount || "0");
@@ -1349,7 +1358,7 @@ export async function getLedgerReport(params: {
     rows.push({
       id: entry.id,
       entryDate: entry.entryDate,
-      narration,
+      narration: stripLedgerAccountName(narration, account?.name),
       vchType: voucher.vchType,
       vchNo: voucher.vchNo,
       debit: debit.toString(),
@@ -1357,6 +1366,7 @@ export async function getLedgerReport(params: {
       runningBalance: running.toString(),
       referenceType: ref.referenceType,
       referenceId: ref.referenceId,
+      cleared: !!(entry as any).cleared,
     });
   }
 
@@ -1389,6 +1399,14 @@ export async function getLedgerReport(params: {
       closingMatchesTotals: Math.abs(closingFromTotals - totals.closing) < 0.0001,
     },
   };
+}
+
+export async function toggleLedgerEntryCleared(id: number): Promise<boolean> {
+  const entry = db.select({ cleared: ledgerEntries.cleared }).from(ledgerEntries).where(eq(ledgerEntries.id, id)).get();
+  if (!entry) throw new Error("Ledger entry not found");
+  const next = !entry.cleared;
+  db.update(ledgerEntries).set({ cleared: next }).where(eq(ledgerEntries.id, id)).run();
+  return next;
 }
 
 export async function getLedgerEntries(
@@ -1479,7 +1497,7 @@ export async function getCashSummary(): Promise<{ opening: number; debit: number
   let credit = 0;
   for (const r of rows) {
     const amt = parseAmount(r.amount);
-    if (r.transactionType === "DEBIT") debit += amt;
+    if (r.transactionType === "debit") debit += amt;
     else credit += amt;
   }
   const opening = parseAmount(cash.openingBalance || "0");
@@ -1515,6 +1533,8 @@ export async function filterExistingSourceLedgerEntries(rows: LedgerEntry[]): Pr
   const journalIds = unique(idsByType.journal_voucher);
   const contraIds = unique(idsByType.contra_voucher);
   const expenseIds = unique(idsByType.expense);
+  const cashReceiptIds = unique(idsByType.cash_receipt);
+  const cashPaymentIds = unique(idsByType.cash_payment);
 
   const existingSales = new Set<number>(
     saleIds.length
@@ -1556,6 +1576,16 @@ export async function filterExistingSourceLedgerEntries(rows: LedgerEntry[]): Pr
       ? db.select({ id: expenseEntries.id }).from(expenseEntries).where(inArray(expenseEntries.id, expenseIds)).all().map((r) => r.id)
       : [],
   );
+  const existingCashReceipts = new Set<number>(
+    cashReceiptIds.length
+      ? db.select({ id: cashReceipts.id }).from(cashReceipts).where(inArray(cashReceipts.id, cashReceiptIds)).all().map((r) => r.id)
+      : [],
+  );
+  const existingCashPayments = new Set<number>(
+    cashPaymentIds.length
+      ? db.select({ id: cashPayments.id }).from(cashPayments).where(inArray(cashPayments.id, cashPaymentIds)).all().map((r) => r.id)
+      : [],
+  );
 
   return rows.filter((row) => {
     const ref = getLedgerReference(row);
@@ -1566,6 +1596,8 @@ export async function filterExistingSourceLedgerEntries(rows: LedgerEntry[]): Pr
     if (ref.referenceType === "journal_voucher") return existingJournals.has(ref.referenceId);
     if (ref.referenceType === "contra_voucher") return existingContras.has(ref.referenceId);
     if (ref.referenceType === "expense") return existingExpenses.has(ref.referenceId);
+    if (ref.referenceType === "cash_receipt") return existingCashReceipts.has(ref.referenceId);
+    if (ref.referenceType === "cash_payment") return existingCashPayments.has(ref.referenceId);
     return true;
   });
 }

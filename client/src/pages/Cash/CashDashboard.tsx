@@ -42,6 +42,7 @@ import {
 import { useAuthStore } from "@/stores/auth.store";
 import { can, Roles } from "@/lib/roles";
 import { useToast } from "@/hooks/use-toast";
+import { todayLocal, toLocalDateString } from "@/utils/dateRanges";
 import { format } from "date-fns";
 
 type CashReceiptRow = {
@@ -100,19 +101,19 @@ function toInputDate(value: unknown): string {
   if (typeof value === "number") {
     const ms = Math.abs(value) < 1_000_000_000_000 ? value * 1000 : value;
     const d = new Date(ms);
-    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    if (!Number.isNaN(d.getTime())) return toLocalDateString(d);
   }
   if (typeof value === "string") {
     const numeric = Number(value);
     if (Number.isFinite(numeric) && value.trim() !== "") {
       const ms = Math.abs(numeric) < 1_000_000_000_000 ? numeric * 1000 : numeric;
       const d = new Date(ms);
-      if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      if (!Number.isNaN(d.getTime())) return toLocalDateString(d);
     }
     const d = new Date(value);
-    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    if (!Number.isNaN(d.getTime())) return toLocalDateString(d);
   }
-  return new Date().toISOString().slice(0, 10);
+  return todayLocal();
 }
 
 export default function CashDashboardPage() {

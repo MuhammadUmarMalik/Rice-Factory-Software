@@ -104,6 +104,19 @@ function LedgerTableComponent({ entries }: { entries?: LedgerEntry[] }) {
 
 const LedgerTable = memo(LedgerTableComponent);
 
+// Stored amounts are positive; add/less lives in the *ChargesMode columns
+// (missing = add, as on the server). Order matches the sale invoice summary.
+function saleChargeLines(d: SaleDetail) {
+  const sale = (d.sale || {}) as Record<string, any>;
+  return [
+    ["Bardana", "weighingCharges"],
+    ["Loading", "loadingCharges"],
+    ["Stitching", "otherCharges"],
+    ["Freight", "freightCharges"],
+    ["Rent", "rentCharges"],
+  ].map(([label, key]) => ({ label, amount: sale[key], mode: sale[`${key}Mode`] || "add" }));
+}
+
 function renderDetailContent(detail: ReportDetail) {
   if (!detail) return <p className="text-sm text-muted-foreground">No detail available.</p>;
 
@@ -125,6 +138,20 @@ function renderDetailContent(detail: ReportDetail) {
             {d.customer?.name && (
               <p className="text-sm text-muted-foreground">Customer: {d.customer.name}</p>
             )}
+            {(d as any)?.gatePasses?.length > 0 && (
+              <p className="text-sm">
+                Gate passes:{" "}
+                {(d as any).gatePasses.map((pass: any, idx: number) => (
+                  <span key={pass.id}>
+                    {idx > 0 ? ", " : ""}
+                    <Link href={`/gate-passes/${pass.id}`} className="text-primary hover:underline font-mono">
+                      {pass.number}
+                    </Link>
+                    <span className="text-muted-foreground"> ({pass.status})</span>
+                  </span>
+                ))}
+              </p>
+            )}
             {(d.sale as { cashReceiptVoucherNo?: string })?.cashReceiptVoucherNo && (
               <p className="text-sm">
                 <Link href="/cash" className="text-primary hover:underline">
@@ -138,12 +165,7 @@ function renderDetailContent(detail: ReportDetail) {
             <SummaryCard label="Items" value={(d.items || []).length} />
           </div>
         </div>
-        {[
-          { label: "Loading", amount: d.sale?.loadingCharges },
-          { label: "Weighing", amount: d.sale?.weighingCharges },
-          { label: "Other", amount: d.sale?.otherCharges },
-          { label: "Rent", amount: d.sale?.rentCharges },
-        ].filter((c) => Number(c.amount || 0) !== 0).length > 0 && (
+        {saleChargeLines(d).filter((c) => Number(c.amount || 0) !== 0).length > 0 && (
           <div className="rounded-md border">
             <Table>
               <TableHeader>
@@ -154,18 +176,13 @@ function renderDetailContent(detail: ReportDetail) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {[
-                  { label: "Loading", amount: d.sale?.loadingCharges },
-                  { label: "Weighing", amount: d.sale?.weighingCharges },
-                  { label: "Other", amount: d.sale?.otherCharges },
-                  { label: "Rent", amount: d.sale?.rentCharges },
-                ]
+                {saleChargeLines(d)
                   .filter((c) => Number(c.amount || 0) !== 0)
                   .map((c, idx) => (
                     <TableRow key={idx}>
                       <TableCell className="font-medium">{c.label}</TableCell>
                       <TableCell className="uppercase text-xs">
-                        {Number(c.amount || 0) < 0 ? "less" : "add"}
+                        {c.mode}
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatMoney(Math.abs(Number(c.amount || 0)))}

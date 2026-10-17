@@ -14,36 +14,57 @@ async function throwIfResNotOk(res: Response, url?: string) {
   }
 }
 
+async function refreshToken(): Promise<string | null> {
+  try {
+    const res = await fetch("/api/auth/me", {
+      cache: "no-store",
+      headers: { "X-Requested-With": "Mill-Manager" },
+      credentials: "include",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.token && data?.user) {
+      useAuthStore.getState().setSession({ token: data.token, user: data.user });
+      return data.token;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const token = useAuthStore.getState().token;
-  let res: Response;
-  try {
-    res = await fetch(url, {
+  const doFetch = (bearerToken: string | null) =>
+    fetch(url, {
       method,
-      // Every GET /api response carries `Cache-Control: private, max-age=60`
-      // (server/index.ts), so without this the HTTP cache answers a refetch
-      // triggered by invalidateApi() with the pre-mutation body — the cash
-      // cards kept showing the old opening balance until the window reloaded.
-      // getQueryFn does the same for default-queryFn queries.
       cache: "no-store",
       headers: {
         ...(data ? { "Content-Type": "application/json" } : {}),
         "X-Requested-With": "Mill-Manager",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
       },
       body: data ? JSON.stringify(data) : undefined,
       credentials: "include",
     });
+
+  let res: Response;
+  try {
+    res = await doFetch(useAuthStore.getState().token);
   } catch (error) {
     if (typeof window !== "undefined" && window.electronLog?.write) {
       const message = error instanceof Error ? error.message : String(error);
       window.electronLog.write(`api network error ${method} ${url} :: ${message}`);
     }
     throw error;
+  }
+
+  if (res.status === 401 && !url.includes("/api/auth/")) {
+    const newToken = await refreshToken();
+    if (newToken) {
+      res = await doFetch(newToken);
+    }
   }
 
   await throwIfResNotOk(res, url);
@@ -56,21 +77,30 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const token = useAuthStore.getState().token;
     const url = queryKey.join("/") as string;
-    let res: Response;
-    try {
-      res = await fetch(url, {
+    const doFetch = (bearerToken: string | null) =>
+      fetch(url, {
         cache: "no-cache",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {},
         credentials: "include",
       });
+
+    let res: Response;
+    try {
+      res = await doFetch(useAuthStore.getState().token);
     } catch (error) {
       if (typeof window !== "undefined" && window.electronLog?.write) {
         const message = error instanceof Error ? error.message : String(error);
         window.electronLog.write(`query network error ${url} :: ${message}`);
       }
       throw error;
+    }
+
+    if (res.status === 401 && !url.includes("/api/auth/")) {
+      const newToken = await refreshToken();
+      if (newToken) {
+        res = await doFetch(newToken);
+      }
     }
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {

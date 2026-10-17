@@ -2,12 +2,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useQuery } from "@tanstack/react-query";
 import { getSummary } from "@/api/cash.api";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLanguage } from "@/contexts/language-context";
 
 type CardVariant = "opening" | "receipts" | "payments" | "balance";
 
 export function CashBalanceCard({ variant }: { variant: CardVariant }) {
-  const { t } = useLanguage();
   const { data, isLoading } = useQuery({ queryKey: ["/api/cash/summary"], queryFn: getSummary });
 
   const config: Record<CardVariant, { label: string; value: number; color: string }> = {

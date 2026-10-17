@@ -13,6 +13,7 @@ import paymentsRoutes from "./payments.routes";
 import payrollRoutes from "./payroll.routes";
 import periodLocksRoutes from "./period-locks.routes";
 import fiscalYearRoutes from "./fiscal-years.routes";
+import gatePassesRoutes from "./gate-passes.routes";
 import processingRoutes from "./processing.routes";
 import productsRoutes from "./products.routes";
 import purchasesRoutes from "./purchases.routes";
@@ -25,10 +26,18 @@ import usersRoutes from "./users.routes";
 import notificationsRoutes from "./notifications.routes";
 import dataManagementRoutes from "./data-management.routes";
 import daybooksRoutes from "./daybooks.routes";
+import productLedgerRoutes from "./product-ledger.routes";
 import { authenticate, requireAuth } from "../utils/auth";
 import { invalidateCache } from "../utils/response-cache";
+import { initRealtime, realtimeMiddleware } from "../utils/realtime";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  // Attach Socket.IO (WebSocket + HTTP polling) to the HTTP server once. The
+  // transport is shared with every other request because it is mounted on
+  // httpServer, not via an Express route, so it is safe to call before the
+  // authenticated /api routes below.
+  initRealtime(httpServer);
+
   app.use(authRoutes);
   app.use("/api", authenticate);
   app.use("/api", (req, res, next) => {
@@ -53,6 +62,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     next();
   });
 
+  // Centralized real-time broadcast: every successful mutation resolves the
+  // entities its route touches and emits a `data:changed` event per entity
+  // after the response finishes (i.e. after the DB write has committed).
+  app.use("/api", realtimeMiddleware);
+
   app.use(settingsRoutes);
   app.use(dataManagementRoutes);
   app.use(daybooksRoutes);
@@ -69,10 +83,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use(paymentsRoutes);
   app.use(journalVoucherRoutes);
   app.use(processingRoutes);
+  app.use(gatePassesRoutes);
   app.use(salesRoutes);
   app.use(ledgerRoutes);
   app.use(cashInHandRoutes);
   app.use(reportsRoutes);
+  app.use(productLedgerRoutes);
   app.use(financialRoutes);
   app.use(periodLocksRoutes);
   app.use(fiscalYearRoutes);

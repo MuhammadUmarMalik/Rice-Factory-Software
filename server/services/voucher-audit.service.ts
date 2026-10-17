@@ -1,43 +1,8 @@
 import { db, sqlite } from "../models/db";
-import { receiptVoucherAuditLogs } from "../db/schema";
-
-/**
- * Audit logging for receipt/payment vouchers.
- *
- * Mirrors `insertAuditLog` in daybooks.service.ts — payments.service.ts and
- * receipts.service.ts moved money without recording who changed what, while
- * every daybook write already captured a before/after snapshot.
- */
-
-// Idempotent, same approach as daybooks.service.ts's ensureTables(): keeps
-// existing databases working without a manual migration run. The equivalent DDL
-// lives in script/0002_receipt_voucher_audit_logs.sql.
-function ensureTable() {
-  sqlite.exec(`
-CREATE TABLE IF NOT EXISTS receipt_voucher_audit_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  voucher_type TEXT NOT NULL,
-  record_id INTEGER NOT NULL,
-  action TEXT NOT NULL,
-  before_json TEXT,
-  after_json TEXT,
-  changed_by INTEGER,
-  changed_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
-);
-CREATE INDEX IF NOT EXISTS idx_receipt_voucher_audit
-  ON receipt_voucher_audit_logs(voucher_type, record_id, changed_at);
-`);
-}
-
-ensureTable();
+import { auditLogs } from "../db/schema";
 
 export type VoucherAuditAction = "create" | "update" | "delete";
 
-/**
- * Writes one audit row. Never throws: an audit failure must not roll back or
- * fail a voucher that has already been written, and must not change the
- * response the controller sends.
- */
 export function insertVoucherAuditLog(
   voucherType: string,
   recordId: number,
@@ -47,27 +12,26 @@ export function insertVoucherAuditLog(
   userId?: number,
 ) {
   try {
-    db.insert(receiptVoucherAuditLogs)
+    db.insert(auditLogs)
       .values({
-        voucherType,
-        recordId,
+        entity: voucherType,
+        entityId: recordId,
         action,
         beforeJson: beforeJson ? JSON.stringify(beforeJson) : null,
         afterJson: afterJson ? JSON.stringify(afterJson) : null,
-        changedBy: userId ?? null,
-        changedAt: new Date(),
+        performedBy: userId ?? null,
+        source: "voucher",
       })
       .run();
   } catch (error) {
-    console.error("Failed to write receipt voucher audit log", error);
+    console.error("Failed to write voucher audit log", error);
   }
 }
 
-/** Audit rows for one voucher, newest first. */
 export function getVoucherAuditLogs(recordId: number) {
   return sqlite
     .prepare(
-      `SELECT * FROM receipt_voucher_audit_logs WHERE record_id = ? ORDER BY changed_at DESC, id DESC LIMIT 500`,
+      `SELECT * FROM audit_logs WHERE entity_id = ? AND source = 'voucher' ORDER BY performed_at DESC, id DESC LIMIT 500`,
     )
     .all(recordId);
 }

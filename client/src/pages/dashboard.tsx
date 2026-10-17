@@ -9,6 +9,7 @@ import Banknote from "lucide-react/dist/esm/icons/banknote";
 import Landmark from "lucide-react/dist/esm/icons/landmark";
 import Users from "lucide-react/dist/esm/icons/users";
 import UserMinus from "lucide-react/dist/esm/icons/user-minus";
+import Truck from "lucide-react/dist/esm/icons/truck";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,15 +21,9 @@ import { format } from "date-fns";
 import { Label } from "@/components/ui/label";
 import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
 import { useReportDateRange } from "@/hooks/useReportDateRange";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useReportDetail } from "@/components/report-detail-hook";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { useGatePassDashboard } from "@/hooks";
 
 const DashboardChartsSection = lazy(() =>
   import("@/components/dashboard/DashboardChartsSection").then((mod) => ({
@@ -139,13 +134,12 @@ export default function Dashboard() {
   const { reference, detail, isLoading: detailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
-  const [godown, setGodown] = useState<string>("all");
 
   const chartsSection = useLazySection<HTMLDivElement>("300px");
   const detailsSection = useLazySection<HTMLDivElement>("300px");
 
   const { data: summary, isLoading: summaryLoading } = useQuery<DashboardSummaryCore>({
-    queryKey: ["/api/dashboard/summary", "core", fromDate, toDate, godown],
+    queryKey: ["/api/dashboard/summary", "core", fromDate, toDate],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("scope", "core");
@@ -159,14 +153,13 @@ export default function Dashboard() {
       return res.json();
     },
     staleTime: 0,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 60000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
 
   const { data: details, isLoading: detailsLoading } = useQuery<DashboardSummaryDetails>({
-    queryKey: ["/api/dashboard/summary", "details", fromDate, toDate, godown],
+    queryKey: ["/api/dashboard/summary", "details", fromDate, toDate],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("scope", "details");
@@ -181,14 +174,13 @@ export default function Dashboard() {
     },
     enabled: detailsSection.active,
     staleTime: 0,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 60000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
 
   const { data: alertsData, isLoading: alertsLoading } = useQuery<DashboardAlerts>({
-    queryKey: ["/api/dashboard/alerts", fromDate, toDate, godown],
+    queryKey: ["/api/dashboard/alerts", fromDate, toDate],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (fromDate) params.set("fromDate", fromDate);
@@ -201,11 +193,12 @@ export default function Dashboard() {
       return res.json();
     },
     staleTime: 0,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 60000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
+
+  const { data: gatePassDashboard, isLoading: gatePassDashboardLoading } = useGatePassDashboard();
 
   const money = useCallback(
     (value?: number) =>
@@ -390,22 +383,9 @@ export default function Dashboard() {
 
       <Card>
         <CardContent className="pt-6">
-          <div className={`grid gap-4 md:grid-cols-3 ${isRTL ? "direction-rtl" : ""}`}>
-            <div className="md:col-span-2">
-              <Label className={isRTL ? "font-urdu" : ""}>Date Range</Label>
-              <DateRangeFilter value={range} onChange={setRange} />
-            </div>
-            <div>
-              <Label className={isRTL ? "font-urdu" : ""}>Godown</Label>
-              <Select value={godown} onValueChange={setGodown} disabled>
-                <SelectTrigger>
-                  <SelectValue placeholder="All godowns" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+          <div className={isRTL ? "direction-rtl" : ""}>
+            <Label className={isRTL ? "font-urdu" : ""}>Date Range</Label>
+            <DateRangeFilter value={range} onChange={setRange} />
           </div>
         </CardContent>
       </Card>
@@ -539,6 +519,64 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+            <CardTitle className="text-base font-semibold">{t("vehiclesInsideToday")}</CardTitle>
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+              <Truck className="h-4 w-4 text-primary" />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {gatePassDashboardLoading ? (
+              <SkeletonBox className="h-8 w-24" />
+            ) : (
+              <Link href="/gate-passes?tab=open">
+                <div className={`cursor-pointer ${isRTL ? "text-right" : ""}`}>
+                  <div className="text-2xl font-bold font-mono">
+                    {gatePassDashboard?.vehiclesInside ?? 0}
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {t("openPasses")}: {gatePassDashboard?.openPasses ?? 0}
+                  </p>
+                </div>
+              </Link>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+            <CardTitle className="text-base font-semibold">{t("staleOpenPasses")}</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {gatePassDashboardLoading ? (
+              <div className="space-y-2">
+                <SkeletonBox className="h-4 w-full" />
+                <SkeletonBox className="h-4 w-2/3" />
+              </div>
+            ) : (gatePassDashboard?.staleOpenPasses || []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No alerts.</p>
+            ) : (
+              (gatePassDashboard?.staleOpenPasses || []).map((pass) => (
+                <Link
+                  key={pass.id}
+                  href={`/gate-passes/${pass.id}`}
+                  className={`flex items-center justify-between gap-3 rounded-md border p-2 hover:bg-muted/50 ${isRTL ? "flex-row-reverse" : ""}`}
+                >
+                  <span className="font-mono text-sm font-medium">{pass.number}</span>
+                  <span className="text-sm text-muted-foreground">{pass.vehicleNo || "-"}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {format(new Date(pass.issuedAt), "dd MMM HH:mm")}
+                  </span>
+                </Link>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       <div ref={chartsSection.ref}>
         {/* Lazy-load chart code + data only when the charts are near the viewport. */}
         {chartsSection.active ? (
@@ -546,7 +584,6 @@ export default function Dashboard() {
             <DashboardChartsSection
               fromDate={fromDate}
               toDate={toDate}
-              godown={godown}
               isRTL={isRTL}
               purchasesLabel={t("purchases")}
               salesLabel={t("sales")}

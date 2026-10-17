@@ -1,19 +1,25 @@
 import { useMemo, useState } from "react";
-import { Plus, Edit, BadgeDollarSign, Trash2 } from "lucide-react";
+import { Plus, Edit, BadgeDollarSign, Trash2, BookOpen, Download, Search } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import type { Employee, EmployeeSalaryStructure } from "@/types/schema";
+import { format } from "date-fns";
+import clsx from "clsx";
+import type { Employee, EmployeeSalaryStructure, Account } from "@/types/schema";
 
 import { useLanguage } from "@/contexts/language-context";
 import { apiRequest } from "@/lib/queryClient";
+import { fetchWithAuth } from "@/lib/authFetch";
 import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
+import { todayLocal, toLocalDateString } from "@/utils/dateRanges";
+import { useReportDateRange } from "@/hooks/useReportDateRange";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -39,6 +45,11 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/auth.store";
 import { SkeletonBox } from "@/components/ui/skeletons";
+import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
+import { PrintActions } from "@/components/print/PrintActions";
+import { docKeys } from "@/print/docRegistry";
+import { downloadCsv } from "@/lib/export";
+import { confirmAction } from "@/components/confirm-dialog";
 
 const employeeSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -51,6 +62,8 @@ const employeeSchema = z.object({
   joiningDate: z.string().optional(),
   employmentType: z.enum(["permanent", "contract"]).default("permanent"),
   basicSalary: z.string().default("0"),
+  openingBalance: z.string().default("0"),
+  openingBalanceType: z.enum(["debit", "credit"]).default("debit"),
   status: z.enum(["active", "inactive"]).default("active"),
 });
 type EmployeeFormData = z.infer<typeof employeeSchema>;
@@ -62,6 +75,42 @@ const salaryStructureSchema = z.object({
   deductions: z.string().default("0"),
 });
 type SalaryStructureFormData = z.infer<typeof salaryStructureSchema>;
+
+const khataEntrySchema = z.object({
+  type: z.enum(["advance_given", "loan_issued", "deduction", "refund", "manual"]),
+  amount: z.string().min(1, "Amount is required"),
+  date: z.string().min(1, "Date is required"),
+  note: z.string().optional(),
+});
+type KhataEntryFormData = z.infer<typeof khataEntrySchema>;
+
+const KHATA_TYPES = [
+  { value: "advance_given" as const, label: "Advance Given", dir: "dr" },
+  { value: "loan_issued" as const, label: "Loan Issued", dir: "dr" },
+  { value: "deduction" as const, label: "Deduction", dir: "cr" },
+  { value: "refund" as const, label: "Refund / Adjustment", dir: "cr" },
+  { value: "manual" as const, label: "Manual Entry", dir: "dr" },
+] as const;
+
+type LedgerRow = {
+  id: number;
+  entryDate: string | number | Date;
+  narration: string;
+  vchType: string;
+  vchNo: string;
+  debit: string;
+  credit: string;
+  runningBalance: string;
+  cleared?: boolean;
+};
+
+type LedgerReport = {
+  account: Account;
+  openingBalance: string;
+  openingBalanceType?: "debit" | "credit";
+  rows: LedgerRow[];
+  totals: { debit: string; credit: string; closingBalance: string };
+};
 
 export default function EmployeesPage() {
   const { t, isRTL } = useLanguage();
@@ -75,6 +124,13 @@ export default function EmployeesPage() {
   const [openSalaryDialog, setOpenSalaryDialog] = useState(false);
   const [salaryEmployee, setSalaryEmployee] = useState<Employee | null>(null);
   const [editingStructure, setEditingStructure] = useState<EmployeeSalaryStructure | null>(null);
+
+  const [openKhataDialog, setOpenKhataDialog] = useState(false);
+  const [khataEmployee, setKhataEmployee] = useState<Employee | null>(null);
+  const [showAddEntry, setShowAddEntry] = useState(false);
+  const [khataNarrationSearch, setKhataNarrationSearch] = useState("");
+  const [khataSortAsc, setKhataSortAsc] = useState(true);
+  const { range: khataRange, setRange: setKhataRange, fromDate: khataFrom, toDate: khataTo } = useReportDateRange({ preset: "all" });
 
   const showApiError = (error: unknown) => {
     const message = (error as any)?.message ? String((error as any).message) : "Unknown error";
@@ -103,6 +159,8 @@ export default function EmployeesPage() {
       joiningDate: "",
       employmentType: "permanent",
       basicSalary: "0",
+      openingBalance: "0",
+      openingBalanceType: "debit",
       status: "active",
     },
   });
@@ -110,15 +168,49 @@ export default function EmployeesPage() {
   const salaryForm = useForm<SalaryStructureFormData>({
     resolver: zodResolver(salaryStructureSchema),
     defaultValues: {
-      effectiveFrom: new Date().toISOString().slice(0, 10),
+      effectiveFrom: todayLocal(),
       basicSalary: "0",
       allowances: "0",
       deductions: "0",
     },
   });
 
+  const khataForm = useForm<KhataEntryFormData>({
+    resolver: zodResolver(khataEntrySchema),
+    defaultValues: {
+      type: "advance_given",
+      amount: "",
+      date: todayLocal(),
+      note: "",
+    },
+  });
+
   const { data: employees = [], isLoading } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
+  });
+
+  const { data: accounts = [] } = useQuery<Account[]>({
+    queryKey: ["/api/accounts"],
+  });
+
+  const cashAccount = useMemo(
+    () => accounts.find((a) => a.isSystemAccount && a.name === "Cash in Hand"),
+    [accounts],
+  );
+
+  const { data: khataLedger, isLoading: isKhataLoading } = useQuery<LedgerReport>({
+    queryKey: ["/api/ledger", khataEmployee?.accountId, "employee", khataFrom, khataTo],
+    enabled: !!khataEmployee?.accountId,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("accountId", String(khataEmployee!.accountId));
+      params.set("scope", "employee");
+      if (khataFrom) params.set("startDate", khataFrom);
+      if (khataTo) params.set("endDate", khataTo);
+      const res = await fetchWithAuth(`/api/ledger?${params.toString()}`);
+      if (!res.ok) throw new Error("Failed to fetch khata");
+      return res.json();
+    },
   });
 
   const { data: salaryStructures = [], isLoading: isSalaryLoading } = useQuery<EmployeeSalaryStructure[]>({
@@ -173,7 +265,7 @@ export default function EmployeesPage() {
     onSuccess: async () => {
       await invalidateApi(invalidationGroups.employees);
       salaryForm.reset({
-        effectiveFrom: new Date().toISOString().slice(0, 10),
+        effectiveFrom: todayLocal(),
         basicSalary: "0",
         allowances: "0",
         deductions: "0",
@@ -195,7 +287,7 @@ export default function EmployeesPage() {
       await invalidateApi(invalidationGroups.employees);
       setEditingStructure(null);
       salaryForm.reset({
-        effectiveFrom: new Date().toISOString().slice(0, 10),
+        effectiveFrom: todayLocal(),
         basicSalary: "0",
         allowances: "0",
         deductions: "0",
@@ -218,6 +310,95 @@ export default function EmployeesPage() {
     onError: (err) => showApiError(err),
   });
 
+  const createKhataEntryMutation = useMutation({
+    mutationKey: ["/api/journal-vouchers", "khata-entry"],
+    meta: scopedInvalidation,
+    mutationFn: (data: KhataEntryFormData & { employeeAccountId: number }) => {
+      if (!cashAccount) throw new Error("Cash in Hand account not found");
+      const typeMeta = KHATA_TYPES.find((t) => t.value === data.type)!;
+      const narration = data.note
+        ? `${typeMeta.label}: ${data.note}`
+        : typeMeta.label;
+      const isDr = typeMeta.dir === "dr";
+      return apiRequest("POST", "/api/journal-vouchers", {
+        voucherDate: new Date(data.date),
+        narration,
+        status: "approved",
+        debitAccountId: isDr ? data.employeeAccountId : cashAccount.id,
+        debitAmount: data.amount,
+        creditAccountId: isDr ? cashAccount.id : data.employeeAccountId,
+        creditAmount: data.amount,
+      });
+    },
+    onSuccess: async () => {
+      await invalidateApi([...invalidationGroups.journal, "/api/ledger"]);
+      setShowAddEntry(false);
+      khataForm.reset({
+        type: "advance_given",
+        amount: "",
+        date: todayLocal(),
+        note: "",
+      });
+      toast({ title: t("savedSuccessfully") });
+    },
+    onError: (err) => showApiError(err),
+  });
+
+  const formatAmount = (value?: string | number) => {
+    const num = typeof value === "number" ? value : parseFloat(value || "0");
+    if (!Number.isFinite(num)) return "0.00";
+    return num.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const khataBalanceLabel = (value?: string | number) => {
+    const num = typeof value === "number" ? value : parseFloat(value || "0");
+    if (!Number.isFinite(num) || num === 0) return formatAmount(0);
+    return num >= 0
+      ? `${formatAmount(num)} DR`
+      : `${formatAmount(Math.abs(num))} CR`;
+  };
+
+  const toggleClearedMutation = useMutation({
+    mutationKey: ["/api/ledger", "toggle-cleared"],
+    meta: scopedInvalidation,
+    mutationFn: (entryId: number) =>
+      apiRequest("PATCH", `/api/ledger/${entryId}/cleared`),
+    onSuccess: async () => {
+      await invalidateApi(["/api/ledger"]);
+    },
+    onError: (err) => showApiError(err),
+  });
+
+  const filteredKhataRows = useMemo(() => {
+    if (!khataLedger) return [];
+    let rows = khataLedger.rows;
+    if (khataNarrationSearch.trim()) {
+      const q = khataNarrationSearch.trim().toLowerCase();
+      rows = rows.filter((r) => (r.narration || "").toLowerCase().includes(q));
+    }
+    if (!khataSortAsc) {
+      rows = [...rows].reverse();
+    }
+    return rows;
+  }, [khataLedger, khataNarrationSearch, khataSortAsc]);
+
+  const handleExportKhataCsv = () => {
+    if (!khataLedger || !khataEmployee) return;
+    downloadCsv(
+      `Khata_${khataEmployee.employeeCode}_${khataEmployee.name}.csv`,
+      [
+        { header: "Date", value: (r: LedgerRow) => format(new Date(r.entryDate), "yyyy-MM-dd") },
+        { header: "Narration", value: (r: LedgerRow) => r.narration },
+        { header: "Voucher", value: (r: LedgerRow) => `${r.vchType} ${r.vchNo}` },
+        { header: "Debit", value: (r: LedgerRow) => r.debit },
+        { header: "Credit", value: (r: LedgerRow) => r.credit },
+        { header: "Balance", value: (r: LedgerRow) => r.runningBalance },
+        { header: "Cleared", value: (r: LedgerRow) => r.cleared ? "Yes" : "No" },
+      ],
+      filteredKhataRows,
+    );
+  };
+
   const columns: Column<Employee>[] = useMemo(
     () => [
       { key: "employeeCode", title: "Code", render: (e) => <span className="font-mono">{e.employeeCode}</span> },
@@ -225,6 +406,18 @@ export default function EmployeesPage() {
       { key: "department", title: "Department", render: (e) => e.department || "-" },
       { key: "designation", title: "Designation", render: (e) => e.designation || "-" },
       { key: "basicSalary", title: "Basic", render: (e) => <span className="font-mono">{e.basicSalary || "0"}</span> },
+      {
+        key: "openingBalance",
+        title: t("openingBalance"),
+        render: (e) => {
+          const type = String((e as any).openingBalanceType || "debit").toUpperCase();
+          return (
+            <span className="font-mono">
+              {e.openingBalance || "0"} <span className="text-xs ml-1">{type === "CREDIT" ? "CR" : "DR"}</span>
+            </span>
+          );
+        },
+      },
       {
         key: "status",
         title: t("status"),
@@ -239,6 +432,22 @@ export default function EmployeesPage() {
         title: "",
         render: (e) => (
           <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+            <Button
+              size="sm"
+              variant="outline"
+              title="Khata"
+              onClick={() => {
+                setKhataEmployee(e);
+                setOpenKhataDialog(true);
+                setShowAddEntry(false);
+                setKhataNarrationSearch("");
+                setKhataSortAsc(true);
+              }}
+              disabled={!e.accountId}
+              data-testid={`employee-khata-${e.id}`}
+            >
+              <BookOpen className="h-4 w-4" />
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -264,12 +473,17 @@ export default function EmployeesPage() {
                     email: e.email || "",
                     designation: e.designation || "",
                     department: e.department || "",
-                    joiningDate: e.joiningDate ? new Date(e.joiningDate as any).toISOString().slice(0, 10) : "",
+                    joiningDate: e.joiningDate ? toLocalDateString(new Date(e.joiningDate as any)) : "",
                     employmentType:
                       String((e.employmentType as any) || "permanent").toLowerCase() === "contract"
                         ? "contract"
                         : "permanent",
                     basicSalary: e.basicSalary || "0",
+                    openingBalance: e.openingBalance || "0",
+                    openingBalanceType:
+                      String((e as any).openingBalanceType || "debit").toLowerCase() === "credit"
+                        ? "credit"
+                        : "debit",
                     status:
                       String((e.status as any) || "active").toLowerCase() === "inactive"
                         ? "inactive"
@@ -310,6 +524,7 @@ export default function EmployeesPage() {
       joiningDate: "",
       employmentType: "permanent",
       basicSalary: "0",
+      openingBalance: "0",
       status: "active",
     });
     setOpenEmployeeDialog(true);
@@ -463,7 +678,7 @@ export default function EmployeesPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Employment Type</FormLabel>
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select value={field.value || undefined} onValueChange={field.onChange}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue />
@@ -491,11 +706,57 @@ export default function EmployeesPage() {
                 />
                 <FormField
                   control={employeeForm.control}
+                  name="openingBalance"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("openingBalance")}</FormLabel>
+                      <div className="flex gap-2">
+                        <FormControl>
+                          <Input
+                            {...field}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            inputMode="decimal"
+                            data-testid="employee-opening-balance"
+                            className="flex-1"
+                          />
+                        </FormControl>
+                        <FormField
+                          control={employeeForm.control}
+                          name="openingBalanceType"
+                          render={({ field: typeField }) => (
+                            <FormItem className="flex flex-col">
+                              <FormLabel className="sr-only">Debit / Credit</FormLabel>
+                              <Select
+                                value={typeField.value}
+                                onValueChange={typeField.onChange}
+                              >
+                                <FormControl>
+                                  <SelectTrigger className="w-[110px]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  <SelectItem value="debit">Debit</SelectItem>
+                                  <SelectItem value="credit">Credit</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={employeeForm.control}
                   name="status"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("status")}</FormLabel>
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select value={field.value || undefined} onValueChange={field.onChange}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue />
@@ -564,7 +825,7 @@ export default function EmployeesPage() {
                           <div className="text-sm font-medium">
                             Effective:{" "}
                             <span className="font-mono">
-                              {new Date(s.effectiveFrom as any).toISOString().slice(0, 10)}
+                              {toLocalDateString(new Date(s.effectiveFrom as any))}
                             </span>
                           </div>
                           <div className="text-xs text-muted-foreground">
@@ -583,7 +844,7 @@ export default function EmployeesPage() {
                                 onClick={() => {
                                   setEditingStructure(s);
                                   salaryForm.reset({
-                                    effectiveFrom: new Date(s.effectiveFrom as any).toISOString().slice(0, 10),
+                                    effectiveFrom: toLocalDateString(new Date(s.effectiveFrom as any)),
                                     basicSalary: s.basicSalary || "0",
                                     allowances: s.allowances || "0",
                                     deductions: s.deductions || "0",
@@ -596,9 +857,9 @@ export default function EmployeesPage() {
                                 size="icon"
                                 variant="ghost"
                                 title="Delete structure"
-                                onClick={() => {
+                                onClick={async () => {
                                   if (!salaryEmployee) return;
-                                  const ok = window.confirm("Delete this salary structure? This cannot be undone.");
+                                  const ok = await confirmAction("Delete this salary structure? This cannot be undone.");
                                   if (!ok) return;
                                   deleteStructureMutation.mutate({ employeeId: salaryEmployee.id, id: s.id });
                                 }}
@@ -694,7 +955,7 @@ export default function EmployeesPage() {
                             onClick={() => {
                               setEditingStructure(null);
                               salaryForm.reset({
-                                effectiveFrom: new Date().toISOString().slice(0, 10),
+                                effectiveFrom: todayLocal(),
                                 basicSalary: "0",
                                 allowances: "0",
                                 deductions: "0",
@@ -716,6 +977,280 @@ export default function EmployeesPage() {
                 </CardContent>
               </Card>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Khata Dialog */}
+      <Dialog
+        open={openKhataDialog}
+        onOpenChange={(open) => {
+          setOpenKhataDialog(open);
+          if (!open) {
+            setKhataEmployee(null);
+            setShowAddEntry(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Khata {khataEmployee ? `- ${khataEmployee.employeeCode} ${khataEmployee.name}` : ""}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* Filters + Print + Export */}
+            <div className="flex items-end gap-3 flex-wrap">
+              <div className="w-52">
+                <Label>Date Range</Label>
+                <DateRangeFilter value={khataRange} onChange={setKhataRange} />
+              </div>
+              <div className="w-48">
+                <Label>Search Narration</Label>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    className="pl-8"
+                    placeholder="Search..."
+                    value={khataNarrationSearch}
+                    onChange={(e) => setKhataNarrationSearch(e.target.value)}
+                  />
+                </div>
+              </div>
+              <PrintActions
+                docKey={docKeys.ledger}
+                params={{
+                  accountId: khataEmployee?.accountId || undefined,
+                  scope: "employee",
+                  startDate: khataFrom || undefined,
+                  endDate: khataTo || undefined,
+                  language: isRTL ? "ur" : "en",
+                }}
+                title={`Khata - ${khataEmployee?.name || ""}`}
+                disabled={!khataEmployee?.accountId}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportKhataCsv}
+                disabled={!khataLedger || filteredKhataRows.length === 0}
+                title="Export to CSV (opens in Excel)"
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Excel
+              </Button>
+              {canEdit && (
+                <Button
+                  size="sm"
+                  onClick={() => setShowAddEntry(!showAddEntry)}
+                  variant={showAddEntry ? "secondary" : "default"}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Entry
+                </Button>
+              )}
+            </div>
+
+            {/* Balance summary */}
+            {khataLedger && (
+              <div className="flex gap-4">
+                <div className="rounded-md border px-4 py-2">
+                  <div className="text-xs text-muted-foreground">Closing Balance</div>
+                  <div className="text-lg font-semibold font-mono">
+                    {khataBalanceLabel(khataLedger.totals.closingBalance)}
+                  </div>
+                </div>
+                <div className="rounded-md border px-4 py-2">
+                  <div className="text-xs text-muted-foreground">Total Debit</div>
+                  <div className="font-mono">{formatAmount(khataLedger.totals.debit)}</div>
+                </div>
+                <div className="rounded-md border px-4 py-2">
+                  <div className="text-xs text-muted-foreground">Total Credit</div>
+                  <div className="font-mono">{formatAmount(khataLedger.totals.credit)}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Add Entry Form */}
+            {showAddEntry && canEdit && khataEmployee?.accountId && (
+              <Card>
+                <CardContent className="pt-4">
+                  <Form {...khataForm}>
+                    <form
+                      onSubmit={khataForm.handleSubmit((data) => {
+                        createKhataEntryMutation.mutate({
+                          ...data,
+                          employeeAccountId: khataEmployee.accountId!,
+                        });
+                      })}
+                      className="space-y-3"
+                    >
+                      <div className="grid gap-3 md:grid-cols-4">
+<FormField
+                          control={khataForm.control}
+                          name="type"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Type</FormLabel>
+                              <Select value={field.value || undefined} onValueChange={field.onChange}>
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  {KHATA_TYPES.map((t) => (
+                                    <SelectItem key={t.value} value={t.value}>
+                                      {t.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={khataForm.control}
+                          name="amount"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Amount</FormLabel>
+                              <FormControl>
+                                <Input {...field} inputMode="decimal" placeholder="0.00" />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={khataForm.control}
+                          name="date"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Date</FormLabel>
+                              <FormControl>
+                                <Input type="date" {...field} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={khataForm.control}
+                          name="note"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Note</FormLabel>
+                              <FormControl>
+                                <Input {...field} placeholder="Optional" />
+                              </FormControl>
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => setShowAddEntry(false)}>
+                          {t("cancel")}
+                        </Button>
+                        <Button type="submit" size="sm" disabled={createKhataEntryMutation.isPending}>
+                          {t("save")}
+                        </Button>
+                      </div>
+                    </form>
+                  </Form>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Ledger Table */}
+            <div className="border rounded-lg bg-white overflow-auto">
+              <div className="min-w-[780px]">
+                <div className="grid grid-cols-[90px,1fr,110px,110px,130px,60px] bg-muted/60 text-[11px] font-semibold uppercase tracking-wide border-b">
+                  <button
+                    type="button"
+                    className="px-3 py-2 border-r text-left hover:bg-muted/80 cursor-pointer"
+                    onClick={() => setKhataSortAsc(!khataSortAsc)}
+                  >
+                    Date {khataSortAsc ? "↑" : "↓"}
+                  </button>
+                  <div className="px-3 py-2 border-r">Narration</div>
+                  <div className="px-3 py-2 border-r text-right">Debit</div>
+                  <div className="px-3 py-2 border-r text-right">Credit</div>
+                  <div className="px-3 py-2 border-r text-right">Balance</div>
+                  <div className="px-3 py-2 text-center">Clr</div>
+                </div>
+
+                {isKhataLoading ? (
+                  <div className="space-y-2 p-4">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <SkeletonBox key={i} className="h-10 w-full" />
+                    ))}
+                  </div>
+                ) : filteredKhataRows.length === 0 ? (
+                  <div className="px-3 py-6 text-center text-muted-foreground text-sm">
+                    No entries found.
+                  </div>
+                ) : (
+                  filteredKhataRows.map((row, idx) => {
+                    const debit = parseFloat(row.debit || "0");
+                    const credit = parseFloat(row.credit || "0");
+                    return (
+                      <div
+                        key={row.id}
+                        className={clsx(
+                          "grid grid-cols-[90px,1fr,110px,110px,130px,60px] text-sm border-b last:border-b-0",
+                          idx % 2 === 0 ? "bg-white" : "bg-muted/20",
+                          row.cleared && "opacity-60",
+                        )}
+                      >
+                        <div className="px-3 py-2 border-r text-xs text-muted-foreground font-mono">
+                          {format(new Date(row.entryDate), "dd.MM.yy")}
+                        </div>
+                        <div className="px-3 py-2 border-r text-sm">{row.narration}</div>
+                        <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                          {debit > 0 ? formatAmount(debit) : "-"}
+                        </div>
+                        <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                          {credit > 0 ? formatAmount(credit) : "-"}
+                        </div>
+                        <div className="px-3 py-2 border-r text-right font-mono tabular-nums font-semibold">
+                          {khataBalanceLabel(row.runningBalance)}
+                        </div>
+                        <div className="px-3 py-2 text-center">
+                          {row.id > 0 && (
+                            <input
+                              type="checkbox"
+                              checked={!!row.cleared}
+                              onChange={() => toggleClearedMutation.mutate(row.id)}
+                              className="h-4 w-4 cursor-pointer accent-primary"
+                              title={row.cleared ? "Mark as uncleared" : "Mark as cleared"}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+
+                {khataLedger && !isKhataLoading && filteredKhataRows.length > 0 && (
+                  <div className="grid grid-cols-[90px,1fr,110px,110px,130px,60px] bg-muted/80 text-sm font-semibold border-t">
+                    <div className="px-3 py-2 border-r" />
+                    <div className="px-3 py-2 border-r">Totals</div>
+                    <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                      {Number(khataLedger.totals.debit || 0) > 0 ? formatAmount(khataLedger.totals.debit) : "-"}
+                    </div>
+                    <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                      {Number(khataLedger.totals.credit || 0) > 0 ? formatAmount(khataLedger.totals.credit) : "-"}
+                    </div>
+                    <div className="px-3 py-2 border-r text-right font-mono tabular-nums">
+                      {khataBalanceLabel(khataLedger.totals.closingBalance)}
+                    </div>
+                    <div className="px-3 py-2" />
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -13,6 +13,8 @@ import { ensureMonoFonts } from "@/lib/fonts";
 import { RouteSkeleton } from "@/components/loading/route-skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Roles, can, readAccountsRoles, readPayrollRoles, readProductsRoles } from "@/lib/roles";
+import { useRealtime } from "@/hooks/use-realtime";
+import { ConfirmHost } from "@/components/confirm-dialog";
 
 const AppSidebar = lazy(() =>
   import("@/components/app-sidebar").then((mod) => ({ default: mod.AppSidebar })),
@@ -47,6 +49,9 @@ const Dashboard = withRoles(lazy(() => import("@/pages/dashboard")), Roles.all);
 const Products = withRoles(lazy(() => import("@/pages/products")), readProductsRoles);
 const Purchases = withRoles(lazy(() => import("@/pages/purchases")), Roles.purchasing);
 const Processing = withRoles(lazy(() => import("@/pages/processing")), Roles.ops);
+const GatePasses = withRoles(lazy(() => import("@/pages/gate-passes/list")), Roles.all);
+const NewGatePass = withRoles(lazy(() => import("@/pages/gate-passes/new")), Roles.ops);
+const GatePassDetail = withRoles(lazy(() => import("@/pages/gate-passes/detail")), Roles.all);
 const Sales = withRoles(lazy(() => import("@/pages/sales")), Roles.sales);
 const Settings = withRoles(lazy(() => import("@/pages/settings")), Roles.settings);
 const UsersAdminPage = withRoles(lazy(() => import("@/pages/admin/users")), Roles.adminOnly);
@@ -59,6 +64,7 @@ const SalesReport = withRoles(lazy(() => import("@/pages/reports/sales")), Roles
 const BardanaReport = withRoles(lazy(() => import("@/pages/reports/bardana")), Roles.purchasing);
 const LessReport = withRoles(lazy(() => import("@/pages/reports/less")), Roles.purchasing);
 const Ledger = withRoles(lazy(() => import("@/pages/reports/ledger")), Roles.finance);
+const ProductLedger = withRoles(lazy(() => import("@/pages/reports/product-ledger")), Roles.purchasing);
 const TrialBalance = withRoles(lazy(() => import("@/pages/reports/trial-balance")), Roles.finance);
 const ProfitLoss = withRoles(lazy(() => import("@/pages/reports/profit-loss")), Roles.finance);
 const PrintPreviewPage = withRoles(lazy(() => import("@/pages/print-preview")), Roles.all);
@@ -77,7 +83,6 @@ const DayBookPurchases = withRoles(lazy(() => import("@/pages/reports/day-book-p
 const DayBookCash = withRoles(lazy(() => import("@/pages/reports/day-book-cash")), Roles.finance);
 const DayBookSalesReturns = withRoles(lazy(() => import("@/pages/reports/day-book-sales-returns")), Roles.finance);
 const DayBookPurchaseReturns = withRoles(lazy(() => import("@/pages/reports/day-book-purchase-returns")), Roles.finance);
-const DayBookGeneralJournal = withRoles(lazy(() => import("@/pages/reports/day-book-general-journal")), Roles.finance);
 const Receipts = withRoles(lazy(() => import("@/pages/receipts")), Roles.finance);
 const PaymentsPage = withRoles(lazy(() => import("@/pages/payments")), Roles.finance);
 const Journal = withRoles(lazy(() => import("@/pages/journal")), Roles.finance);
@@ -86,6 +91,13 @@ const PayrollPage = withRoles(lazy(() => import("@/pages/hr/payroll")), readPayr
 const ExpensesPage = withRoles(lazy(() => import("@/pages/expenses")), Roles.finance);
 const CashDashboard = withRoles(lazy(() => import("@/pages/Cash/CashDashboard")), Roles.finance);
 const CashLedger = withRoles(lazy(() => import("@/pages/Cash/CashLedger")), Roles.finance);
+
+// Must live at module scope: defined inside AuthenticatedApp it became a new
+// component type on every render (every navigation), remounting sidebar + header.
+function Shell({ children }: { children: React.ReactNode }) {
+  const { isRTL } = useLanguage();
+  return <div className={`flex h-screen w-full ${isRTL ? "flex-row-reverse" : ""}`}>{children}</div>;
+}
 
 function Router() {
   const [location] = useLocation();
@@ -105,6 +117,9 @@ function Router() {
         <Route path="/cash" component={CashDashboard} />
         <Route path="/journal" component={Journal} />
         <Route path="/processing" component={Processing} />
+        <Route path="/gate-passes" component={GatePasses} />
+        <Route path="/gate-passes/new" component={NewGatePass} />
+        <Route path="/gate-passes/:id" component={GatePassDetail} />
         <Route path="/sales" component={Sales} />
         <Route path="/settings" component={Settings} />
         <Route path="/admin/users" component={UsersAdminPage} />
@@ -130,8 +145,6 @@ function Router() {
         <Route path="/reports/day-book/sales-returns" component={DayBookSalesReturns} />
         <Route path="/reports/day-book-purchase-returns" component={DayBookPurchaseReturns} />
         <Route path="/reports/day-book/purchase-returns" component={DayBookPurchaseReturns} />
-        <Route path="/reports/day-book-general-journal" component={DayBookGeneralJournal} />
-        <Route path="/reports/day-book/general-journal" component={DayBookGeneralJournal} />
         <Route path="/reports/cash-ledger" component={CashLedger} />
         <Route path="/reports/outstanding-customers" component={OutstandingCustomers} />
         <Route path="/reports/outstanding-suppliers" component={OutstandingSuppliers} />
@@ -142,6 +155,9 @@ function Router() {
         <Route path="/hr/employees" component={EmployeesPage} />
         <Route path="/hr/payroll" component={PayrollPage} />
         <Route path="/reports/ledger" component={Ledger} />
+        <Route path="/reports/product-ledger" component={ProductLedger} />
+        <Route path="/reports/ledger-raw" component={Ledger} />
+        <Route path="/reports/ledger-bio" component={Ledger} />
         <Route path="/reports/ledger-sales" component={Ledger} />
         <Route path="/reports/ledger-purchases" component={Ledger} />
         <Route path="/reports/ledger-journal" component={Ledger} />
@@ -166,6 +182,11 @@ export default function AuthenticatedApp() {
   const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
   const setSession = useAuthStore((state) => state.setSession);
+  // Centralized real-time subscription: any successful mutation on the server
+  // emits a `data:changed` event per entity it touched, and this hook maps
+  // those events onto React Query cache invalidation. One socket, mounted once,
+  // app-wide — every window stays in sync without polling.
+  useRealtime();
 
   useEffect(() => {
     ensureMonoFonts();
@@ -179,7 +200,7 @@ export default function AuthenticatedApp() {
         if (!alive) return;
         if (res.ok) {
           const data = await res.json();
-          setSession({ token, user: data.user || null });
+          setSession({ token: data.token ?? token, user: data.user || null });
         } else if (res.status === 401) {
           setSession({ token: null, user: null });
         }
@@ -193,7 +214,7 @@ export default function AuthenticatedApp() {
     return () => {
       alive = false;
     };
-  }, [setSession, token]);
+  }, [setSession]);
 
   useEffect(() => {
     if (!authChecked) return;
@@ -211,11 +232,6 @@ export default function AuthenticatedApp() {
     }),
     [],
   );
-
-  const Shell = ({ children }: { children: React.ReactNode }) => {
-    const { isRTL } = useLanguage();
-    return <div className={`flex h-screen w-full ${isRTL ? "flex-row-reverse" : ""}`}>{children}</div>;
-  };
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -246,13 +262,15 @@ export default function AuthenticatedApp() {
                   <AppSidebar />
                 </Suspense>
                 <div className="flex flex-col flex-1 overflow-hidden">
-                  <Suspense fallback={<div className="h-14 w-full border-b border-border bg-background" />}>
+                  <Suspense fallback={<div className="h-14 w-full border-b border-border bg-card" />}>
                     <Header />
                   </Suspense>
+                  {/* Dialogs portal into #page-layer and render as full pages over the main area. */}
+                  <div id="page-layer" className="relative flex-1 min-h-0">
                   <main
                     id="main-content"
                     aria-label="Main content"
-                    className="flex-1 overflow-auto bg-background"
+                    className="h-full overflow-auto bg-background"
                   >
                     {authChecked ? (
                       <Router />
@@ -260,6 +278,7 @@ export default function AuthenticatedApp() {
                       <RouteSkeleton />
                     )}
                   </main>
+                  </div>
                 </div>
               </Shell>
             </SidebarProvider>
@@ -270,6 +289,7 @@ export default function AuthenticatedApp() {
               </Suspense>
             ) : null}
             <Toaster />
+            <ConfirmHost />
           </TooltipProvider>
         </LanguageProvider>
       </ThemeProvider>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Edit, Package, Scale, Trash2, Search } from "lucide-react";
+import { Plus, Edit, Package, Scale, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -207,11 +207,17 @@ export default function ProductsPage() {
   const updateMutation = useMutation({
     mutationKey: ["/api/products", "update"],
     meta: scopedInvalidation,
-    mutationFn: async ({ id, currentStock: _currentStock, avgPurchasePrice: _avgPurchasePrice, ...data }: ProductFormData & { id: number }) => {
+    mutationFn: async ({ id, currentStock, avgPurchasePrice, ...data }: ProductFormData & { id: number }) => {
       const payload = {
         ...data,
         productType: (data.productType || "raw").toLowerCase() as "raw" | "bio",
         salePrice: data.salePrice || "0",
+        // Opening figures stay editable until the product's first movement;
+        // same unit -> kg conversion as on create.
+        ...(!editingProduct?.stockLocked && {
+          currentStock: String(unitToKg(currentStock || "0", data.unit)),
+          avgPurchasePrice: String(unitPriceToPerKg(avgPurchasePrice || "0", data.unit)),
+        }),
       };
       const response = await apiRequest("PATCH", `/api/products/${id}`, payload);
       return response.json() as Promise<Product>;
@@ -253,8 +259,8 @@ export default function ProductsPage() {
       productType: normalizedType,
       unit: product.unit,
       salePrice: product.salePrice || "0",
-      // Read-only while editing, but still shown under a unit-labelled field —
-      // so convert out of the stored kg the same way the table does.
+      // Shown (and, until the first movement, edited) under a unit-labelled
+      // field, so convert out of the stored kg the same way the table does.
       currentStock: String(stockInUnit(product.currentStock, product.unit)),
       avgPurchasePrice: String(pricePerUnit(product.avgPurchasePrice, product.unit)),
     });
@@ -630,11 +636,11 @@ export default function ProductsPage() {
                           {...field}
                           type="number"
                           step="0.01"
-                          disabled={Boolean(editingProduct)}
+                          disabled={Boolean(editingProduct?.stockLocked)}
                           data-testid="input-opening-stock"
                         />
                       </FormControl>
-                      {editingProduct && (
+                      {editingProduct?.stockLocked && (
                         <p className="text-xs text-muted-foreground">
                           {language === "ur"
                             ? "موجودہ اسٹاک خرید، فروخت اور پروسیسنگ کے ذریعے تبدیل ہوتا ہے۔"
@@ -658,11 +664,11 @@ export default function ProductsPage() {
                           {...field}
                           type="number"
                           step="0.01"
-                          disabled={Boolean(editingProduct)}
+                          disabled={Boolean(editingProduct?.stockLocked)}
                           data-testid="input-avg-price"
                         />
                       </FormControl>
-                      {editingProduct && (
+                      {editingProduct?.stockLocked && (
                         <p className="text-xs text-muted-foreground">
                           {language === "ur"
                             ? "اوسط خرید قیمت خریداری کی ٹرانزیکشنز سے حساب ہوتی ہے۔"

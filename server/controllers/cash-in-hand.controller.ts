@@ -219,7 +219,7 @@ export async function getTransactions(req: Request, res: Response) {
       .map((r, idx) => ({
         id: idx + 1,
         transactionDate: r.date,
-        transactionType: r.type === "receipt" ? "DEBIT" : "CREDIT",
+        transactionType: r.type === "receipt" ? "debit" : "credit",
         referenceType: r.referenceType ?? null,
         referenceId: r.referenceId ?? null,
         amount: String(r.type === "receipt" ? r.debit : r.credit),

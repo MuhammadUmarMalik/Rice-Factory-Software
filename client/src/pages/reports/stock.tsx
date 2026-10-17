@@ -1,7 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from "react";
-import { Package, Scale, TrendingUp, Download } from "lucide-react";
+import { Package, Scale, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
@@ -114,19 +113,39 @@ export default function StockReportPage() {
         ? "Closing qty matches live stock"
         : "Inventory roll-forward OK";
 
+  // Figures stay on one line; "Rs." lives in the header and the unit has its own
+  // column, so cells carry plain numbers that line up digit for digit.
+  const figureCell = "px-3 text-sm";
+  const figure = (
+    key: keyof StockReportRow,
+    title: string,
+    format: (value: string) => string,
+    emphasis = false,
+  ): Column<StockReportRow> => ({
+    key,
+    title,
+    align: "right",
+    className: figureCell,
+    render: (item) => (
+      <span
+        className={`whitespace-nowrap tabular-nums ${
+          emphasis ? "font-semibold" : Number(item[key]) === 0 ? "text-muted-foreground" : ""
+        }`}
+      >
+        {format(String(item[key] ?? "0"))}
+      </span>
+    ),
+  });
+
   const columns: Column<StockReportRow>[] = [
     {
       key: "name",
       title: "Product",
+      className: "min-w-[180px] px-3",
       render: (item) => (
-        <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-            <Package className="h-4 w-4 text-primary" />
-          </div>
-          <div>
-            <p className="font-medium">{item.itemName}</p>
-            <p className="text-xs text-muted-foreground">Code: {item.itemCode}</p>
-          </div>
+        <div className={isRTL ? "text-right" : ""}>
+          <p className="font-medium leading-tight">{item.itemName}</p>
+          <p className="text-xs text-muted-foreground">Code: {item.itemCode}</p>
         </div>
       ),
     },
@@ -134,8 +153,9 @@ export default function StockReportPage() {
       key: "unit",
       title: "Unit",
       align: "center",
+      className: "whitespace-nowrap px-2",
       render: (item) => (
-        <Badge variant="secondary" className="font-mono">
+        <Badge variant="secondary" className="font-normal">
           {item.unit}
         </Badge>
       ),
@@ -144,102 +164,22 @@ export default function StockReportPage() {
       key: "category",
       title: "Category",
       align: "center",
+      className: "whitespace-nowrap px-2",
       render: (item) => (
-        <Badge variant="outline" className="capitalize">
+        <Badge variant="outline" className="font-normal capitalize">
           {item.category || "-"}
         </Badge>
       ),
     },
-    {
-      key: "openingQty",
-      title: "Opening Qty",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono">
-          {qty(item.openingQty)} {item.unit}
-        </span>
-      ),
-    },
-    {
-      key: "openingValue",
-      title: "Opening Value",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono">
-          Rs. {money(item.openingValue)}
-        </span>
-      ),
-    },
-    {
-      key: "inQty",
-      title: "In Qty",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono">
-          {qty(item.inQty)} {item.unit}
-        </span>
-      ),
-    },
-    {
-      key: "inValue",
-      title: "In Value",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono">
-          Rs. {money(item.inValue)}
-        </span>
-      ),
-    },
-    {
-      key: "outQty",
-      title: "Out Qty",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono">
-          {qty(item.outQty)} {item.unit}
-        </span>
-      ),
-    },
-    {
-      key: "outValue",
-      title: "Out Value",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono">
-          Rs. {money(item.outValue)}
-        </span>
-      ),
-    },
-    {
-      key: "closingQty",
-      title: "Closing Qty",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono font-medium">
-          {qty(item.closingQty)} {item.unit}
-        </span>
-      ),
-    },
-    {
-      key: "avgCost",
-      title: "Avg Cost",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono text-sm">
-          Rs. {money(item.avgCost)}/{item.unit}
-        </span>
-      ),
-    },
-    {
-      key: "closingValue",
-      title: "Closing Value",
-      align: "right",
-      render: (item) => (
-        <span className="font-mono font-medium">
-          Rs. {money(item.closingValue)}
-        </span>
-      ),
-    },
+    figure("openingQty", "Opening Qty", qty),
+    figure("openingValue", "Opening Value (Rs.)", money),
+    figure("inQty", "In Qty", qty),
+    figure("inValue", "In Value (Rs.)", money),
+    figure("outQty", "Out Qty", qty),
+    figure("outValue", "Out Value (Rs.)", money),
+    figure("closingQty", "Closing Qty", qty, true),
+    figure("avgCost", "Avg Cost (Rs.)", money),
+    figure("closingValue", "Closing Value (Rs.)", money, true),
   ];
 
   return (

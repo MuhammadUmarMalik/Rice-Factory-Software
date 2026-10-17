@@ -116,7 +116,8 @@ const SelectContent = React.forwardRef<
     React.useEffect(() => {
       setSearch("")
       if (searchable) {
-        requestAnimationFrame(() => inputRef.current?.focus())
+        const timer = setTimeout(() => inputRef.current?.focus(), 60)
+        return () => clearTimeout(timer)
       }
     }, [searchable])
 

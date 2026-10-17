@@ -1,14 +1,21 @@
-import { TrendingUp, TrendingDown, DollarSign, Package } from "lucide-react";
+import { useState } from "react";
+import { TrendingUp, DollarSign, Package } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLanguage } from "@/contexts/language-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Label } from "@/components/ui/label";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
+import { apiRequest } from "@/lib/queryClient";
+import { invalidateApi, invalidationGroups } from "@/api/invalidation";
+import { useToast } from "@/hooks/use-toast";
 import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
 import { useReportDateRange } from "@/hooks/useReportDateRange";
+import type { Account } from "@/types/schema";
 
 type ProfitLossResponse = {
   period: { fromDate: string | number | Date; toDate: string | number | Date };
@@ -21,7 +28,37 @@ type ProfitLossResponse = {
 
 export default function ProfitLossPage() {
   const { t, isRTL, language } = useLanguage();
+  const { toast } = useToast();
   const { range, setRange, fromDate, toDate, isReady } = useReportDateRange({ preset: "all" });
+  const [obAmount, setObAmount] = useState("");
+  const [obType, setObType] = useState<"debit" | "credit">("credit");
+  const [obDescription, setObDescription] = useState("");
+
+  const { data: plAccount } = useQuery<Account | null>({
+    queryKey: ["/api/accounts?type=income", "pl-opening"],
+    queryFn: async () => {
+      const res = await fetchWithAuth("/api/accounts?type=income");
+      if (!res.ok) return null;
+      const list: Account[] = await res.json();
+      return list.find((a) => a.name === "P&L Opening Balance") || null;
+    },
+  });
+
+  const savePlOpening = useMutation({
+    mutationFn: async () => {
+      const amt = parseFloat(obAmount || "0") || 0;
+      const effectiveOb = amt > 0 && obType === "debit" ? (-amt).toString() : amt.toString();
+      if (plAccount) {
+        return apiRequest("PATCH", `/api/accounts/${plAccount.id}`, { openingBalance: effectiveOb, description: obDescription || undefined });
+      }
+      return apiRequest("POST", "/api/accounts", { name: "P&L Opening Balance", type: "income", openingBalance: effectiveOb, description: obDescription || undefined, isSystemAccount: true });
+    },
+    onSuccess: () => {
+      invalidateApi(invalidationGroups.accounts);
+      invalidateApi(["/api/reports/profit-loss"]);
+      toast({ title: "Opening balance saved" });
+    },
+  });
 
   const { data: profitLoss, isLoading, isError, refetch } = useQuery<ProfitLossResponse>({
     queryKey: ["/api/reports/profit-loss", fromDate, toDate],
@@ -73,6 +110,47 @@ export default function ProfitLossPage() {
             <div className="md:col-span-2">
               <Label className={isRTL ? "font-urdu" : ""}>Date Range</Label>
               <DateRangeFilter value={range} onChange={setRange} />
+            </div>
+            <div className="md:col-span-2">
+              <Label>P&L Opening Balance</Label>
+              <div className="flex gap-2 mt-1">
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder={plAccount ? String(Math.abs(parseFloat(plAccount.openingBalance || "0"))) : "0"}
+                  value={obAmount}
+                  onChange={(e) => setObAmount(e.target.value)}
+                  className="max-w-[200px]"
+                />
+                <Select value={obType} onValueChange={(v) => setObType(v as "debit" | "credit")}>
+                  <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="credit">Credit</SelectItem>
+                    <SelectItem value="debit">Debit</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={savePlOpening.isPending}
+                  onClick={() => savePlOpening.mutate()}
+                >
+                  {savePlOpening.isPending ? "Saving…" : "Save"}
+                </Button>
+              </div>
+              <Input
+                placeholder="Description / Narration (optional)"
+                value={obDescription}
+                onChange={(e) => setObDescription(e.target.value)}
+                className="max-w-[440px] mt-1"
+              />
+              {plAccount && parseFloat(plAccount.openingBalance || "0") !== 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Current: Rs. {Math.abs(parseFloat(plAccount.openingBalance || "0")).toLocaleString()}{" "}
+                  ({parseFloat(plAccount.openingBalance || "0") >= 0 ? "Credit" : "Debit"})
+                </p>
+              )}
             </div>
           </div>
         </CardContent>

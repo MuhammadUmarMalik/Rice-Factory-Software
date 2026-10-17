@@ -1,13 +1,13 @@
 import { execSync } from "child_process";
 import path from "path";
 import { sqlite, resolvedDbPath } from "../models/db";
+import { runMigrations } from "./migrate";
 
 function resolveServerDir() {
-  if (typeof __dirname === "string") {
-    return path.resolve(__dirname, "..");
-  }
-
-  return path.resolve(process.cwd(), "server");
+  const cwd = process.cwd();
+  return path.basename(cwd).toLowerCase() === "server"
+    ? cwd
+    : path.resolve(cwd, "server");
 }
 
 const serverDir = resolveServerDir();
@@ -40,6 +40,9 @@ function ensureAccountsColumns(): void {
   if (!columns.includes("level")) {
     sqlite.prepare("ALTER TABLE accounts ADD COLUMN level integer NOT NULL DEFAULT 0").run();
   }
+  if (!columns.includes("description")) {
+    sqlite.prepare("ALTER TABLE accounts ADD COLUMN description TEXT").run();
+  }
 }
 
 function ensureSalesColumns(): void {
@@ -60,6 +63,22 @@ function ensureSalesColumns(): void {
     }
     if (!names.includes("due_date")) {
       sqlite.prepare("ALTER TABLE sales ADD COLUMN due_date INTEGER").run();
+    }
+    if (!names.includes("freight_charges")) {
+      sqlite.prepare("ALTER TABLE sales ADD COLUMN freight_charges TEXT DEFAULT '0'").run();
+    }
+    // Add/Less toggle per charge. Nullable so legacy rows (and the ledger
+    // model's "add" fallback) keep their previous all-additive behaviour.
+    for (const column of [
+      "loading_charges_mode",
+      "weighing_charges_mode",
+      "other_charges_mode",
+      "rent_charges_mode",
+      "freight_charges_mode",
+    ]) {
+      if (!names.includes(column)) {
+        sqlite.prepare(`ALTER TABLE sales ADD COLUMN ${column} TEXT`).run();
+      }
     }
   } catch {
     // table may not exist yet
@@ -112,6 +131,158 @@ function ensureProductColumns(): void {
   }
 }
 
+/**
+ * Adds the opening_balance_type column to employees and backfills existing
+ * rows. The column did not exist before, so every legacy row defaults to
+ * "debit" — the conventional treatment for an employee opening balance (a
+ * receivable the employee owes the business, e.g. an advance). New rows set
+ * the type explicitly via the employee form.
+ */
+function ensureEmployeeOpeningBalanceType(): void {
+  try {
+    const columns = sqlite.prepare("PRAGMA table_info(employees)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "opening_balance")) {
+      sqlite.prepare("ALTER TABLE employees ADD COLUMN opening_balance TEXT NOT NULL DEFAULT '0'").run();
+    }
+    if (columns.some((column) => column.name === "opening_balance_type")) return;
+    sqlite
+      .prepare(
+        "ALTER TABLE employees ADD COLUMN opening_balance_type TEXT NOT NULL DEFAULT 'debit'",
+      )
+      .run();
+    // The DEFAULT applies to newly inserted rows; existing rows get the
+    // default value written back to them explicitly so reads never surprise.
+    sqlite.prepare("UPDATE employees SET opening_balance_type = 'debit'").run();
+  } catch {
+    // table may not exist yet
+  }
+}
+
+/**
+ * expense_entries.direction distinguishes expense outflow (debit to the
+ * expense account) from other adjustments. Existing rows predate the column,
+ * so they default to "debit" — the only direction the old posting logic used.
+ */
+function ensureExpenseEntryColumns(): void {
+  try {
+    const columns = sqlite.prepare("PRAGMA table_info(expense_entries)").all() as Array<{ name: string }>;
+    if (columns.length === 0) return;
+    if (!columns.some((column) => column.name === "direction")) {
+      sqlite.prepare("ALTER TABLE expense_entries ADD COLUMN direction TEXT NOT NULL DEFAULT 'debit'").run();
+    }
+  } catch {
+    // table may not exist yet
+  }
+}
+
+function ensureCashTransactionColumns(): void {
+  try {
+    const columns = sqlite.prepare("PRAGMA table_info(cash_transactions)").all() as Array<{ name: string }>;
+    if (columns.length === 0) return;
+    if (!columns.some((column) => column.name === "cash_receipt_id")) {
+      sqlite.prepare("ALTER TABLE cash_transactions ADD COLUMN cash_receipt_id INTEGER REFERENCES cash_receipts(id) ON DELETE SET NULL").run();
+    }
+    if (!columns.some((column) => column.name === "cash_payment_id")) {
+      sqlite.prepare("ALTER TABLE cash_transactions ADD COLUMN cash_payment_id INTEGER REFERENCES cash_payments(id) ON DELETE SET NULL").run();
+    }
+  } catch {
+    // table may not exist yet
+  }
+}
+function ensureLedgerEntryColumns(): void {
+  try {
+    const columns = sqlite.prepare("PRAGMA table_info(ledger_entries)").all() as Array<{ name: string }>;
+    if (columns.length === 0) return;
+    if (!columns.some((column) => column.name === "cleared")) {
+      sqlite.prepare("ALTER TABLE ledger_entries ADD COLUMN cleared INTEGER NOT NULL DEFAULT 0").run();
+    }
+  } catch {
+    // table may not exist yet
+  }
+}
+
+/**
+ * Adds cash_receipt_id / cash_payment_id to ledger_entries so standalone
+ * Cash in Hand receipts and payments can be posted to the double-entry
+ * ledger. SQLite cannot ALTER a CHECK constraint, so the table is rebuilt
+ * with the two new columns and the extended single-reference check.
+ *
+ * The check uses unqualified column names so it survives the table rename.
+ */
+function ensureLedgerCashReferenceColumns(): void {
+  let columns: Array<{ name: string }> = [];
+  try {
+    columns = sqlite.prepare("PRAGMA table_info(ledger_entries)").all() as Array<{ name: string }>;
+  } catch {
+    return; // table may not exist yet
+  }
+  if (columns.length === 0) return;
+  if (columns.some((column) => column.name === "cash_receipt_id")) return; // already migrated
+
+  // Copy only the columns the current table actually has.
+  const existing = new Set(columns.map((column) => column.name));
+  const copied = [
+    "id", "account_id", "transaction_type", "amount", "balance", "description",
+    "description_urdu", "sale_id", "purchase_id", "receipt_voucher_id",
+    "journal_voucher_id", "contra_voucher_id", "expense_entry_id",
+    "entry_date", "cleared", "created_at",
+  ].filter((column) => existing.has(column));
+
+  sqlite.pragma("foreign_keys = OFF");
+  try {
+    sqlite.exec("BEGIN");
+    sqlite.exec(`
+      CREATE TABLE "ledger_entries_new" (
+        "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+        "account_id" integer NOT NULL REFERENCES "accounts"("id") ON UPDATE no action ON DELETE no action,
+        "transaction_type" text NOT NULL,
+        "amount" text NOT NULL,
+        "balance" text NOT NULL,
+        "description" text NOT NULL,
+        "description_urdu" text,
+        "sale_id" integer REFERENCES "sales"("id") ON UPDATE no action ON DELETE no action,
+        "purchase_id" integer REFERENCES "purchases"("id") ON UPDATE no action ON DELETE no action,
+        "receipt_voucher_id" integer REFERENCES "receipt_vouchers"("id") ON UPDATE no action ON DELETE no action,
+        "journal_voucher_id" integer REFERENCES "journal_vouchers"("id") ON UPDATE no action ON DELETE no action,
+        "contra_voucher_id" integer REFERENCES "contra_vouchers"("id") ON UPDATE no action ON DELETE no action,
+        "expense_entry_id" integer REFERENCES "expense_entries"("id") ON UPDATE no action ON DELETE no action,
+        "cash_receipt_id" integer REFERENCES "cash_receipts"("id") ON UPDATE no action ON DELETE no action,
+        "cash_payment_id" integer REFERENCES "cash_payments"("id") ON UPDATE no action ON DELETE no action,
+        "entry_date" integer DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        "cleared" INTEGER NOT NULL DEFAULT 0,
+        "created_at" integer DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        CONSTRAINT "ck_ledger_entries_single_ref" CHECK((
+          (CASE WHEN "sale_id" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN "purchase_id" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN "receipt_voucher_id" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN "journal_voucher_id" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN "contra_voucher_id" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN "expense_entry_id" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN "cash_receipt_id" IS NOT NULL THEN 1 ELSE 0 END) +
+          (CASE WHEN "cash_payment_id" IS NOT NULL THEN 1 ELSE 0 END)
+        ) = 1)
+      );
+    `);
+    sqlite.exec(
+      `INSERT INTO "ledger_entries_new" (${copied.map((c) => `"${c}"`).join(", ")}) ` +
+      `SELECT ${copied.map((c) => `"${c}"`).join(", ")} FROM "ledger_entries";`,
+    );
+    sqlite.exec(`DROP TABLE "ledger_entries";`);
+    sqlite.exec(`ALTER TABLE "ledger_entries_new" RENAME TO "ledger_entries";`);
+    sqlite.exec("COMMIT");
+  } catch (error) {
+    try {
+      sqlite.exec("ROLLBACK");
+    } catch {
+      /* already rolled back or never began */
+    }
+    console.error("Could not add cash references to ledger_entries:", error);
+    throw error;
+  } finally {
+    sqlite.pragma("foreign_keys = ON");
+  }
+}
+
 function hasCashAccountsTable(): boolean {
   try {
     const row = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='cash_accounts'").get();
@@ -161,6 +332,63 @@ function ensureProcessingOutputsTable(): void {
   sqlite.exec(
     "CREATE INDEX IF NOT EXISTS idx_processing_outputs_processing_id ON processing_outputs(processing_id);",
   );
+}
+
+/**
+ * Creates the gate_passes + gate_pass_items tables used to record physical
+ * movement of goods in and out of the mill.
+ *
+ * This mirrors server/migrations/0001_gate_passes.sql so that every database
+ * (dev, desktop, legacy installs) gets the tables on startup even when the
+ * versioned migration runner cannot find its .sql files (e.g. a packaged build
+ * where those files are not shipped, or a run under an ESM toolchain where
+ * __dirname is unavailable).
+ */
+function ensureGatePassTables(): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS "gate_passes" (
+      "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+      "number" text NOT NULL,
+      "direction" text NOT NULL,
+      "status" text NOT NULL DEFAULT 'ISSUED',
+      "issued_at" integer NOT NULL DEFAULT (unixepoch()),
+      "completed_at" integer,
+      "vehicle_no" text,
+      "driver_name" text,
+      "driver_phone" text,
+      "party_id" integer REFERENCES "accounts"("id"),
+      "source_type" text,
+      "source_id" integer,
+      "gross_g" integer,
+      "tare_g" integer,
+      "net_g" integer,
+      "remarks" text,
+      "created_by" integer REFERENCES "users"("id"),
+      "cancelled_reason" text,
+      "cancelled_by" integer REFERENCES "users"("id"),
+      "cancelled_at" integer,
+      "fiscal_year_id" integer REFERENCES "fiscal_years"("id"),
+      "created_at" integer NOT NULL DEFAULT (unixepoch()),
+      "updated_at" integer NOT NULL DEFAULT (unixepoch())
+    );
+  `);
+  sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "gate_passes_number_unique" ON "gate_passes" ("number");`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS "idx_gate_passes_source" ON "gate_passes" ("source_type", "source_id");`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS "idx_gate_passes_vehicle" ON "gate_passes" ("vehicle_no");`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS "idx_gate_passes_issued_at" ON "gate_passes" ("issued_at");`);
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS "gate_pass_items" (
+      "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+      "gate_pass_id" integer NOT NULL REFERENCES "gate_passes"("id") ON DELETE CASCADE,
+      "product_id" integer NOT NULL REFERENCES "products"("id"),
+      "bags" integer NOT NULL DEFAULT 0,
+      "weight_g" integer NOT NULL DEFAULT 0,
+      "sale_item_id" integer REFERENCES "sale_items"("id"),
+      "purchase_item_id" integer REFERENCES "purchase_items"("id"),
+      "created_at" integer NOT NULL DEFAULT (unixepoch())
+    );
+  `);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS "idx_gate_pass_items_pass" ON "gate_pass_items" ("gate_pass_id");`);
 }
 
 function warnOrphanedCashLinks(): void {
@@ -258,8 +486,16 @@ export function ensureSchema(): void {
       console.error(msg);
       throw new Error(msg);
     }
-    return;
+    // Fall through: drizzle-kit push creates the tables but not the ones this
+    // file owns (sequences, the additive columns below), so a brand new database
+    // would still be missing them on first boot.
   }
+
+  // Versioned migrations (server/migrations/*.sql) run before the additive
+  // column repairs below. They are idempotent and tracked in schema_migrations,
+  // and a pre-migration file backup is written the first time a pending
+  // migration touches an existing database.
+  runMigrations();
 
   ensureAccountsColumns();
   ensureSalesColumns();
@@ -268,6 +504,37 @@ export function ensureSchema(): void {
   ensureCashAccounts();
   ensureSequencesTable();
   ensureProcessingOutputsTable();
+  ensureGatePassTables();
+  ensureEmployeeOpeningBalanceType();
+  ensureExpenseEntryColumns();
+  ensureLedgerEntryColumns();
+  ensureLedgerCashReferenceColumns();
+  ensureCashTransactionColumns();
   ensureIntegerTimestamps();
+  ensureReportIndexes();
   warnOrphanedCashLinks();
 }
+
+/**
+ * Foreign-key / date indexes for ledger and report queries. Without these every
+ * per-account balance and date-range report is a full table scan. Lives here
+ * rather than in server/migrations because that folder is not packaged.
+ */
+function ensureReportIndexes() {
+  sqlite.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ledger_entries_account_date ON ledger_entries(account_id, entry_date);
+    CREATE INDEX IF NOT EXISTS idx_ledger_entries_sale ON ledger_entries(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_ledger_entries_purchase ON ledger_entries(purchase_id);
+    CREATE INDEX IF NOT EXISTS idx_purchases_purchase_date ON purchases(purchase_date);
+    CREATE INDEX IF NOT EXISTS idx_purchases_supplier_date ON purchases(supplier_id, purchase_date);
+    CREATE INDEX IF NOT EXISTS idx_sales_sale_date ON sales(sale_date);
+    CREATE INDEX IF NOT EXISTS idx_sales_customer_date ON sales(customer_id, sale_date);
+    CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items(purchase_id);
+    CREATE INDEX IF NOT EXISTS idx_purchase_items_product ON purchase_items(product_id);
+    CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
+    CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id);
+    CREATE INDEX IF NOT EXISTS idx_processing_source_date ON processing(source_product_id, start_date);
+    CREATE INDEX IF NOT EXISTS idx_processing_output_date ON processing(output_product_id, completed_date);
+  `);
+}
+

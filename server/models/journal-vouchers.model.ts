@@ -18,7 +18,7 @@ import {
   cashReceipts,
   cashPayments,
   payrolls,
-  payrollAuditLogs,
+  auditLogs,
   type JournalVoucher,
   type InsertJournalVoucher,
   type JournalVoucherEntry,
@@ -32,6 +32,7 @@ import * as accountsModel from "./accounts.model";
 import * as ledgerModel from "./ledger.model";
 import { buildLedgerReferenceWhere, getLedgerReferenceColumns } from "./ledger.model";
 import * as payrollModel from "./payroll.model";
+import { insertVoucherAuditLog } from "../services/voucher-audit.service";
 
 type DbClient = typeof db;
 
@@ -62,21 +63,53 @@ export async function getJournalVoucher(id: number): Promise<(JournalVoucher & {
 
 export async function getNextJournalVoucherNumber(): Promise<string> {
   const year = new Date().getFullYear();
-  const [last] = db.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
-  const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
+  const nextNum = nextDocumentSequence("journal_vouchers", "voucher_no");
   return `JV-${year}-${String(nextNum).padStart(5, "0")}`;
+}
+
+export async function findDuplicateJournalVoucher(
+  voucherDate: string | Date,
+  debitAccountId: number,
+  creditAccountId: number,
+  amount: number,
+  narration?: string,
+  excludeId?: number,
+): Promise<JournalVoucher | undefined> {
+  const date = new Date(voucherDate);
+  const [existing] = db
+    .select()
+    .from(journalVouchers)
+    .where(
+      and(
+        eq(journalVouchers.voucherDate, date),
+        eq(journalVouchers.totalAmount, amount.toString()),
+        excludeId ? eq(journalVouchers.id, excludeId) : undefined,
+      ),
+    )
+    .limit(1)
+    .all();
+  if (!existing) return undefined;
+  const entries = db
+    .select()
+    .from(journalVoucherEntries)
+    .where(eq(journalVoucherEntries.journalVoucherId, existing.id))
+    .all();
+  const hasDebit = entries.some((e) => e.accountId === debitAccountId && e.entryType === "debit");
+  const hasCredit = entries.some((e) => e.accountId === creditAccountId && e.entryType === "credit");
+  if (hasDebit && hasCredit) return existing;
+  return undefined;
 }
 
 export function normalizeJournalEntries(entries: JournalEntryInput[]): { normalized: JournalEntryInput[]; total: number } {
   if (!entries || entries.length === 0) throw new Error("Journal entries are required");
   const normalized = entries.map((e) => ({
     ...e,
-    entryType: (e.entryType || "DEBIT").toUpperCase() as "DEBIT" | "CREDIT",
+    entryType: (e.entryType || "debit").toLowerCase() as "debit" | "credit",
     amount: parseAmount(e.amount || "0").toString(),
   })).filter((e) => parseAmount(e.amount) > 0);
 
-  const debitLines = normalized.filter((e) => e.entryType === "DEBIT");
-  const creditLines = normalized.filter((e) => e.entryType === "CREDIT");
+  const debitLines = normalized.filter((e) => e.entryType === "debit");
+  const creditLines = normalized.filter((e) => e.entryType === "credit");
 
   if (debitLines.length !== 1 || creditLines.length !== 1) {
     throw new Error("Exactly one Debit and one Credit account are required");
@@ -109,7 +142,7 @@ export function postJournalToLedger(client: DbClient, voucher: JournalVoucher, e
     const amount = parseAmount(entry.amount || "0").toString();
     ledgerModel.postLedgerEntry(client, {
       accountId: entry.accountId,
-      transactionType: entry.entryType === "DEBIT" ? "debit" : "credit",
+      transactionType: entry.entryType,
       amount,
       description: voucher.narration || `Journal Voucher #${voucher.voucherNo}`,
       ...getLedgerReferenceColumns("journal_voucher", voucher.id),
@@ -127,14 +160,13 @@ export async function createJournalVoucher(data: InsertJournalVoucher, entries: 
     const postingDate = data.voucherDate ? new Date(data.voucherDate as any) : new Date();
     assertPostingAllowed(client, postingDate, "journal voucher");
 
-    const [last] = tx.select().from(journalVouchers).orderBy(desc(journalVouchers.id)).limit(1).all();
     const year = new Date().getFullYear();
-    const nextNum = last ? parseInt(last.voucherNo.split("-").pop() || "0") + 1 : 1;
+    const nextNum = nextDocumentSequence("journal_vouchers", "voucher_no");
     const generatedNo = `JV-${year}-${String(nextNum).padStart(5, "0")}`;
     const voucherNo = (data as any).voucherNo && (data as any).voucherNo !== "" ? (data as any).voucherNo : generatedNo;
 
-    const debitLine = normalized.find((entry) => entry.entryType === "DEBIT");
-    const creditLine = normalized.find((entry) => entry.entryType === "CREDIT");
+    const debitLine = normalized.find((entry) => entry.entryType === "debit");
+    const creditLine = normalized.find((entry) => entry.entryType === "credit");
     const accountRows = client
       .select({ id: accounts.id, name: accounts.name })
       .from(accounts)
@@ -171,8 +203,8 @@ export async function createJournalVoucher(data: InsertJournalVoucher, entries: 
     if (status === "approved") {
       postJournalToLedger(client, voucher, normalized);
 
-    const debitLine = normalized.find((e) => e.entryType === "DEBIT");
-    const creditLine = normalized.find((e) => e.entryType === "CREDIT");
+    const debitLine = normalized.find((e) => e.entryType === "debit");
+    const creditLine = normalized.find((e) => e.entryType === "credit");
     if (debitLine && creditLine) {
       const [debitAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, debitLine.accountId)).limit(1).all();
       const [creditAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, creditLine.accountId)).limit(1).all();
@@ -200,6 +232,8 @@ export async function createJournalVoucher(data: InsertJournalVoucher, entries: 
         }
       }
     }
+
+    insertVoucherAuditLog("journal_voucher", voucher.id, "create", null, voucher, (data as any).createdBy);
 
     return voucher;
   });
@@ -282,8 +316,39 @@ export async function updateJournalVoucher(id: number, data: Partial<InsertJourn
 
     if (isApproved) {
       postJournalToLedger(client, { ...existing, ...updated }, normalized);
+
+      const debitLine = normalized.find((e) => e.entryType === "debit");
+      const creditLine = normalized.find((e) => e.entryType === "credit");
+      if (debitLine && creditLine) {
+        const [debitAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, debitLine.accountId)).limit(1).all();
+        const [creditAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, creditLine.accountId)).limit(1).all();
+        if (creditAcc && String(creditAcc.type).toLowerCase() === "employee") {
+          payrollModel.autoMarkPayrollApprovedForEmployee(client, {
+            employeeAccountId: creditAcc.id,
+            amount: parseAmount(creditLine.amount || "0"),
+            postingDate: updated.voucherDate ? new Date(updated.voucherDate as any) : new Date(),
+            journalVoucherId: id,
+            source: `journal_voucher:${id}`,
+            actorUserId: (data as any).createdBy ?? undefined,
+          });
+        }
+        if (debitAcc && String(debitAcc.type).toLowerCase() === "employee") {
+          const method = String(creditAcc?.type || "").toLowerCase() === "bank" ? "Bank" : "Cash";
+          payrollModel.autoMarkPayrollPaidForEmployee(client, {
+            employeeAccountId: debitAcc.id,
+            amount: parseAmount(debitLine.amount || "0"),
+            paymentDate: updated.voucherDate ? new Date(updated.voucherDate as any) : new Date(),
+            method,
+            paymentJournalVoucherId: id,
+            source: `journal_voucher:${id}`,
+            actorUserId: (data as any).createdBy ?? undefined,
+          });
+        }
+      }
     }
     accountsModel.recomputeAccountBalances(client, affectedAccountIds);
+
+    insertVoucherAuditLog("journal_voucher", id, "update", existing, updated, (data as any).createdBy);
 
     return updated;
   });
@@ -311,8 +376,8 @@ export async function approveJournalVoucher(id: number, approverId?: number): Pr
 
     postJournalToLedger(client, { ...existing, ...updated }, entries);
 
-    const debitLine = entries.find((e) => String(e.entryType).toUpperCase() === "DEBIT");
-    const creditLine = entries.find((e) => String(e.entryType).toUpperCase() === "CREDIT");
+    const debitLine = entries.find((e) => String(e.entryType).toLowerCase() === "debit");
+    const creditLine = entries.find((e) => String(e.entryType).toLowerCase() === "credit");
     if (debitLine && creditLine) {
       const [debitAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, debitLine.accountId)).limit(1).all();
       const [creditAcc] = tx.select({ id: accounts.id, type: accounts.type }).from(accounts).where(eq(accounts.id, creditLine.accountId)).limit(1).all();
@@ -339,6 +404,8 @@ export async function approveJournalVoucher(id: number, approverId?: number): Pr
         });
       }
     }
+
+    insertVoucherAuditLog("journal_voucher", id, "update", existing, updated, approverId);
 
     return updated;
   });
@@ -379,13 +446,15 @@ export async function deleteJournalVoucher(id: number): Promise<boolean> {
             } as any)
             .where(eq(payrolls.id, p.id))
             .run();
-          tx.insert(payrollAuditLogs).values({
-            payrollId: p.id,
+          tx.insert(auditLogs).values({
+            entity: "payroll",
+            entityId: p.id,
             action: "updated",
-            detailsJson: JSON.stringify({
+            afterJson: JSON.stringify({
               source: `journal_voucher:${id}`,
               rollback: "payment_deleted",
             }),
+            source: "payroll",
           } as any).run();
         }
 
@@ -402,13 +471,15 @@ export async function deleteJournalVoucher(id: number): Promise<boolean> {
             } as any)
             .where(eq(payrolls.id, p.id))
             .run();
-          tx.insert(payrollAuditLogs).values({
-            payrollId: p.id,
+          tx.insert(auditLogs).values({
+            entity: "payroll",
+            entityId: p.id,
             action: "updated",
-            detailsJson: JSON.stringify({
+            afterJson: JSON.stringify({
               source: `journal_voucher:${id}`,
               rollback: "accrual_deleted",
             }),
+            source: "payroll",
           } as any).run();
         }
       }
@@ -438,6 +509,9 @@ export async function deleteJournalVoucher(id: number): Promise<boolean> {
     tx.delete(journalVoucherEntries).where(eq(journalVoucherEntries.journalVoucherId, id)).run();
     tx.delete(journalVouchers).where(eq(journalVouchers.id, id)).run();
     accountsModel.recomputeAccountBalances(client, affectedAccountIds);
+
+    insertVoucherAuditLog("journal_voucher", id, "delete", existing, null, undefined);
+
     return true;
   });
 }

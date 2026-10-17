@@ -3,6 +3,7 @@ import { z } from "zod";
 import { productSchema, productUpdateSchema } from "../schemas/products.schema";
 import * as productsService from "../services/products.service";
 import { parseRequiredInt } from "../utils/parse";
+import { OpeningStockLockedError } from "../models/products.model";
 
 export async function listProducts(req: Request, res: Response) {
   try {
@@ -54,22 +55,19 @@ export async function updateProduct(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid product id" });
     const parsed = productUpdateSchema.parse(req.body);
-    // Older clients included these read-only values in every edit request.
-    // Ignore them while preserving transaction-derived inventory balances.
-    const {
-      currentStock: _currentStock,
-      avgPurchasePrice: _avgPurchasePrice,
-      ...editableFields
-    } = parsed;
+    // Opening stock / average are only applied while the product has no stock
+    // movements; otherwise the service ignores unchanged values (older clients
+    // send them on every edit) and rejects a real change.
+    const { currentStock, avgPurchasePrice, ...editableFields } = parsed;
     const data = Object.fromEntries(
       Object.entries(editableFields).filter(([, value]) => value !== undefined),
     );
     // A body carrying only read-only fields would otherwise reach the ORM with
     // an empty update set and fail as an unhandled 500.
-    if (Object.keys(data).length === 0) {
+    if (Object.keys(data).length === 0 && currentStock === undefined && avgPurchasePrice === undefined) {
       return res.status(400).json({ error: "No editable fields were provided" });
     }
-    const product = await productsService.updateProduct(id, data);
+    const product = await productsService.updateProduct(id, data, { currentStock, avgPurchasePrice });
     if (!product) {
       return res.status(404).json({ error: "Product not found" });
     }
@@ -77,6 +75,9 @@ export async function updateProduct(req: Request, res: Response) {
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: error.errors });
+    }
+    if (error instanceof OpeningStockLockedError) {
+      return res.status(409).json({ error: error.message });
     }
     console.error(error);
     res.status(500).json({ error: "Failed to update product" });

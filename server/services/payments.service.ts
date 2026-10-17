@@ -1,5 +1,6 @@
 import * as ledgerModel from "../models/ledger.model";
 import { insertVoucherAuditLog } from "./voucher-audit.service";
+import { syncCashMirrorForVoucher } from "./cash-voucher-sync.service";
 
 export async function listPayments() {
   // One join instead of a query per voucher; the type filter runs in SQL too.
@@ -19,6 +20,9 @@ export async function createPayment(header: any, lines: any[], userId?: number) 
   // Payments move money; record who created what, same as every daybook write.
   const after = await ledgerModel.getReceiptVoucher(voucher.id);
   insertVoucherAuditLog("CP", voucher.id, "create", null, after ?? voucher, userId);
+  // Mirror into the cash register so Cash in Hand lists this same record. The
+  // voucher owns the ledger entry; the mirror never posts one.
+  syncCashMirrorForVoucher(voucher.id);
   return voucher;
 }
 
@@ -29,6 +33,7 @@ export async function updatePayment(id: number, header: any, lines: any[], userI
   if (!voucher) return voucher;
   const after = await ledgerModel.getReceiptVoucher(id);
   insertVoucherAuditLog("CP", id, "update", before, after ?? voucher, userId);
+  syncCashMirrorForVoucher(id);
   return voucher;
 }
 
@@ -37,6 +42,10 @@ export async function deletePayment(id: number, userId?: number) {
   // full voucher (header + lines) regardless of how storage removes it.
   const before = await ledgerModel.getReceiptVoucher(id);
   const ok = await ledgerModel.deleteReceiptVoucher(id);
-  if (ok) insertVoucherAuditLog("CP", id, "delete", before, null, userId);
+  if (ok) {
+    insertVoucherAuditLog("CP", id, "delete", before, null, userId);
+    // Drop the mirror too, or Cash in Hand would keep showing a deleted record.
+    syncCashMirrorForVoucher(id);
+  }
   return ok;
 }

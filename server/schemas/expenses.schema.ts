@@ -7,6 +7,7 @@ export const expenseEntrySchema = insertExpenseEntrySchema.extend({
   amount: numericString,
   expenseAccountId: z.number().int().positive(),
   payFromAccountId: z.number().int().positive(),
+  direction: z.enum(["debit", "credit"]).default("debit"),
   description: z.string().optional(),
   purpose: z.string().optional(),
 });

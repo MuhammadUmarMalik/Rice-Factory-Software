@@ -39,7 +39,9 @@ import type { Account } from "@/types/schema";
 import { useLanguage } from "@/contexts/language-context";
 import { PrintActions } from "@/components/print/PrintActions";
 import { docKeys } from "@/print/docRegistry";
+import { todayLocal } from "@/utils/dateRanges";
 import { useAuthStore } from "@/stores/auth.store";
+import { confirmAction } from "@/components/confirm-dialog";
 
 const journalFormSchema = z
   .object({
@@ -67,12 +69,13 @@ type JournalVoucherRow = {
   totalAmount: string;
   amountInWords?: string;
   narration?: string;
-  entries: { id: number; accountId: number; entryType: "DEBIT" | "CREDIT"; amount: string }[];
+  entries: { id: number; accountId: number; entryType: "debit" | "credit"; amount: string }[];
   debitAccountName?: string;
   creditAccountName?: string;
 };
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const todayISO = todayLocal;
+
 
 function numberToWords(num: number) {
   const belowTwenty = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
@@ -143,8 +146,8 @@ export default function JournalVoucherPage() {
     defaultValues: {
       voucherNo: "",
       voucherDate: todayISO(),
-      debitAccountId: "",
-      creditAccountId: "",
+      debitAccountId: undefined,
+      creditAccountId: undefined,
       amount: "",
       narration: "",
       status: "draft",
@@ -159,6 +162,7 @@ export default function JournalVoucherPage() {
 
   const { data: accounts = [] } = useQuery<Account[]>({ queryKey: ["/api/accounts"] });
   const { data: vouchers = [], isLoading } = useQuery<JournalVoucherRow[]>({ queryKey: ["/api/journal-vouchers"] });
+
 
   const filtered = useMemo(() => {
     if (!search) return vouchers;
@@ -184,8 +188,8 @@ export default function JournalVoucherPage() {
     form.reset({
       voucherNo: "",
       voucherDate: todayISO(),
-      debitAccountId: "",
-      creditAccountId: "",
+      debitAccountId: undefined,
+      creditAccountId: undefined,
       amount: "",
       narration: "",
       status: "draft",
@@ -278,14 +282,14 @@ export default function JournalVoucherPage() {
   };
 
   const applyVoucherToForm = (voucher: JournalVoucherRow, lockView = false) => {
-    const debit = voucher.entries.find((e) => e.entryType === "DEBIT");
-    const credit = voucher.entries.find((e) => e.entryType === "CREDIT");
+    const debit = voucher.entries.find((e) => e.entryType === "debit");
+    const credit = voucher.entries.find((e) => e.entryType === "credit");
     const voucherAmount = debit?.amount || credit?.amount || voucher.totalAmount || "";
     form.reset({
       voucherNo: voucher.voucherNo,
       voucherDate: format(new Date(voucher.voucherDate), "yyyy-MM-dd"),
-      debitAccountId: debit ? String(debit.accountId) : "",
-      creditAccountId: credit ? String(credit.accountId) : "",
+      debitAccountId: debit ? String(debit.accountId) : undefined,
+      creditAccountId: credit ? String(credit.accountId) : undefined,
       amount: voucherAmount || "",
       narration: voucher.narration || "",
       status: voucher.status,
@@ -332,8 +336,8 @@ export default function JournalVoucherPage() {
             <Button
               size="icon"
               variant="ghost"
-              onClick={() => {
-                const ok = confirm(
+              onClick={async () => {
+                const ok = await confirmAction(
                   r.status === "approved"
                     ? "Delete this approved journal voucher? This will remove its ledger impact."
                     : "Delete this journal voucher?",
@@ -475,6 +479,7 @@ export default function JournalVoucherPage() {
                       />
                     </div>
 
+
                     <div className="grid grid-cols-2 gap-4">
                       <FormField
                         control={form.control}
@@ -482,7 +487,7 @@ export default function JournalVoucherPage() {
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>Debit Account</FormLabel>
-                            <Select value={field.value} onValueChange={field.onChange} disabled={isLocked}>
+                            <Select value={field.value || undefined} onValueChange={field.onChange} disabled={isLocked}>
                               <FormControl>
                                 <SelectTrigger>
                                   <SelectValue placeholder="Select debit account" />
@@ -506,7 +511,7 @@ export default function JournalVoucherPage() {
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>Credit Account</FormLabel>
-                            <Select value={field.value} onValueChange={field.onChange} disabled={isLocked}>
+                            <Select value={field.value || undefined} onValueChange={field.onChange} disabled={isLocked}>
                               <FormControl>
                                 <SelectTrigger>
                                   <SelectValue placeholder="Select credit account" />
@@ -626,8 +631,8 @@ export default function JournalVoucherPage() {
                         variant="outline"
                         className="text-destructive border-destructive"
                         disabled={deleteMutation.isPending}
-                        onClick={() => {
-                          const ok = confirm(
+                        onClick={async () => {
+                          const ok = await confirmAction(
                             isApproved
                               ? "Delete this approved journal voucher? This will remove its ledger impact."
                               : "Delete this journal voucher?",

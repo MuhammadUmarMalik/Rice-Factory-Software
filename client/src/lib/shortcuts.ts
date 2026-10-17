@@ -2,7 +2,6 @@ export type ShortcutConfig = {
   enabled: boolean;
   toggleSidebar: string;
   printPreview: string;
-  downloadPdf: string;
   newDialog: string;
   saveDialog: string;
   addLine: string;
@@ -12,7 +11,6 @@ export const defaultShortcutConfig: ShortcutConfig = {
   enabled: true,
   toggleSidebar: "Ctrl+B",
   printPreview: "Ctrl+P",
-  downloadPdf: "Ctrl+Shift+P",
   newDialog: "Ctrl+N",
   saveDialog: "Ctrl+Enter",
   addLine: "Ctrl+Shift+N",

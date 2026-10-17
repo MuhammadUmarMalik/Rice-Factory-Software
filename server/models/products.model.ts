@@ -5,7 +5,7 @@
  * the repository adapters and the services.
  */
 import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { products, type Product, type InsertProduct } from "../db/schema";
 import { parseAmount } from "../utils/parse";
 
@@ -102,4 +102,58 @@ export async function updateProductStock(
   type: "add" | "subtract",
 ): Promise<void> {
   return updateProductStockOn(db, id, quantity, type);
+}
+
+// Every table whose rows move a product's stock (or pin it, e.g. gate passes).
+// The opening figures are only editable while none of these mention the product.
+const STOCK_MOVEMENT_REFS = [
+  "SELECT product_id AS id FROM purchase_items",
+  "SELECT product_id FROM sale_items",
+  "SELECT product_id FROM processing_outputs",
+  "SELECT source_product_id FROM processing",
+  "SELECT output_product_id FROM processing WHERE output_product_id IS NOT NULL",
+  "SELECT product_id FROM gate_pass_items",
+].join(" UNION ");
+
+/** Ids of products that already have stock movements (opening stock locked). */
+export function getStockLockedProductIds(client: DbClient = db): Set<number> {
+  const rows = client.all<{ id: number }>(sql.raw(STOCK_MOVEMENT_REFS));
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * Edit a product; the opening stock / average are applied only while the
+ * product has no movements, in the same transaction as that check. With
+ * movements the stock is transaction-derived and the opening values are ignored
+ * unless they try to change it, which throws.
+ */
+export function updateProductWithOpening(
+  id: number,
+  fields: Partial<InsertProduct>,
+  opening: { currentStock?: string; avgPurchasePrice?: string },
+): Product | undefined {
+  return db.transaction((tx) => {
+    const [existing] = tx.select().from(products).where(eq(products.id, id)).all();
+    if (!existing) return undefined;
+    const set: Partial<InsertProduct> = { ...fields };
+    const changes = (["currentStock", "avgPurchasePrice"] as const).filter(
+      (k) => opening[k] !== undefined &&
+        Math.abs(parseAmount(opening[k]!) - parseAmount(existing[k] || "0")) > 0.0005,
+    );
+    if (changes.length) {
+      if (getStockLockedProductIds(tx as unknown as DbClient).has(id)) {
+        throw new OpeningStockLockedError();
+      }
+      for (const k of changes) set[k] = String(parseAmount(opening[k]!));
+    }
+    if (Object.keys(set).length === 0) return existing;
+    const [updated] = tx.update(products).set(set).where(eq(products.id, id)).returning().all();
+    return updated;
+  });
+}
+
+export class OpeningStockLockedError extends Error {
+  constructor() {
+    super("Opening stock can't be changed after the product has purchases, sales, processing or gate passes");
+  }
 }

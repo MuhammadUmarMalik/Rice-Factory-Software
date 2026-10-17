@@ -4,37 +4,43 @@
  * period guard from ../services/posting-guard.service (previously
  * `this.assertPostingAllowed`).
  */
-import { db, sqlite } from "./db";
-import { eq, and, asc, desc, sql, gte, lte, lt, isNull, inArray, or } from "drizzle-orm";
+import { db } from "./db";
+import { eq, and, desc, isNull } from "drizzle-orm";
 import {
   accounts, products, purchases, purchaseItems, purchaseCharges,
-  ledgerEntries, cashTransactions, taxLedgers, taxTypes, invoiceAllocations, auditLogs,
-  type InsertLedgerEntry,
+  ledgerEntries, taxLedgers, taxTypes, type InsertLedgerEntry,
   type Purchase, type InsertPurchase,
-  type PurchaseItem, type InsertPurchaseItem,
-  type PurchaseCharge, type InsertPurchaseCharge,
+  type PurchaseItem, type PurchaseCharge,
 } from "../db/schema";
 import { parseAmount, roundMoney } from "../utils/parse";
 import { assertPostingAllowed } from "../services/posting-guard.service";
 import { recomputeAccountBalances } from "./accounts.model";
-import { updateProductStockOn } from "./products.model";
 import {
   buildLedgerReferenceWhere,
   calculateTaxAmount,
-  deleteDaybookProjection,
   ensurePurchaseChargeAccount,
   ensureSystemAccount,
   getLedgerReferenceColumns,
   postBalancedLedgerEntries,
-  postLedgerEntry,
-} from "./ledger.model";
+  } from "./ledger.model";
 import type { PurchaseItemInput, PurchaseChargeInput } from "../repositories/types";
 
 import { nextDocumentSequence } from "./sequences.model";
 import { toValidDate } from "../services/posting-guard.service";
 import { buildPurchaseNarration as buildPurchaseNarrationText } from "../utils/narration";
+import { assertSourceHasNoActiveGatePass, linkPurchaseToGatePass } from "./gate-passes.model";
 
 type DbClient = typeof db;
+
+/**
+ * Optional side-effects for a purchase creation. `gatePassId` links the new
+ * purchase back to the IN gate pass it was raised from (same transaction, so
+ * they commit together); `performedBy` records who did it on the audit entry.
+ */
+export type CreatePurchaseOptions = {
+  gatePassId?: number | null;
+  performedBy?: number | null;
+};
 
 export async function getPurchases(): Promise<Purchase[]> {
   return db.select().from(purchases).where(isNull(purchases.deletedAt)).orderBy(desc(purchases.id)).all(); // Use ID for stability
@@ -92,7 +98,7 @@ function normalizePurchaseItem(item: PurchaseItemInput, moundBaseKg = 40) {
   if (unit === "quintal") billingQty = netWeightKg / 100;
   if (unit === "ton") billingQty = netWeightKg / 1000;
 
-  const amount = rate * billingQty;
+  const amount = roundMoney(rate * billingQty);
 
   return {
     ...item,
@@ -122,7 +128,7 @@ function sumCharges(charges: PurchaseChargeInput[]) {
   return { add, less };
 }
 
-export async function createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[], moundBaseKg = 40): Promise<Purchase> {
+export async function createPurchase(purchase: InsertPurchase, items: PurchaseItemInput[], charges: PurchaseChargeInput[], moundBaseKg = 40, options: CreatePurchaseOptions = {}): Promise<Purchase> {
   return db.transaction((tx) => {
     const client = tx as unknown as DbClient;
     const postingDate = purchase.purchaseDate ? new Date(purchase.purchaseDate as any) : new Date();
@@ -385,6 +391,14 @@ export async function createPurchase(purchase: InsertPurchase, items: PurchaseIt
       pushLine({ accountId: cashAccount.id, transactionType: "credit", amount: paidAmount.toString(), description: `PAYMENT ${invoiceNumber}`, ...getLedgerReferenceColumns("purchase", newPurchase.id), entryDate: postingDate });
     }
     postBalancedLedgerEntries(client, ledgerLines, `purchase ${invoiceNumber}`);
+
+    // Link the source IN gate pass (if this purchase was raised from one) in the
+    // same transaction so the purchase and its physical-control link cannot
+    // diverge. The synchronous core rejects an already-linked pass and its throw
+    // rolls the whole transaction back.
+    if (options.gatePassId != null) {
+      linkPurchaseToGatePass(client, options.gatePassId, newPurchase.id, options.performedBy ?? undefined);
+    }
 
     return newPurchase;
   });
@@ -668,6 +682,10 @@ export async function deletePurchase(id: number, deletedBy?: number, options?: {
   if (paidAmount > 0) {
     throw new Error("Cannot delete a purchase that has recorded payments");
   }
+  // A purchase with a live gate pass (issued or completed) cannot be removed
+  // until that pass is cancelled: the pass is the physical evidence the load
+  // arrived, so deleting the record underneath it would break the paper trail.
+  await assertSourceHasNoActiveGatePass("PURCHASE", id);
   const stockEpsilon = 0.0001;
 
   return db.transaction((tx) => {

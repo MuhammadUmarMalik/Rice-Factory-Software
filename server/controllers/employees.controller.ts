@@ -3,6 +3,7 @@ import { z } from "zod";
 import { insertEmployeeSchema, insertEmployeeSalaryStructureSchema } from "../db/schema";
 import * as employeesService from "../services/employees.service";
 import { getUserId } from "../utils/auth";
+import { formatMoney } from "../utils/money";
 import { parseRequiredInt } from "../utils/parse";
 
 function normalizeSalaryInput(value: unknown): string | undefined {
@@ -10,6 +11,18 @@ function normalizeSalaryInput(value: unknown): string | undefined {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return undefined;
   return parsed.toString();
+}
+
+/**
+ * The employees.opening_balance column is a text column, so a numeric body value
+ * would fail insertEmployeeSchema. Normalize to a 2dp decimal string and reject
+ * negatives the same way basicSalary is rejected.
+ */
+function normalizeOpeningBalanceInput(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return formatMoney(parsed);
 }
 
 export async function listEmployees(req: Request, res: Response) {
@@ -41,11 +54,16 @@ export async function createEmployee(req: Request, res: Response) {
     if (req.body?.basicSalary !== undefined && basicSalary === undefined) {
       return res.status(400).json({ error: "Invalid basicSalary" });
     }
+    const openingBalance = normalizeOpeningBalanceInput(req.body?.openingBalance);
+    if (req.body?.openingBalance !== undefined && openingBalance === undefined) {
+      return res.status(400).json({ error: "Invalid openingBalance" });
+    }
 
     const joiningDate = req.body?.joiningDate ? new Date(req.body.joiningDate) : undefined;
     const data = insertEmployeeSchema.parse({
       ...req.body,
       joiningDate,
+      ...(openingBalance !== undefined ? { openingBalance } : {}),
     });
     const userId = getUserId(req);
     const created = await employeesService.createEmployee(data, userId);
@@ -81,11 +99,17 @@ export async function updateEmployee(req: Request, res: Response) {
     if (hasBasicSalary && basicSalary === undefined) {
       return res.status(400).json({ error: "Invalid basicSalary" });
     }
+    const hasOpeningBalance = Object.prototype.hasOwnProperty.call(req.body ?? {}, "openingBalance");
+    const openingBalance = normalizeOpeningBalanceInput(req.body?.openingBalance);
+    if (hasOpeningBalance && openingBalance === undefined) {
+      return res.status(400).json({ error: "Invalid openingBalance" });
+    }
 
     const joiningDate = req.body?.joiningDate ? new Date(req.body.joiningDate) : undefined;
     const data = insertEmployeeSchema.partial().parse({
       ...req.body,
       joiningDate,
+      ...(openingBalance !== undefined ? { openingBalance } : {}),
     });
     const updated = await employeesService.updateEmployee(id, data);
     if (!updated) return res.status(404).json({ error: "Employee not found" });

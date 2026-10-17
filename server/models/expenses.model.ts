@@ -65,7 +65,7 @@ export async function createExpense(
 
     const voucherNo = nextExpenseNumber(client);
     const amount = parseAmount(expense.amount || "0");
-    if (amount <= 0) throw new Error("Amount must be greater than zero");
+    if (amount < 0) throw new Error("Amount must not be negative");
     const narration = buildExpenseNarrationText({
       description: expense.description,
       expenseAccount: expAcc.name,
@@ -78,28 +78,53 @@ export async function createExpense(
       description: narration,
       voucherNo,
       amount: amount.toString(),
+      direction: (expense as any).direction || "debit",
       expenseDate: postingDate,
       createdBy: performedBy?.userId,
       createdAt: new Date(),
     } as any).returning().get();
 
-    // Dr Expense, Cr Cash/Bank/Other
-    postLedgerEntry(client, {
-      accountId: expense.expenseAccountId,
-      transactionType: "debit",
-      amount: amount.toString(),
-      description: narration,
-      expenseEntryId: created.id,
-      entryDate: postingDate,
-    });
-    postLedgerEntry(client, {
-      accountId: expense.payFromAccountId,
-      transactionType: "credit",
-      amount: amount.toString(),
-      description: narration,
-      expenseEntryId: created.id,
-      entryDate: postingDate,
-    });
+    // Dr Expense, Cr Cash/Bank/Other (skip zero-amount head-only entries)
+    if (amount > 0) {
+      const direction = (expense as any).direction || "debit";
+      if (direction === "credit") {
+        // Credit-side expense: the expense account is credited, the
+        // pay-from account is debited (e.g. a reversal or contra entry).
+        postLedgerEntry(client, {
+          accountId: expense.payFromAccountId,
+          transactionType: "debit",
+          amount: amount.toString(),
+          description: narration,
+          expenseEntryId: created.id,
+          entryDate: postingDate,
+        });
+        postLedgerEntry(client, {
+          accountId: expense.expenseAccountId,
+          transactionType: "credit",
+          amount: amount.toString(),
+          description: narration,
+          expenseEntryId: created.id,
+          entryDate: postingDate,
+        });
+      } else {
+        postLedgerEntry(client, {
+          accountId: expense.expenseAccountId,
+          transactionType: "debit",
+          amount: amount.toString(),
+          description: narration,
+          expenseEntryId: created.id,
+          entryDate: postingDate,
+        });
+        postLedgerEntry(client, {
+          accountId: expense.payFromAccountId,
+          transactionType: "credit",
+          amount: amount.toString(),
+          description: narration,
+          expenseEntryId: created.id,
+          entryDate: postingDate,
+        });
+      }
+    }
 
     return created as any;
   });
@@ -131,7 +156,7 @@ export async function updateExpense(
     if (!payAcc) throw new Error("Pay-from account not found");
 
     const amount = parseAmount(expense.amount ?? existing.amount ?? "0");
-    if (amount <= 0) throw new Error("Amount must be greater than zero");
+    if (amount < 0) throw new Error("Amount must not be negative");
     const narration = expense.description === undefined
       ? existing.description
       : buildExpenseNarrationText({
@@ -161,26 +186,47 @@ export async function updateExpense(
       expenseAccountId,
       payFromAccountId,
       amount: amount.toString(),
+      direction: (expense as any).direction || existing.direction || "debit",
       expenseDate: postingDate,
       createdBy: existing.createdBy ?? performedBy?.userId,
     }).where(eq(expenseEntries.id, id)).returning().get();
 
-    postLedgerEntry(client, {
-      accountId: expenseAccountId,
-      transactionType: "debit",
-      amount: amount.toString(),
-      description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
-      expenseEntryId: id,
-      entryDate: postingDate,
-    });
-    postLedgerEntry(client, {
-      accountId: payFromAccountId,
-      transactionType: "credit",
-      amount: amount.toString(),
-      description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
-      expenseEntryId: id,
-      entryDate: postingDate,
-    });
+    const direction = (expense as any).direction || existing.direction || "debit";
+    if (direction === "credit") {
+      postLedgerEntry(client, {
+        accountId: payFromAccountId,
+        transactionType: "debit",
+        amount: amount.toString(),
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
+        expenseEntryId: id,
+        entryDate: postingDate,
+      });
+      postLedgerEntry(client, {
+        accountId: expenseAccountId,
+        transactionType: "credit",
+        amount: amount.toString(),
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
+        expenseEntryId: id,
+        entryDate: postingDate,
+      });
+    } else {
+      postLedgerEntry(client, {
+        accountId: expenseAccountId,
+        transactionType: "debit",
+        amount: amount.toString(),
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
+        expenseEntryId: id,
+        entryDate: postingDate,
+      });
+      postLedgerEntry(client, {
+        accountId: payFromAccountId,
+        transactionType: "credit",
+        amount: amount.toString(),
+        description: narration || `Expense — ${expAcc.name} — Voucher #${existing.voucherNo}`,
+        expenseEntryId: id,
+        entryDate: postingDate,
+      });
+    }
 
     return updated as any;
   });

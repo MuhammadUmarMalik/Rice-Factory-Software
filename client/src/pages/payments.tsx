@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/select";
 import type { Account } from "@/types/schema";
 import { format } from "date-fns";
+import { todayLocal, toLocalDateString } from "@/utils/dateRanges";
 
 const lineSchema = z.object({
   accountId: z.string().optional(),
@@ -50,7 +51,7 @@ const lineSchema = z.object({
 const paymentFormSchema = z.object({
   voucherType: z.literal("CP").default("CP"),
   voucherNumber: z.string().optional(),
-  voucherDate: z.string().default(new Date().toISOString().slice(0, 10)),
+  voucherDate: z.string().default(""),
   narration: z.string().optional(),
   linkToPurchaseId: z.string().optional(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
@@ -122,11 +123,11 @@ export default function PaymentsPage() {
 
   const buildDefaults = (): PaymentFormData => ({
     voucherType: "CP",
-    voucherDate: new Date().toISOString().slice(0, 10),
+    voucherDate: todayLocal(),
     voucherNumber: "",
     narration: "",
     linkToPurchaseId: "",
-    lines: [{ accountId: "", narration: "", amount: "0" }],
+    lines: [{ accountId: undefined, narration: "", amount: "0" }],
   });
 
   const form = useForm<PaymentFormData>({
@@ -275,9 +276,9 @@ export default function PaymentsPage() {
     form.reset({
       voucherType: "CP",
       voucherNumber: voucher.voucherNumber,
-      voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
+      voucherDate: toLocalDateString(new Date(voucher.voucherDate)),
       narration: voucher.narration || "",
-      linkToPurchaseId: firstLinePurchaseId ? String(firstLinePurchaseId) : "",
+      linkToPurchaseId: firstLinePurchaseId ? String(firstLinePurchaseId) : undefined,
       lines: paymentLines.map((l: { accountId: number; narration?: string; debit?: string; credit?: string }) => ({
         accountId: l.accountId.toString(),
         narration: l.narration || "",
@@ -572,7 +573,7 @@ export default function PaymentsPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{language === "ur" ? "خریداری سے لنک کریں (اختیاری)" : "Link to Purchase (optional)"}</FormLabel>
-                      <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)}>
+                      <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? undefined : v)}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder={language === "ur" ? "کوئی نہیں - ادائیگی سے خریداری اپ ڈیٹ نہیں ہوگی" : "None - payment will not update a purchase"} />
@@ -596,7 +597,7 @@ export default function PaymentsPage() {
                   <div className="flex items-center justify-between">
                     <h3 className="font-medium">{language === "ur" ? "سطور" : "Lines"}</h3>
                     <div className="flex gap-2">
-                      <Button type="button" size="sm" variant="outline" onClick={() => append({ accountId: "", narration: "", amount: "0" })}>
+                      <Button type="button" size="sm" variant="outline" onClick={() => append({ accountId: undefined, narration: "", amount: "0" })}>
                         <Plus className="h-4 w-4" /> {language === "ur" ? "سطر شامل کریں" : "Add line"}
                       </Button>
                     </div>
@@ -615,20 +616,20 @@ export default function PaymentsPage() {
                               render={({ field }) => (
                                 <FormItem>
                                   {idx === 0 && <FormLabel>{language === "ur" ? "ادا کیا گیا" : "Paid To"}</FormLabel>}
-                                  <Select value={field.value} onValueChange={field.onChange}>
-                                    <FormControl>
-                                      <SelectTrigger>
-                                        <SelectValue placeholder={language === "ur" ? "کھاتہ منتخب کریں" : "Select account"} />
-                                      </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                      {accounts.map((a) => (
-                                        <SelectItem key={a.id} value={a.id.toString()}>
-                                          {a.name} ({a.type})
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+<Select value={field.value || undefined} onValueChange={field.onChange}>
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder={language === "ur" ? "کھاتہ منتخب کریں" : "Select account"} />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    {accounts.map((a) => (
+                                      <SelectItem key={a.id} value={a.id.toString()}>
+                                        {a.name} ({a.type})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
                                   <FormMessage />
                                 </FormItem>
                               )}

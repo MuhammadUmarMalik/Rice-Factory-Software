@@ -22,11 +22,12 @@ import {
   ledgerEntries, employees, employeeSalaryStructures, payrolls,
   receiptVouchers, journalVouchers, cashTransactions, cashReceipts, cashPayments,
   contraVouchers, expenseEntries,
-  type Employee, type Purchase, type PurchaseItem, type Sale, type SaleItem,
+  type PurchaseItem, type SaleItem,
   type LedgerEntry,
 } from "../db/schema";
 import { cashOrBankAccountIds } from "../utils/cash-accounts";
-import { formatMoneyDisplayDisplay, parseAmount } from "../utils/parse";
+import * as gatePassesModel from "./gate-passes.model";
+import { formatMoneyDisplay, parseAmount } from "../utils/parse";
 import {
   endOfDay,
   endOfMonth,
@@ -54,9 +55,6 @@ import {
   type NormalSide,
 } from "./accounts.model";
 import { cleanNarrationSegment } from "../utils/narration";
-
-/** Either the shared client or a transaction-scoped one. */
-type DbClient = typeof db;
 
 /**
  * Same mapping as ledger.model's getLedgerReference, but over the loose row
@@ -393,16 +391,23 @@ export async function getTrialBalance(asOfDate?: Date) {
   const result = [];
   const asOf = asOfDate ? endOfDay(asOfDate) : undefined;
 
+  // One grouped query instead of one per account. Debit-normal sum; credit-normal
+  // accounts negate it (exact in floating point).
+  const debitMovement = new Map(
+    db
+      .select({ accountId: ledgerEntries.accountId, total: ledgerSumByNormal("DEBIT") })
+      .from(ledgerEntries)
+      .where(asOf ? lte(ledgerEntries.entryDate, asOf) : undefined)
+      .groupBy(ledgerEntries.accountId)
+      .all()
+      .map((row) => [row.accountId, parseAmount(row.total || "0")]),
+  );
+
   for (const account of allAccounts) {
     const normal = normalSideForAccountType(account.type);
-    const [movementRow] = db
-      .select({ total: ledgerSumByNormal(normal) })
-      .from(ledgerEntries)
-      .where(and(eq(ledgerEntries.accountId, account.id), ...(asOf ? [lte(ledgerEntries.entryDate, asOf)] : [])))
-      .all();
-
     const opening = parseAmount(account.openingBalance || "0");
-    const movement = parseAmount(movementRow?.total || "0");
+    const debitTotal = debitMovement.get(account.id) ?? 0;
+    const movement = normal === "DEBIT" ? debitTotal : -debitTotal;
     const closing = opening + movement;
 
     let debit = 0;
@@ -464,11 +469,20 @@ export async function getProfitLoss(startDate?: Date, endDate?: Date) {
         .all()
     : [{ total: "0" } as any];
 
+  const incomeOpeningSum = incomeIds.length
+    ? db
+        .select({ total: sql<string>`COALESCE(SUM(CAST(${accounts.openingBalance} AS REAL)), 0)` })
+        .from(accounts)
+        .where(inArray(accounts.id, incomeIds))
+        .all()[0]?.total || "0"
+    : "0";
+
   const operatingExpenses = await sumExpenseMovements(from, to);
-  const revenue = parseAmount(revenueRow?.total || "0");
+  const expenseOpeningSum = await sumExpenseOpeningBalances();
+  const revenue = parseAmount(revenueRow?.total || "0") + parseAmount(incomeOpeningSum);
   const costOfSales = parseAmount(cogsRow?.total || "0");
   const grossProfit = revenue - costOfSales;
-  const netProfit = grossProfit - operatingExpenses;
+  const netProfit = grossProfit - (operatingExpenses + expenseOpeningSum);
 
   return {
     period: { fromDate: from, toDate: to },
@@ -1550,6 +1564,15 @@ async function sumExpenseMovements(startDate: Date, endDate: Date) {
   return parseAmount(row?.total || "0");
 }
 
+async function sumExpenseOpeningBalances() {
+  const [row] = db
+    .select({ total: sql<string>`COALESCE(SUM(CAST(${accounts.openingBalance} AS REAL)), 0)` })
+    .from(accounts)
+    .where(inArray(accounts.type, ["expense", "salary"] as any))
+    .all();
+  return parseAmount(row?.total || "0");
+}
+
 export async function getIncomeStatement(startDate: Date, endDate: Date) {
   const summary = await getProfitLoss(startDate, endDate);
   return {
@@ -1590,7 +1613,7 @@ export async function getBalanceSheet(asOfDate: Date) {
   const cash = await ensureCashAccount(db);
   const [cashMovement] = db
     .select({
-      movement: sql<string>`COALESCE(SUM(CASE WHEN ${cashTransactions.transactionType} = 'DEBIT' THEN CAST(${cashTransactions.amount} AS REAL) ELSE -CAST(${cashTransactions.amount} AS REAL) END), 0)`,
+      movement: sql<string>`COALESCE(SUM(CASE WHEN ${cashTransactions.transactionType} = 'debit' THEN CAST(${cashTransactions.amount} AS REAL) ELSE -CAST(${cashTransactions.amount} AS REAL) END), 0)`,
     })
     .from(cashTransactions)
     .where(and(eq(cashTransactions.accountId, cash.id), lte(cashTransactions.transactionDate, asOf)))
@@ -1879,8 +1902,8 @@ export async function getReportDetail(referenceType: string, referenceId: number
       };
       const saleChargeLines = [
         { label: "Loading", amount: parseAmount(sale.loadingCharges || "0") },
-        { label: "Weighing", amount: parseAmount(sale.weighingCharges || "0") },
-        { label: "Other", amount: parseAmount(sale.otherCharges || "0") },
+        { label: "Bardana", amount: parseAmount(sale.weighingCharges || "0") },
+        { label: "Stitching", amount: parseAmount(sale.otherCharges || "0") },
         { label: "Rent", amount: parseAmount((sale as { rentCharges?: string }).rentCharges || "0") },
       ]
         .filter((line) => line.amount !== 0)
@@ -1918,7 +1941,8 @@ export async function getReportDetail(referenceType: string, referenceId: number
           debit: le.transactionType === "debit" ? le.amount : "0",
           credit: le.transactionType === "credit" ? le.amount : "0",
         }));
-      return { type: "sale", sale, items, customer, ledgerEntries: ledger };
+      const salePassMap = await gatePassesModel.getGatePassRefsForSources("SALE", [referenceId]);
+      return { type: "sale", sale, items, customer, ledgerEntries: ledger, gatePasses: salePassMap.get(referenceId) ?? [] };
     }
 
     if (type === "purchase") {
@@ -2022,7 +2046,8 @@ export async function getReportDetail(referenceType: string, referenceId: number
           debit: le.transactionType === "debit" ? le.amount : "0",
           credit: le.transactionType === "credit" ? le.amount : "0",
         }));
-      return { type: "purchase", purchase, supplier, ledgerEntries: ledger };
+      const purchasePassMap = await gatePassesModel.getGatePassRefsForSources("PURCHASE", [referenceId]);
+      return { type: "purchase", purchase, supplier, ledgerEntries: ledger, gatePasses: purchasePassMap.get(referenceId) ?? [] };
     }
 
     if (type === "expense") {

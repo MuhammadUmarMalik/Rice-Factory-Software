@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   approveJournalVoucher,
+  checkDuplicateJournalVoucher,
   createJournalVoucher,
   deleteJournalVoucher,
   getJournalVoucher,
@@ -16,6 +17,11 @@ const router = Router();
 router.get("/api/journal-vouchers", requireRoles(Roles.finance), listJournalVouchers);
 router.get("/api/journal-vouchers/next-number", requireRoles(Roles.finance), getNextJournalNumber);
 router.get("/api/journal-vouchers/:id", requireRoles(Roles.finance), getJournalVoucher);
+router.post(
+  "/api/journal-vouchers/check-duplicate",
+  requireRoles(Roles.finance),
+  checkDuplicateJournalVoucher,
+);
 router.post(
   "/api/journal-vouchers",
   requireRoles(Roles.finance),

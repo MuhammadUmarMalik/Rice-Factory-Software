@@ -4,6 +4,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import { SQLiteSessionStore } from "./utils/session-store";
 import { registerRoutes } from "./routes";
+import { backfillCashMirrorsFromVouchers } from "./services/cash-voucher-sync.service";
 import { ensureDesktopAdmin } from "./utils/bootstrap";
 import { ensureSchema } from "./utils/ensure-schema";
 import { ensureDesktopSecret } from "./utils/desktop-secret";
@@ -87,14 +88,14 @@ if (corsOrigins.length > 0) {
 
 app.use(
   express.json({
-    limit: "1mb",
+    limit: "50mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false, limit: "1mb" }));
+app.use(express.urlencoded({ extended: false, limit: "50mb" }));
 
 app.use(
   session({
@@ -174,6 +175,10 @@ app.use((req, res, next) => {
 
 (async () => {
   ensureSchema();
+  // Give vouchers that predate the cash sync their missing register mirror, so
+  // Cash in Hand lists the receipts and payments that were already raised on
+  // the Cash Receipts / Cash Payments screens.
+  backfillCashMirrorsFromVouchers();
   await ensureDesktopAdmin();
   await registerRoutes(httpServer, app);
 

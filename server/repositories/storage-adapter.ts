@@ -45,8 +45,9 @@ export class PurchasesRepositoryAdapter implements IPurchasesRepository {
     purchase: InsertPurchase,
     items: PurchaseItemInput[],
     charges: PurchaseChargeInput[],
-    moundBaseKg = 40
-  ) => purchasesModel.createPurchase(purchase, items, charges, moundBaseKg);
+    moundBaseKg = 40,
+    options?: { gatePassId?: number | null; performedBy?: number | null }
+  ) => purchasesModel.createPurchase(purchase, items, charges, moundBaseKg, options);
   updatePurchase = (
     id: number,
     purchase: Partial<InsertPurchase>,
