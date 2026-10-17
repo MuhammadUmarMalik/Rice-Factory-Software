@@ -3,6 +3,7 @@ import { SkeletonBox } from "@/components/ui/skeletons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import { formatStock } from "@/lib/units";
+import { useLanguage } from "@/contexts/language-context";
 
 type DashboardInsightsSectionProps = {
   charges?: {
@@ -35,45 +36,46 @@ export function DashboardInsightsSection({
   money,
   loading,
 }: DashboardInsightsSectionProps) {
+  const { t } = useLanguage();
   const chargeRows = [
     {
       key: "freight",
-      label: "Freight",
+      label: t("freight"),
       value: charges?.freight,
       tooltip:
         "From purchase charges with type 'freight'.",
     },
     {
       key: "loading",
-      label: "Loading/Unloading",
+      label: t("loadingUnloading"),
       value: charges?.loading,
       tooltip:
         "From purchase charges 'loading_filling/weight' and sale-side loading/weighing charges.",
     },
     {
       key: "marketFee",
-      label: "Market Fee",
+      label: t("marketFee"),
       value: charges?.marketFee,
       tooltip:
         "From purchase charges with type 'market_fee'.",
     },
     {
       key: "brokerage",
-      label: "Brokerage / Commission",
+      label: t("brokerageCommission"),
       value: charges?.brokerage,
       tooltip:
         "From purchase brokerage/commission charges and broker commission amount fields.",
     },
     {
       key: "bardana",
-      label: "Bardana",
+      label: t("bardana"),
       value: charges?.bardana,
       tooltip:
         "From purchase charges with type 'bardana'.",
     },
     {
       key: "processing",
-      label: "Processing Cost",
+      label: t("processingCost"),
       value: charges?.processing,
       tooltip:
         "From purchase accountant/clerk charges plus sale-side rent charges.",
@@ -84,8 +86,8 @@ export function DashboardInsightsSection({
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader className={isRTL ? "text-right" : ""}>
-          <CardTitle className="text-base font-semibold">Charges Impact</CardTitle>
-          <p className="text-sm text-muted-foreground">Transaction-based totals</p>
+          <CardTitle className="text-base font-semibold">{t("chargesImpact")}</CardTitle>
+          <p className="text-sm text-muted-foreground">{t("transactionBasedTotals")}</p>
         </CardHeader>
         <CardContent className="space-y-2">
           {loading ? (
@@ -125,8 +127,8 @@ export function DashboardInsightsSection({
 
       <Card>
         <CardHeader className={isRTL ? "text-right" : ""}>
-          <CardTitle className="text-base font-semibold">Stock Intelligence</CardTitle>
-          <p className="text-sm text-muted-foreground">Closing balances and valuation</p>
+          <CardTitle className="text-base font-semibold">{t("stockIntelligence")}</CardTitle>
+          <p className="text-sm text-muted-foreground">{t("closingBalancesAndValuation")}</p>
         </CardHeader>
         <CardContent className="space-y-3">
           {loading ? (
@@ -144,34 +146,34 @@ export function DashboardInsightsSection({
             <>
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="rounded-lg border p-3">
-                  <p className="text-xs text-muted-foreground">Paddy Stock</p>
+                  <p className="text-xs text-muted-foreground">{t("paddyStock")}</p>
                   <p className="font-mono font-semibold">{(stock?.paddyQty || 0).toLocaleString()} kg</p>
                 </div>
                 <div className="rounded-lg border p-3">
-                  <p className="text-xs text-muted-foreground">Rice Stock</p>
+                  <p className="text-xs text-muted-foreground">{t("riceStock")}</p>
                   <p className="font-mono font-semibold">{(stock?.riceQty || 0).toLocaleString()} kg</p>
                 </div>
                 <div className="rounded-lg border p-3">
-                  <p className="text-xs text-muted-foreground">Broken Stock</p>
+                  <p className="text-xs text-muted-foreground">{t("brokenStock")}</p>
                   <p className="font-mono font-semibold">{(stock?.brokenQty || 0).toLocaleString()} kg</p>
                 </div>
                 <div className="rounded-lg border p-3">
-                  <p className="text-xs text-muted-foreground">Bardana Balance</p>
+                  <p className="text-xs text-muted-foreground">{t("bardanaBalance")}</p>
                   <p className="font-mono font-semibold">{(stock?.bardanaBalance || 0).toLocaleString()}</p>
                 </div>
               </div>
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Bardana In / Out</p>
+                <p className="text-xs text-muted-foreground">{t("bardanaInOut")}</p>
                 <p className="font-mono">
                   {(stock?.bardanaIn || 0).toLocaleString()} / {(stock?.bardanaOut || 0).toLocaleString()}
                 </p>
               </div>
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Stock Valuation</p>
+                <p className="text-xs text-muted-foreground">{t("stockValuation")}</p>
                 <p className="font-mono font-semibold">{money(stock?.valuation)}</p>
               </div>
               <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Low Stock Warnings</p>
+                <p className="text-xs text-muted-foreground">{t("lowStockWarnings")}</p>
                 {stock?.lowStock?.length ? (
                   <div className="mt-2 space-y-1 text-sm">
                     {stock.lowStock.map((item) => (
@@ -182,7 +184,7 @@ export function DashboardInsightsSection({
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">No low stock items.</p>
+                  <p className="text-sm text-muted-foreground">{t("noLowStockItems")}</p>
                 )}
               </div>
             </>

@@ -18,6 +18,11 @@ import {
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
+import { useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
+import { allNavItems } from "@/components/app-sidebar";
+import { useAuthStore } from "@/stores/auth.store";
+import { can } from "@/lib/roles";
 
 type NotificationRow = {
   id: number;
@@ -42,6 +47,36 @@ export function Header({ title }: HeaderProps) {
     refetchInterval: 15000,
   });
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+  const [, setLocation] = useLocation();
+  const role = useAuthStore((state) => state.user?.role);
+  const pages = allNavItems
+    .filter((item) => can(role, item.roles))
+    .map((item) => ({ label: t(item.title as any), url: item.url }));
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Ctrl/Cmd+K focuses page search.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const goTo = (value: string) => {
+    const v = value.trim().toLowerCase();
+    if (!v) return false;
+    const hit = pages.find((p) => p.label.toLowerCase() === v) ?? pages.find((p) => p.label.toLowerCase().includes(v));
+    if (!hit) return false;
+    setLocation(hit.url);
+    setQuery("");
+    searchRef.current?.blur();
+    return true;
+  };
 
   const markReadMutation = useMutation({
     mutationKey: ["/api/notifications", "mark-read"],
@@ -63,7 +98,7 @@ export function Header({ title }: HeaderProps) {
 
   return (
     <header
-      className="flex h-14 items-center justify-between gap-4 border-b border-border bg-background px-4"
+      className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-border bg-card/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-card/70"
       aria-label="App header"
     >
       <div className={`flex items-center gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -77,14 +112,38 @@ export function Header({ title }: HeaderProps) {
 
       <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
         <div className="relative hidden md:block">
-          <Search className={`absolute ${isRTL ? "right-3" : "left-3"} top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground`} />
+          <Search className={`pointer-events-none absolute ${isRTL ? "right-3" : "left-3"} top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground`} />
           <Input
+            ref={searchRef}
             type="search"
+            list="header-page-search"
+            data-arrow-nav="false"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              // Picking a datalist option fires a change with the exact label.
+              if (pages.some((p) => p.label === e.target.value)) goTo(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") goTo(query);
+              if (e.key === "Escape") {
+                setQuery("");
+                e.currentTarget.blur();
+              }
+            }}
             placeholder={t("search")}
-            className={`w-64 ${isRTL ? "pr-9 pl-4 font-urdu text-right" : "pl-9 pr-4"}`}
+            className={`w-64 bg-muted/50 lg:w-72 ${isRTL ? "pr-9 pl-14 font-urdu text-right" : "pl-9 pr-14"}`}
             data-testid="input-search"
             aria-label={t("search")}
           />
+          <kbd className={`pointer-events-none absolute ${isRTL ? "left-2" : "right-2"} top-1/2 -translate-y-1/2 rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground`}>
+            Ctrl K
+          </kbd>
+          <datalist id="header-page-search">
+            {pages.map((p) => (
+              <option key={p.url} value={p.label} />
+            ))}
+          </datalist>
         </div>
 
         <DropdownMenu>
@@ -94,12 +153,12 @@ export function Header({ title }: HeaderProps) {
               variant="ghost"
               data-testid="button-notifications"
               className="relative"
-              aria-label={t("notifications")}
+              aria-label={unreadCount ? `${t("notifications")} (${unreadCount})` : t("notifications")}
             >
               <Bell className="h-4 w-4" />
               {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 rounded-full bg-destructive text-white text-[10px] px-1.5">
-                  {unreadCount}
+                <span className="absolute -top-0.5 -right-0.5 min-w-4 rounded-full bg-destructive px-1 text-center text-[10px] font-semibold leading-4 text-destructive-foreground ring-2 ring-card">
+                  {unreadCount > 9 ? "9+" : unreadCount}
                 </span>
               )}
             </Button>

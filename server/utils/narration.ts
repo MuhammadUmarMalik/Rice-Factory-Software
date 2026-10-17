@@ -44,24 +44,36 @@ export function buildSaleNarration(input: {
   notes?: unknown;
   customerName?: unknown;
   invoiceNumber?: unknown;
+  vehicleNumber?: unknown;
 }): string {
   const fallback = joinNarration([
     narrationSegment("Sale to ", input.customerName),
     narrationSegment("Invoice #", input.invoiceNumber),
   ]);
-  return preferManualNarration(input.notes, fallback);
+  return withVehicle(preferManualNarration(input.notes, fallback), input.vehicleNumber);
 }
 
 export function buildPurchaseNarration(input: {
   notes?: unknown;
   supplierName?: unknown;
   invoiceNumber?: unknown;
+  vehicleNumber?: unknown;
 }): string {
   const fallback = joinNarration([
     narrationSegment("Purchase from ", input.supplierName),
     narrationSegment("Invoice #", input.invoiceNumber),
   ]);
-  return preferManualNarration(input.notes, fallback);
+  return withVehicle(preferManualNarration(input.notes, fallback), input.vehicleNumber);
+}
+
+/**
+ * Appends "Vehicle <no>" unless the narration already names that vehicle, so
+ * manual notes and narration stored before this existed both gain it once.
+ */
+export function withVehicle(narration: string, vehicleNumber: unknown): string {
+  const vehicle = cleanNarrationSegment(vehicleNumber);
+  if (!vehicle || narration.toUpperCase().includes(vehicle.toUpperCase())) return narration;
+  return joinNarration([narration, `Vehicle ${vehicle}`]);
 }
 
 export function appendNarrationDetail(narration: unknown, detail: unknown): string {

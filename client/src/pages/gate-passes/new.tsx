@@ -225,7 +225,7 @@ export default function NewGatePassPage() {
   return (
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
       <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
-        <Button variant="ghost" size="icon" onClick={() => setLocation("/gate-passes")}>
+        <Button aria-label={t("back")} variant="ghost" size="icon" onClick={() => setLocation("/gate-passes")}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className={isRTL ? "text-right" : ""}>
@@ -461,7 +461,7 @@ export default function NewGatePassPage() {
               </div>
               <div className="col-span-1 flex justify-end">
                 {items.length > 1 && (
-                  <Button
+                  <Button aria-label={t("delete")}
                     type="button"
                     variant="ghost"
                     size="icon"

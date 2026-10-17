@@ -89,9 +89,11 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["Inter", "var(--font-sans)", "sans-serif"],
-        serif: ["var(--font-serif)"],
-        mono: ["JetBrains Mono", "var(--font-mono)", "monospace"],
+        sans: ["Inter", "ui-sans-serif", "system-ui", "Segoe UI", "sans-serif"],
+        serif: ["Georgia", "serif"],
+        // `font-mono` marks figures (amounts, qty, voucher no.) in ~300 places. They now render in
+        // Inter with tabular-nums (see index.css) — aligned columns without the dated monospace look.
+        mono: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
         urdu: ["Noto Nastaliq Urdu", "serif"],
       },
       keyframes: {

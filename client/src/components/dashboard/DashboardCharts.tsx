@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react";
+import { useLanguage } from "@/contexts/language-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkeletonBox } from "@/components/ui/skeletons";
 import {
@@ -32,6 +33,7 @@ function DashboardChartsComponent({
   purchasesLabel,
   salesLabel,
 }: DashboardChartsProps) {
+  const { t } = useLanguage();
   const monthlyData = useMemo(
     () =>
       (chartData?.monthlyTotals || []).map((row) => ({
@@ -46,8 +48,8 @@ function DashboardChartsComponent({
       <Card>
         <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
           <div className={isRTL ? "text-right" : ""}>
-            <CardTitle className="text-base font-semibold">Purchases vs Sales</CardTitle>
-            <p className="text-sm text-muted-foreground">Monthly comparison</p>
+            <CardTitle className="text-base font-semibold">{t("purchasesVsSales")}</CardTitle>
+            <p className="text-sm text-muted-foreground">{t("monthlyComparison")}</p>
           </div>
           <div className={`flex gap-4 text-sm ${isRTL ? "flex-row-reverse" : ""}`}>
             <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
@@ -129,10 +131,57 @@ function DashboardChartsComponent({
         </CardContent>
       </Card>
 
+      <div className="grid gap-6 lg:grid-cols-2">
+        {([
+          ["sales", salesLabel, "hsl(var(--primary) / 0.9)"],
+          ["purchases", purchasesLabel, "hsl(var(--chart-2) / 0.85)"],
+        ] as const).map(([key, label, fill]) => (
+          <Card key={key}>
+            <CardHeader className={isRTL ? "text-right" : ""}>
+              <CardTitle className="text-base font-semibold">{label}</CardTitle>
+              <p className="text-sm text-muted-foreground">{t("monthlyComparison")}</p>
+            </CardHeader>
+            <CardContent>
+              <div className="h-72">
+                {chartLoading ? (
+                  <SkeletonBox className="h-full w-full" />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={monthlyData} margin={{ top: 12, right: 12, left: 6, bottom: 8 }} barCategoryGap={20}>
+                      <CartesianGrid strokeDasharray="4 6" stroke="hsl(var(--border) / 0.55)" vertical={false} />
+                      <XAxis dataKey="name" className="text-xs" tickLine={false} axisLine={false} dy={8} />
+                      <YAxis
+                        className="text-xs"
+                        tickLine={false}
+                        axisLine={false}
+                        width={48}
+                        tickFormatter={(value) => `${(value / 1000).toFixed(0)}k`}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--card))",
+                          border: "1px solid hsl(var(--border) / 0.9)",
+                          borderRadius: "10px",
+                          padding: "10px 12px",
+                        }}
+                        cursor={{ fill: "hsl(var(--muted) / 0.4)" }}
+                        formatter={(value: number) => [`Rs. ${value.toLocaleString()}`, label]}
+                        labelStyle={{ color: "hsl(var(--muted-foreground))", marginBottom: "4px" }}
+                      />
+                      <Bar dataKey={key} fill={fill} radius={[6, 6, 0, 0]} isAnimationActive={false} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
       <Card>
         <CardHeader className={isRTL ? "text-right" : ""}>
-          <CardTitle className="text-base font-semibold">Product Stock</CardTitle>
-          <p className="text-sm text-muted-foreground">Top 12 closing balances (kg)</p>
+          <CardTitle className="text-base font-semibold">{t("productStock")}</CardTitle>
+          <p className="text-sm text-muted-foreground">{t("topClosingBalancesKg")}</p>
         </CardHeader>
         <CardContent>
           <div className="h-96">

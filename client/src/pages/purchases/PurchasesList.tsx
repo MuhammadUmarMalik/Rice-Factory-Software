@@ -151,7 +151,7 @@ export function PurchasesList({
           >
             <Eye className="h-4 w-4" />
           </Button>
-          <Button
+          <Button aria-label={t("edit")}
             size="icon"
             variant="ghost"
             onClick={() => onEdit(item)}
@@ -161,7 +161,7 @@ export function PurchasesList({
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button
+              <Button aria-label={t("delete")}
                 size="icon"
                 variant="ghost"
                 onClick={(e) => e.stopPropagation()}

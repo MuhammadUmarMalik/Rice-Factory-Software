@@ -604,11 +604,13 @@ export async function getSalesReport(filters?: {
   customerId?: number;
   productId?: number;
   paymentStatus?: "paid" | "partial" | "unpaid";
+  partyType?: "customer" | "supplier" | "employee";
 }) {
   const conditions = [];
   if (filters?.fromDate) conditions.push(gte(sales.saleDate, filters.fromDate));
   if (filters?.toDate) conditions.push(lte(sales.saleDate, endOfDay(filters.toDate)));
   if (filters?.customerId) conditions.push(eq(sales.customerId, filters.customerId));
+  if (filters?.partyType) conditions.push(eq(sales.partyType, filters.partyType));
 
   if (filters?.productId) {
     const saleIds = db
@@ -630,6 +632,7 @@ export async function getSalesReport(filters?: {
       saleDate: sales.saleDate,
       customerId: sales.customerId,
       customerName: accounts.name,
+      partyType: sales.partyType,
       subtotal: sales.subtotal,
       tax: sales.taxAmount,
       loading: sales.loadingCharges,
@@ -658,6 +661,7 @@ export async function getSalesReport(filters?: {
         saleDate: new Date(r.saleDate as any),
         customerId: r.customerId,
         customerName: r.customerName || "",
+        partyType: r.partyType || "customer",
         subtotal: parseAmount(r.subtotal || "0").toString(),
         discount: parseAmount((r as { discountAmount?: string }).discountAmount || "0").toString(),
         tax: parseAmount(r.tax || "0").toString(),
@@ -1295,7 +1299,8 @@ export async function getDayBook(date: Date) {
 
 export async function getOutstandingCustomers(asOfDate: Date, customerId?: number) {
   const to = endOfDay(asOfDate);
-  const saleConditions = [lte(sales.saleDate, to)];
+  // Supplier/employee sales settle inside their own ledgers, not customer receivables.
+  const saleConditions = [lte(sales.saleDate, to), eq(sales.partyType, "customer")];
   if (customerId) saleConditions.push(eq(sales.customerId, customerId));
 
   const salesRows = db

@@ -142,6 +142,7 @@ export async function createSale(sale: InsertSale, items: SaleItemInput[]): Prom
       notes: sale.notes,
       customerName: customer?.name,
       invoiceNumber,
+      vehicleNumber: sale.vehicleNumber,
     });
 
     const newSale = tx.insert(sales).values({

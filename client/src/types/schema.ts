@@ -84,6 +84,11 @@ export type Sale = {
   invoiceNumber: string;
   customerId: number;
   vehicleNumber: string | null;
+  /** The party behind customerId (an account id); old sales are "customer". */
+  partyType?: "customer" | "supplier" | "employee" | null;
+  partyId?: number;
+  partyName?: string | null;
+  marka?: string | null;
   loadingCharges: string | null;
   weighingCharges: string | null;
   otherCharges: string | null;

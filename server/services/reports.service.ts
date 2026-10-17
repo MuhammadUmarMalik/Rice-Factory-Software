@@ -35,6 +35,7 @@ export async function getSalesReport(params: {
   customerId?: number;
   productId?: number;
   paymentStatus?: any;
+  partyType?: "customer" | "supplier" | "employee";
 }) {
   return reportsModel.getSalesReport(params);
 }

@@ -1,6 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Eye, Truck, FileText, Pencil, Trash2 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { FormSection, SummaryRow } from "@/components/form-section";
+import { formatMoney } from "@/utils/formatters";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
@@ -39,7 +41,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Link, useLocation } from "wouter";
 import type { Sale, Account, Product, SaleDispatchProgress } from "@/types/schema";
-import { formatStock, unitToKg } from "@/lib/units";
+import { formatQtyByUnit, formatStock, unitToKg } from "@/lib/units";
 import { useSaleDispatchSummary } from "@/hooks/use-gate-passes";
 import { format } from "date-fns";
 import { confirmAction } from "@/components/confirm-dialog";
@@ -123,13 +125,23 @@ function DispatchBadge({ dispatch }: { dispatch?: SaleDispatchProgress | null })
   );
 }
 
+// A sale's party is an account of one of these types; its ledger takes the sale.
+const PARTY_TYPES = [
+  { value: "customer", label: "Customer", labelUrdu: "گاہک" },
+  { value: "supplier", label: "Supplier", labelUrdu: "سپلائر" },
+  { value: "employee", label: "Employee", labelUrdu: "ملازم" },
+] as const;
+type PartyType = (typeof PARTY_TYPES)[number]["value"];
+
 const saleFormSchema = z.object({
   saleDate: z.string().optional().refine((val) => !val || !isFutureDateString(val), {
     message: "Date cannot be in the future",
   }),
   dueDate: z.string().optional(),
-  customerId: z.string().min(1, "Customer is required"),
+  partyType: z.enum(["customer", "supplier", "employee"]).default("customer"),
+  customerId: z.string().min(1, "Party is required"),
   vehicleNumber: z.string().optional(),
+  marka: z.string().optional(),
   loadingCharges: z.string().default("0"),
   loadingChargesMode: z.enum(["add", "less"]).default("add"),
   weighingCharges: z.string().default("0"),
@@ -203,8 +215,10 @@ export default function SalesPage() {
     resolver: zodResolver(saleFormSchema),
     defaultValues: {
       saleDate: formatDateInput(new Date()),
+      partyType: "customer",
       customerId: "",
       vehicleNumber: "",
+      marka: "",
       loadingCharges: "0",
       loadingChargesMode: "add",
       weighingCharges: "0",
@@ -219,7 +233,7 @@ export default function SalesPage() {
       paidAmount: "0",
       paymentMode: "cash",
       notes: "",
-      items: [{ productId: "", quantity: "", unit: "", pricePerUnit: "" }],
+      items: [{ productId: "", quantity: "", unit: "mound", pricePerUnit: "" }],
     },
   });
 
@@ -234,21 +248,31 @@ export default function SalesPage() {
 
   const dispatchSummary = useSaleDispatchSummary(editingId);
 
-  const { data: customers = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=customer"],
+  // One accounts query feeds all three party types.
+  const { data: accounts = [] } = useQuery<Account[]>({
+    queryKey: ["/api/accounts"],
   });
+  const [partyFilter, setPartyFilter] = useState<"all" | PartyType>("all");
+  const watchPartyType = form.watch("partyType");
+  const parties = useMemo(() => accounts.filter((a) => a.type === watchPartyType), [accounts, watchPartyType]);
+  const partyTypeLabel = (type?: string | null) => {
+    const match = PARTY_TYPES.find((p) => p.value === (type || "customer")) ?? PARTY_TYPES[0];
+    return language === "ur" ? match.labelUrdu : match.label;
+  };
 
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
 
   const salesWithCustomer = useMemo(() => {
-    const customerMap = new Map(customers.map((c) => [c.id, c]));
-    return sales.map((s) => ({
-      ...s,
-      customer: customerMap.get(typeof s.customerId === "string" ? parseInt(s.customerId) : s.customerId),
-    }));
-  }, [sales, customers]);
+    const accountMap = new Map(accounts.map((c) => [c.id, c]));
+    return sales
+      .filter((s) => partyFilter === "all" || (s.partyType || "customer") === partyFilter)
+      .map((s) => ({
+        ...s,
+        customer: accountMap.get(typeof s.customerId === "string" ? parseInt(s.customerId) : s.customerId),
+      }));
+  }, [sales, accounts, partyFilter]);
 
   const getUnitForProduct = (productId?: string) =>
     products.find((p) => p.id.toString() === productId)?.unit;
@@ -365,8 +389,10 @@ export default function SalesPage() {
     form.reset({
       saleDate: formatDateInput(new Date()),
       dueDate: "",
+      partyType: "customer",
       customerId: "",
       vehicleNumber: "",
+      marka: "",
       loadingCharges: "0",
       loadingChargesMode: "add",
       weighingCharges: "0",
@@ -381,7 +407,7 @@ export default function SalesPage() {
       paidAmount: "0",
       paymentMode: "cash",
       notes: "",
-      items: [{ productId: "", quantity: "", unit: "", pricePerUnit: "" }],
+      items: [{ productId: "", quantity: "", unit: "mound", pricePerUnit: "" }],
     });
     setEditingId(null);
     setIsDialogOpen(true);
@@ -394,8 +420,10 @@ export default function SalesPage() {
       form.reset({
         saleDate: sale.saleDate ? format(new Date(sale.saleDate), "yyyy-MM-dd") : formatDateInput(new Date()),
         dueDate: sale.dueDate ? format(new Date(sale.dueDate), "yyyy-MM-dd") : "",
+        partyType: (sale.partyType as PartyType) || "customer",
         customerId: sale.customerId?.toString() || "",
         vehicleNumber: sale.vehicleNumber || "",
+        marka: sale.marka || "",
         loadingCharges: sale.loadingCharges || "0",
         loadingChargesMode: (sale as any).loadingChargesMode || "add",
         weighingCharges: sale.weighingCharges || "0",
@@ -467,6 +495,13 @@ export default function SalesPage() {
     signed(watchWeighing, watchWeighingMode) + signed(watchLoading, watchLoadingMode) + signed(watchOther, watchOtherMode);
   const discount = parseFloat(watchDiscount) || 0;
   const totalAmount = Math.max(0, subtotal + totalCharges - discount);
+  const balanceDue = totalAmount - (parseFloat(form.watch("paidAmount") || "0") || 0);
+  const chargeFields = [
+    { name: "weighingCharges", modeName: "weighingChargesMode", label: t("weighingCharges"), testId: "input-weighing" },
+    { name: "loadingCharges", modeName: "loadingChargesMode", label: t("loadingCharges"), testId: "input-loading" },
+    { name: "otherCharges", modeName: "otherChargesMode", label: t("otherCharges"), testId: "input-other" },
+    { name: "freightCharges", modeName: "freightChargesMode", label: language === "ur" ? "کرایہ (فریٹ)" : "Freight", testId: undefined },
+  ] as const;
 
   const columns: Column<Sale & { customer?: Account }>[] = [
     {
@@ -485,11 +520,16 @@ export default function SalesPage() {
     },
     {
       key: "customer",
-      title: "Customer",
-      titleUrdu: "گاہک",
+      title: "Party",
+      titleUrdu: "پارٹی",
       render: (item) => (
         <div>
-          <p className="font-medium">{item.customer?.name || "-"}</p>
+          <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+            <p className="font-medium">{item.customer?.name || item.partyName || "-"}</p>
+            <Badge variant={(item.partyType || "customer") === "customer" ? "secondary" : "outline"} className="text-xs">
+              {partyTypeLabel(item.partyType)}
+            </Badge>
+          </div>
           {item.customer?.nameUrdu && (
             <p className="text-sm text-muted-foreground font-urdu">{item.customer.nameUrdu}</p>
           )}
@@ -510,6 +550,12 @@ export default function SalesPage() {
           )}
         </div>
       ),
+    },
+    {
+      key: "marka",
+      title: "Marka",
+      titleUrdu: "مارکہ",
+      render: (item) => <span className="text-sm">{item.marka || "-"}</span>,
     },
     {
       key: "saleDate",
@@ -575,7 +621,7 @@ export default function SalesPage() {
           >
             <Truck className="h-4 w-4" />
           </Button>
-          <Button
+          <Button aria-label={t("view")}
             size="icon"
             variant="ghost"
             data-testid={`button-view-${item.id}`}
@@ -583,7 +629,7 @@ export default function SalesPage() {
           >
             <Eye className="h-4 w-4" />
           </Button>
-          <Button
+          <Button aria-label={t("edit")}
             size="icon"
             variant="ghost"
             data-testid={`button-edit-${item.id}`}
@@ -591,7 +637,7 @@ export default function SalesPage() {
           >
             <Pencil className="h-4 w-4" />
           </Button>
-          <Button
+          <Button aria-label={t("delete")}
             size="icon"
             variant="ghost"
             data-testid={`button-delete-${item.id}`}
@@ -620,7 +666,23 @@ export default function SalesPage() {
       </div>
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="pt-6 space-y-4">
+          <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+            <span className="text-sm text-muted-foreground">{language === "ur" ? "پارٹی کی قسم" : "Party Type"}</span>
+            <Select value={partyFilter} onValueChange={(v) => setPartyFilter(v as "all" | PartyType)}>
+              <SelectTrigger className="w-40" data-testid="filter-party-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{language === "ur" ? "تمام" : "All"}</SelectItem>
+                {PARTY_TYPES.map((p) => (
+                  <SelectItem key={p.value} value={p.value}>
+                    {language === "ur" ? p.labelUrdu : p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <DataTable
             columns={columns}
             data={salesWithCustomer}
@@ -631,484 +693,491 @@ export default function SalesPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-4xl max-h-[92vh]">
+        <DialogContent bare className="max-w-none">
           <DialogHeader>
-            <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
+            <DialogTitle className={`text-xl tracking-tight ${isRTL ? "font-urdu" : ""}`}>
               {editingId
                 ? (language === "ur" ? "فروخت میں ترمیم" : "Edit Sale")
                 : (language === "ur" ? "نئی فروخت" : "New Sale")}
             </DialogTitle>
           </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <FormField
-                  control={form.control}
-                  name="customerId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("customer")}</FormLabel>
-                      <SearchableSelect
-                        options={customers.map((c) => ({
-                          value: c.id.toString(),
-                          label: c.name,
-                          sublabel: c.nameUrdu || undefined,
-                        }))}
-                        value={field.value || undefined}
-                        onValueChange={field.onChange}
-                        placeholder={language === "ur" ? "گاہک منتخب کریں" : "Select customer"}
-                        searchPlaceholder={language === "ur" ? "گاہک تلاش کریں..." : "Search customer..."}
-                        emptyMessage={language === "ur" ? "کوئی گاہک نہیں ملا" : "No customers found."}
-                        autoFocus
+            <form onSubmit={form.handleSubmit(handleSubmit)}>
+              <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_340px]">
+                <div className="min-w-0 space-y-6">
+                  <FormSection title={language === "ur" ? "پارٹی" : "Party"}>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <FormField
+                        control={form.control}
+                        name="partyType"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{language === "ur" ? "پارٹی کی قسم" : "Party Type"}</FormLabel>
+                            <Select
+                              value={field.value}
+                              onValueChange={(value) => {
+                                field.onChange(value);
+                                // A party id only makes sense within its own type.
+                                form.setValue("customerId", "", { shouldValidate: false });
+                              }}
+                            >
+                              <FormControl>
+                                <SelectTrigger data-testid="select-party-type">
+                                  <SelectValue />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {PARTY_TYPES.map((p) => (
+                                  <SelectItem key={p.value} value={p.value}>
+                                    {language === "ur" ? p.labelUrdu : p.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
                       />
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="saleDate"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("saleDate")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="date" max={todayString} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="dueDate"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("dueDate")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="date" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="vehicleNumber"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("vehicleNumber")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
+                      <FormField
+                        control={form.control}
+                        name="customerId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{partyTypeLabel(watchPartyType)}</FormLabel>
+                            <SearchableSelect
+                              options={parties.map((c) => ({ value: c.id.toString(), label: c.name, sublabel: c.nameUrdu || undefined }))}
+                              value={field.value || undefined}
+                              onValueChange={field.onChange}
+                              placeholder={`Select ${partyTypeLabel(watchPartyType).toLowerCase()}`}
+                              searchPlaceholder={`Search ${partyTypeLabel(watchPartyType).toLowerCase()}...`}
+                              emptyMessage={`No ${partyTypeLabel(watchPartyType).toLowerCase()} found.`}
+                              autoFocus
+                            />
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="saleDate"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("saleDate")}</FormLabel>
+                            <FormControl>
+                              <Input {...field} type="date" max={todayString} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="dueDate"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("dueDate")}</FormLabel>
+                            <FormControl>
+                              <Input {...field} type="date" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="vehicleNumber"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("vehicleNumber")}</FormLabel>
+                            <FormControl>
+                              <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="marka"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{language === "ur" ? "مارکہ" : "Marka"}</FormLabel>
+                            <FormControl>
+                              <Input {...field} placeholder="—" data-testid="input-marka" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
 
-              {editingId != null && (
-                <Card className="border-muted">
-                  <CardHeader className="py-3">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      <Truck className="h-4 w-4 text-muted-foreground" />
-                      {t("dispatched")}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className={`flex flex-wrap items-center justify-between gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
-                    {dispatchSummary.data ? (
-                      <div className="space-y-1 text-sm">
-                        <DispatchBadge
-                          dispatch={{
-                            saleId: editingId,
-                            status: dispatchSummary.data.status,
-                            orderedKg: dispatchSummary.data.orderedKg,
-                            dispatchedKg: dispatchSummary.data.dispatchedKg,
-                            pendingKg: dispatchSummary.data.pendingKg,
-                            orderedBags: null,
-                            dispatchedBags: dispatchSummary.data.passes.reduce(
-                              (sum, pass) => sum + pass.totalBags,
-                              0,
-                            ),
-                          }}
-                        />
-                        <div className="text-muted-foreground">
-                          {t("ordered")}: {dispatchSummary.data.orderedKg.toFixed(2)} kg ·{" "}
-                          {t("dispatched")}: {dispatchSummary.data.dispatchedKg.toFixed(2)} kg ·{" "}
-                          {t("remaining")}: {dispatchSummary.data.pendingKg.toFixed(2)} kg
+                    {editingId != null && (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed bg-muted/30 p-3">
+                        <div className="space-y-1 text-sm">
+                          <p className="flex items-center gap-2 font-medium">
+                            <Truck className="h-4 w-4 text-muted-foreground" />
+                            {t("dispatched")}
+                          </p>
+                          {dispatchSummary.data ? (
+                            <>
+                              <DispatchBadge
+                                dispatch={{
+                                  saleId: editingId,
+                                  status: dispatchSummary.data.status,
+                                  orderedKg: dispatchSummary.data.orderedKg,
+                                  dispatchedKg: dispatchSummary.data.dispatchedKg,
+                                  pendingKg: dispatchSummary.data.pendingKg,
+                                  orderedBags: null,
+                                  dispatchedBags: dispatchSummary.data.passes.reduce((sum, pass) => sum + pass.totalBags, 0),
+                                }}
+                              />
+                              <p className="text-xs tabular-nums text-muted-foreground">
+                                {t("ordered")}: {dispatchSummary.data.orderedKg.toFixed(2)} kg · {t("dispatched")}:{" "}
+                                {dispatchSummary.data.dispatchedKg.toFixed(2)} kg · {t("remaining")}: {dispatchSummary.data.pendingKg.toFixed(2)} kg
+                              </p>
+                            </>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">{t("loading")}</p>
+                          )}
                         </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="bg-card"
+                          onClick={() => setLocation(`/gate-passes/new?saleId=${editingId}&direction=OUT`)}
+                          data-testid="button-create-gate-pass"
+                        >
+                          <Truck className="h-4 w-4" />
+                          {t("createGatePass")}
+                        </Button>
                       </div>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">{t("loading")}</span>
                     )}
+                  </FormSection>
+
+                  <FormSection
+                    title={language === "ur" ? "آئٹمز" : "Items"}
+                    description={`${fields.length} ${fields.length === 1 ? "line" : "lines"}`}
+                  >
+                    <div className="overflow-x-auto rounded-lg border">
+                      <table className="w-full min-w-[720px] text-sm">
+                        <thead className="bg-muted/60 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          <tr>
+                            <th className="w-8 px-2 py-2 text-start">#</th>
+                            <th className="px-2 py-2 text-start">{language === "ur" ? "مصنوعات" : "Product"}</th>
+                            <th className="w-28 px-2 py-2 text-end">{t("quantity")}</th>
+                            <th className="w-32 px-2 py-2 text-start">Unit</th>
+                            <th className="w-32 px-2 py-2 text-end">{t("pricePerUnit")}</th>
+                            <th className="w-32 px-2 py-2 text-end">{t("amount")}</th>
+                            <th className="w-10 px-2 py-2" aria-label={t("actions")} />
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {fields.map((row, index) => {
+                            const item = watchItems[index];
+                            const productId = item?.productId;
+                            const unit = item?.unit || getUnitForProduct(productId) || "unit";
+                            const product = products.find((p) => p.id.toString() === productId);
+                            const lineAmount = (parseFloat(item?.quantity) || 0) * (parseFloat(item?.pricePerUnit) || 0);
+                            return (
+                              <tr key={row.id} className="align-top">
+                                <td className="px-2 py-3.5 text-xs tabular-nums text-muted-foreground">{index + 1}</td>
+                                <td className="px-1.5 py-1.5">
+                                  <FormField
+                                    control={form.control}
+                                    name={`items.${index}.productId`}
+                                    render={({ field }) => (
+                                      <FormItem className="space-y-1">
+                                        <Select
+                                          onValueChange={(value) => {
+                                            field.onChange(value);
+                                            const productUnit = getUnitForProduct(value);
+                                            if (productUnit && !form.getValues(`items.${index}.unit`)) {
+                                              form.setValue(`items.${index}.unit`, productUnit, { shouldValidate: true });
+                                            }
+                                          }}
+                                          value={field.value}
+                                        >
+                                          <FormControl>
+                                            <SelectTrigger className="h-9" aria-label={`Product, line ${index + 1}`} data-testid={`select-product-${index}`}>
+                                              <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select product"} />
+                                            </SelectTrigger>
+                                          </FormControl>
+                                          <SelectContent>
+                                            {/* Sales are bio (finished) stock; keep an old non-bio pick visible on edit. */}
+                                            {products.filter((p) => p.productType === "bio" || p.id.toString() === field.value).map((p) => (
+                                              <SelectItem key={p.id} value={p.id.toString()}>
+                                                {p.name}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                        {/* Stock moved out of the option label so the chosen value stays short. */}
+                                        {product && (
+                                          <p className="px-1 text-xs tabular-nums text-muted-foreground">
+                                            {formatStock(product.currentStock, product.unit)} in stock
+                                          </p>
+                                        )}
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </td>
+                                <td className="px-1.5 py-1.5">
+                                  <FormField
+                                    control={form.control}
+                                    name={`items.${index}.quantity`}
+                                    render={({ field }) => (
+                                      <FormItem className="space-y-1">
+                                        <FormControl>
+                                          <Input
+                                            {...field}
+                                            type="number"
+                                            inputMode="decimal"
+                                            step="0.01"
+                                            aria-label={`${t("quantity")} (${unit}), line ${index + 1}`}
+                                            className="h-9 text-end tabular-nums"
+                                            data-testid={`input-quantity-${index}`}
+                                          />
+                                        </FormControl>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </td>
+                                <td className="px-1.5 py-1.5">
+                                  <FormField
+                                    control={form.control}
+                                    name={`items.${index}.unit`}
+                                    render={({ field }) => (
+                                      <FormItem className="space-y-1">
+                                        <Select onValueChange={field.onChange} value={field.value}>
+                                          <FormControl>
+                                            <SelectTrigger className="h-9" aria-label={`Unit, line ${index + 1}`} data-testid={`select-unit-${index}`}>
+                                              <SelectValue placeholder="Select" />
+                                            </SelectTrigger>
+                                          </FormControl>
+                                          <SelectContent>
+                                            {unitOptions.map((opt) => (
+                                              <SelectItem key={opt.value} value={opt.value}>
+                                                {opt.label}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectContent>
+                                        </Select>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </td>
+                                <td className="px-1.5 py-1.5">
+                                  <FormField
+                                    control={form.control}
+                                    name={`items.${index}.pricePerUnit`}
+                                    render={({ field }) => (
+                                      <FormItem className="space-y-1">
+                                        <FormControl>
+                                          <Input
+                                            {...field}
+                                            type="number"
+                                            inputMode="decimal"
+                                            step="0.01"
+                                            aria-label={`${t("pricePerUnit")} (${unit}), line ${index + 1}`}
+                                            className="h-9 text-end tabular-nums"
+                                            data-testid={`input-price-${index}`}
+                                          />
+                                        </FormControl>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </td>
+                                <td className="px-2 py-3.5 text-end font-medium tabular-nums">
+                                  {lineAmount.toLocaleString("en-PK", { maximumFractionDigits: 2 })}
+                                </td>
+                                <td className="px-1 py-1.5">
+                                  {fields.length > 1 && (
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-9 w-9 text-muted-foreground hover:text-destructive"
+                                      onClick={() => remove(index)}
+                                      data-testid={`button-remove-item-${index}`}
+                                      aria-label={`${t("removeLine")} ${index + 1}`}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                     <Button
                       type="button"
                       variant="outline"
-                      size="sm"
-                      onClick={() => setLocation(`/gate-passes/new?saleId=${editingId}&direction=OUT`)}
-                      data-testid="button-create-gate-pass"
+                      className="w-full border-dashed bg-transparent"
+                      onClick={() => append({ productId: "", quantity: "", unit: "mound", pricePerUnit: "" })}
+                      data-testid="button-add-item"
                     >
-                      <Truck className="h-4 w-4" />
-                      {t("createGatePass")}
+                      <Plus className="h-4 w-4" /> {t("add")} item
                     </Button>
-                  </CardContent>
-                </Card>
-              )}
+                  </FormSection>
 
-              <div className="space-y-4">
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <h3 className="font-medium">{language === "ur" ? "آئٹمز" : "Items"}</h3>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => append({ productId: "", quantity: "", unit: "", pricePerUnit: "" })}
-                    data-testid="button-add-item"
-                  >
-                    <Plus className="h-4 w-4" />
-                    {t("add")}
-                  </Button>
-                </div>
-                
-                <div className="space-y-3">
-                  {fields.map((field, index) => (
-                    <div key={field.id} className="grid grid-cols-12 gap-x-2 gap-y-3 items-end rounded-md border p-3 sm:border-0 sm:p-0">
-                      {(() => {
-                        const selectedProductId = form.watch(`items.${index}.productId`);
-                        const selectedUnit = form.watch(`items.${index}.unit`);
-                        const unit = selectedUnit || getUnitForProduct(selectedProductId) || "unit";
-                        return (
-                          <>
-                          <div className="col-span-12 sm:col-span-4">
-                            <FormField
-                              control={form.control}
-                              name={`items.${index}.productId`}
-                              render={({ field }) => (
+                  <FormSection title={language === "ur" ? "چارجز" : "Charges"}>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {chargeFields.map(({ name, modeName, label, testId }) => (
+                        <FormField
+                          key={name}
+                          control={form.control}
+                          name={name}
+                          render={({ field }) => (
                             <FormItem>
-                              <FormLabel className={index > 0 ? "sm:sr-only" : ""}>{language === "ur" ? "مصنوعات" : "Product"}</FormLabel>
-                              <Select
-                                onValueChange={(value) => {
-                                  field.onChange(value);
-                                  const productUnit = getUnitForProduct(value);
-                                  const currentUnit = form.getValues(`items.${index}.unit`);
-                                  if (productUnit && !currentUnit) {
-                                    form.setValue(`items.${index}.unit`, productUnit, { shouldValidate: true });
-                                  }
-                                }}
-                                value={field.value}
-                              >
+                              <FormLabel>{label}</FormLabel>
+                              <div className="flex gap-2">
                                 <FormControl>
-                                  <SelectTrigger data-testid={`select-product-${index}`}>
-                                    <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select"} />
-                                  </SelectTrigger>
+                                  <Input {...field} type="number" inputMode="decimal" step="0.01" placeholder="0" className="tabular-nums" data-testid={testId} />
                                 </FormControl>
-                                <SelectContent>
-                                  {products.map((p) => (
-                                    <SelectItem key={p.id} value={p.id.toString()}>
-                                      {p.name} — {formatStock(p.currentStock, p.unit)} in stock
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                                <Select value={form.watch(modeName)} onValueChange={(v) => form.setValue(modeName, v as "add" | "less")}>
+                                  <SelectTrigger className="w-24 shrink-0" aria-label={`${label} add or less`}>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="add">Add</SelectItem>
+                                    <SelectItem value="less">Less</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
                               <FormMessage />
                             </FormItem>
                           )}
                         />
-                          </div>
-                          <div className="col-span-6 sm:col-span-2">
-                            <FormField
-                              control={form.control}
-                              name={`items.${index}.quantity`}
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel className={index > 0 ? "sm:sr-only" : ""}>{`${t("quantity")} (${unit})`}</FormLabel>
-                                  <FormControl>
-                                    <Input {...field} type="number" step="0.01" data-testid={`input-quantity-${index}`} />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                          )}
-                        />
-                      </div>
-                          <div className="col-span-6 sm:col-span-2">
-                            <FormField
-                              control={form.control}
-                              name={`items.${index}.unit`}
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel className={index > 0 ? "sm:sr-only" : ""}>Unit</FormLabel>
-                                  <Select onValueChange={field.onChange} value={field.value}>
-                                    <FormControl>
-                                      <SelectTrigger data-testid={`select-unit-${index}`}>
-                                        <SelectValue placeholder="Select" />
-                                      </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                      {unitOptions.map((opt) => (
-                                        <SelectItem key={opt.value} value={opt.value}>
-                                          {opt.label}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          </div>
-                          <div className="col-span-10 sm:col-span-3">
-                            <FormField
-                              control={form.control}
-                              name={`items.${index}.pricePerUnit`}
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel className={index > 0 ? "sm:sr-only" : ""}>{`${t("pricePerUnit")} (${unit})`}</FormLabel>
-                                  <FormControl>
-                                    <Input {...field} type="number" step="0.01" data-testid={`input-price-${index}`} />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                          )}
-                        />
-                      </div>
-                          <div className="col-span-2 sm:col-span-1 flex justify-end">
-                            {fields.length > 1 && (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => remove(index)}
-                                data-testid={`button-remove-item-${index}`}
-                              >
-                                &times;
-                              </Button>
-                            )}
-                          </div>
-                          </>
-                        );
-                      })()}
+                      ))}
+                      <FormField
+                        control={form.control}
+                        name="discountAmount"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("discountAmount")}</FormLabel>
+                            <FormControl>
+                              <Input {...field} type="number" inputMode="decimal" step="0.01" min="0" className="tabular-nums" data-testid="input-discount" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     </div>
-                  ))}
+                  </FormSection>
+
+                  <FormSection title={language === "ur" ? "نوٹس" : "Notes"}>
+                    <FormField
+                      control={form.control}
+                      name="notes"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormControl>
+                            <Textarea {...field} rows={2} aria-label={language === "ur" ? "نوٹس" : "Notes"} data-testid="input-notes" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </FormSection>
                 </div>
-              </div>
 
-              <div className="space-y-3">
-              <h3 className="font-medium">{language === "ur" ? "چارجز" : "Charges"}</h3>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <FormField
-                  control={form.control}
-                  name="weighingCharges"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("weighingCharges")}</FormLabel>
-                      <div className="flex gap-2">
-                        <FormControl>
-                          <Input {...field} type="number" step="0.01" data-testid="input-weighing" />
-                        </FormControl>
-                        <FormControl>
-                          <Select value={form.watch("weighingChargesMode")} onValueChange={(v) => form.setValue("weighingChargesMode", v as "add" | "less")}>
-                            <SelectTrigger className="w-24 shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="less">Less</SelectItem>
-                              <SelectItem value="add">Add</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormControl>
-                      </div>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="loadingCharges"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("loadingCharges")}</FormLabel>
-                      <div className="flex gap-2">
-                        <FormControl>
-                          <Input {...field} type="number" step="0.01" data-testid="input-loading" />
-                        </FormControl>
-                        <FormControl>
-                          <Select value={form.watch("loadingChargesMode")} onValueChange={(v) => form.setValue("loadingChargesMode", v as "add" | "less")}>
-                            <SelectTrigger className="w-24 shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="less">Less</SelectItem>
-                              <SelectItem value="add">Add</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormControl>
-                      </div>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="otherCharges"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("otherCharges")}</FormLabel>
-                      <div className="flex gap-2">
-                        <FormControl>
-                          <Input {...field} type="number" step="0.01" data-testid="input-other" />
-                        </FormControl>
-                        <FormControl>
-                          <Select value={form.watch("otherChargesMode")} onValueChange={(v) => form.setValue("otherChargesMode", v as "add" | "less")}>
-                            <SelectTrigger className="w-24 shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="less">Less</SelectItem>
-                              <SelectItem value="add">Add</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormControl>
-                      </div>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="freightCharges"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Freight</FormLabel>
-                      <div className="flex gap-2">
-                        <FormControl>
-                          <Input {...field} type="number" step="0.01" placeholder="0" />
-                        </FormControl>
-                        <FormControl>
-                          <Select value={form.watch("freightChargesMode")} onValueChange={(v) => form.setValue("freightChargesMode", v as "add" | "less")}>
-                            <SelectTrigger className="w-24 shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="less">Less</SelectItem>
-                              <SelectItem value="add">Add</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormControl>
-                      </div>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-              </div>
-
-              <FormField
-                control={form.control}
-                name="discountAmount"
-                render={({ field }) => (
-                  <FormItem className="max-w-xs">
-                    <FormLabel>{t("discountAmount")}</FormLabel>
-                    <FormControl>
-                      <Input {...field} type="number" step="0.01" min="0" data-testid="input-discount" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <Card className="bg-muted/30">
-                <CardContent className="pt-4">
-                  <div className="space-y-2">
-                    <div className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                      <span className="text-muted-foreground">{t("subtotal")}</span>
-                      <span className="font-mono">Rs. {subtotal.toLocaleString()}</span>
-                    </div>
-                    {([
-                      [t("weighingCharges"), watchWeighing, watchWeighingMode],
-                      [t("loadingCharges"), watchLoading, watchLoadingMode],
-                      [t("otherCharges"), watchOther, watchOtherMode],
-                    ] as const).map(([label, value, mode]) => (
-                      <div key={label} className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                        <span className="text-muted-foreground">{label}</span>
-                        <span className="font-mono">{mode === "less" ? "- " : ""}Rs. {(parseFloat(value) || 0).toLocaleString()}</span>
-                      </div>
-                    ))}
-                    {totalCharges !== chargesAddLessNamed && (
-                      <div className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                        <span className="text-muted-foreground">{language === "ur" ? "کرایہ (فریٹ)" : "Freight"}</span>
-                        <span className="font-mono">Rs. {(totalCharges - chargesAddLessNamed).toLocaleString()}</span>
-                      </div>
-                    )}
-                    {discount > 0 && (
-                      <div className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                        <span className="text-muted-foreground">{t("discountAmount")}</span>
-                        <span className="font-mono text-red-600">- Rs. {discount.toLocaleString()}</span>
-                      </div>
-                    )}
-                    <div className={`flex justify-between text-lg font-semibold pt-2 border-t ${isRTL ? "flex-row-reverse" : ""}`}>
-                      <span>{t("total")}</span>
-                      <span className="font-mono text-primary">Rs. {totalAmount.toLocaleString()}</span>
+                <aside className="space-y-5 border-t pt-6 lg:sticky lg:top-16 lg:self-start lg:border-s lg:border-t-0 lg:ps-6 lg:pt-0">
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-semibold">{language === "ur" ? "خلاصہ" : "Summary"}</h3>
+                    <dl className="space-y-1.5 text-xs">
+                      <SummaryRow
+                        label={t("quantity")}
+                        value={formatQtyByUnit(watchItems.map((item) => ({ qty: parseFloat(item.quantity) || 0, unit: item.unit })))}
+                        className="text-sm"
+                      />
+                      <SummaryRow
+                        label={language === "ur" ? "کل وزن" : "Total weight"}
+                        value={`${watchItems.reduce((sum, item) => sum + toQuantityKg(parseFloat(item.quantity) || 0, item.unit), 0).toFixed(2)} kg`}
+                      />
+                      <SummaryRow label={t("subtotal")} value={formatMoney(subtotal)} className="text-sm" />
+                      {([
+                        [t("weighingCharges"), watchWeighing, watchWeighingMode],
+                        [t("loadingCharges"), watchLoading, watchLoadingMode],
+                        [t("otherCharges"), watchOther, watchOtherMode],
+                      ] as const).map(([label, value, mode]) => (
+                        <SummaryRow key={label} label={label} value={`${mode === "less" ? "− " : "+ "}${formatMoney(parseFloat(value) || 0)}`} />
+                      ))}
+                      {totalCharges !== chargesAddLessNamed && (
+                        <SummaryRow label={language === "ur" ? "کرایہ (فریٹ)" : "Freight"} value={formatMoney(totalCharges - chargesAddLessNamed)} />
+                      )}
+                      {discount > 0 && <SummaryRow label={t("discountAmount")} value={`− ${formatMoney(discount)}`} />}
+                    </dl>
+                    <div className="space-y-1 border-t pt-3">
+                      <p className="text-xs font-medium text-muted-foreground">{t("total")}</p>
+                      <p className="text-2xl font-semibold tracking-tight tabular-nums">{formatMoney(totalAmount)}</p>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormField
-                  control={form.control}
-                  name="paidAmount"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("paidAmount")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-paid" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="paymentMode"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Payment Mode</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Payment mode" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="cash">Cash</SelectItem>
-                          <SelectItem value="credit">Credit</SelectItem>
-                          <SelectItem value="bank">Bank Transfer</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-              <div>
-                <FormField
-                  control={form.control}
-                  name="notes"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{language === "ur" ? "نوٹس" : "Notes"}</FormLabel>
-                      <FormControl>
-                        <Textarea {...field} rows={2} data-testid="input-notes" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                  <div className="space-y-4 border-t pt-5">
+                    <h3 className="text-sm font-semibold">{language === "ur" ? "ادائیگی" : "Payment"}</h3>
+                    <FormField
+                      control={form.control}
+                      name="paidAmount"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t("paidAmount")}</FormLabel>
+                          <FormControl>
+                            <Input {...field} type="number" inputMode="decimal" step="0.01" className="tabular-nums" data-testid="input-paid" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="paymentMode"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Payment Mode</FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Payment mode" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="cash">Cash</SelectItem>
+                              <SelectItem value="credit">Credit</SelectItem>
+                              <SelectItem value="bank">Bank Transfer</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <dl className="text-sm">
+                      <SummaryRow
+                        label={language === "ur" ? "باقی رقم" : "Balance due"}
+                        value={formatMoney(balanceDue)}
+                        className={balanceDue > 0 ? "[&>dd]:text-destructive" : "[&>dd]:text-primary"}
+                      />
+                    </dl>
+                  </div>
+                </aside>
               </div>
 
-              <div className={`sticky -bottom-4 sm:-bottom-6 -mx-4 -mb-4 sm:-mx-6 sm:-mb-6 flex flex-wrap items-center gap-2 border-t bg-background px-4 py-3 sm:px-6 ${isRTL ? "flex-row-reverse" : ""}`}>
-                <div className={`flex-1 text-sm ${isRTL ? "text-right" : ""}`}>
-                  <span className="text-muted-foreground">{t("total")}: </span>
-                  <span className="font-mono font-semibold text-primary">Rs. {totalAmount.toLocaleString()}</span>
+              <div className="sticky bottom-0 z-10 -mx-4 mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 border-t bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+                <div className="flex flex-1 flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                  <span>
+                    <span className="text-muted-foreground">{t("total")} </span>
+                    <span className="font-semibold tabular-nums">{formatMoney(totalAmount)}</span>
+                  </span>
+                  <span>
+                    <span className="text-muted-foreground">{language === "ur" ? "باقی رقم" : "Balance due"} </span>
+                    <span className={`font-semibold tabular-nums ${balanceDue > 0 ? "text-destructive" : "text-primary"}`}>{formatMoney(balanceDue)}</span>
+                  </span>
                 </div>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   {t("cancel")}

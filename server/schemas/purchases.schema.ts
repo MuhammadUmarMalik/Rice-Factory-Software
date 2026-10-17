@@ -7,7 +7,6 @@ export const purchaseItemsSchema = z
     z.object({
       productId: z.number().int().positive(),
       serialNo: z.number().int().positive().optional(),
-      marka: z.string().optional(),
       bags: numericString.refine((value) => Number(value) >= 0, "Bags cannot be negative"),
       fillingPerBagKg: numericString,
       looseKgs: numericString.optional().default("0"),

@@ -3,7 +3,6 @@ export type { RequestStatus } from "@/stores/base";
 
 export type PurchaseItemDraft = {
   productId: string;
-  marka?: string;
   bags: string;
   fillingPerBagKg: string;
   looseKgs: string;

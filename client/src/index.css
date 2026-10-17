@@ -262,6 +262,16 @@
  */
 @layer utilities {
 
+  /* Entry tables: spinners eat the narrow cells, and ArrowUp/Down already move focus. */
+  table input[type="number"] {
+    -moz-appearance: textfield;
+  }
+  table input[type="number"]::-webkit-inner-spin-button,
+  table input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
   /* Hide ugly search cancel button in Chrome until we can style it properly */
   input[type="search"]::-webkit-search-cancel-button {
     @apply hidden;

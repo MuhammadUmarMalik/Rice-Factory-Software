@@ -505,6 +505,7 @@ export function ensureSchema(): void {
   ensureSequencesTable();
   ensureProcessingOutputsTable();
   ensureGatePassTables();
+  ensureChequesTable();
   ensureEmployeeOpeningBalanceType();
   ensureExpenseEntryColumns();
   ensureLedgerEntryColumns();
@@ -513,6 +514,28 @@ export function ensureSchema(): void {
   ensureIntegerTimestamps();
   ensureReportIndexes();
   warnOrphanedCashLinks();
+}
+
+/** Post-dated cheque register; mirrors `cheques` in db/schema.ts. */
+function ensureChequesTable(): void {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS "cheques" (
+      "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+      "direction" text NOT NULL CHECK ("direction" IN ('received', 'issued')),
+      "party_id" integer REFERENCES "accounts"("id"),
+      "cheque_no" text NOT NULL,
+      "bank_name" text,
+      "amount" text NOT NULL,
+      "cheque_date" integer NOT NULL,
+      "status" text NOT NULL DEFAULT 'pending'
+        CHECK ("status" IN ('pending', 'deposited', 'cleared', 'bounced', 'cancelled')),
+      "notes" text,
+      "created_by" integer REFERENCES "users"("id"),
+      "created_at" integer NOT NULL DEFAULT (unixepoch()),
+      "status_changed_at" integer
+    );
+    CREATE INDEX IF NOT EXISTS "idx_cheques_status_date" ON "cheques" ("status", "cheque_date");
+  `);
 }
 
 /**

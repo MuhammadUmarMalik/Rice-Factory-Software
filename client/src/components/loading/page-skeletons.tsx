@@ -115,7 +115,7 @@ function FormPageSkeleton({ includeTable = false }: FormPageSkeletonProps) {
 
 function PrintPreviewSkeleton() {
   return (
-    <div className="flex min-h-[520px] w-full flex-col overflow-hidden rounded-xl bg-white shadow-xl">
+    <div className="flex min-h-[520px] w-full flex-col overflow-hidden rounded-xl bg-card shadow-xl">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <SkeletonBox className="h-5 w-32" />
         <div className="flex gap-2">

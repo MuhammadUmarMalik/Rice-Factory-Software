@@ -103,7 +103,6 @@ function normalizePurchaseItem(item: PurchaseItemInput, moundBaseKg = 40) {
   return {
     ...item,
     serialNo: serialNo ?? undefined,
-    marka: item.marka || null,
     bags: bags.toString(),
     fillingPerBagKg: filling.toString(),
     looseKgs: looseKgs.toString(),
@@ -181,6 +180,7 @@ export async function createPurchase(purchase: InsertPurchase, items: PurchaseIt
       notes: purchase.notes,
       supplierName: supplier?.name,
       invoiceNumber,
+      vehicleNumber: purchase.vehicleNumber,
     });
     const newPurchase = tx.insert(purchases).values({
       ...purchase,

@@ -65,6 +65,9 @@ ensureColumn("sales", "other_charges_mode", "TEXT");
 ensureColumn("sales", "rent_charges_mode", "TEXT");
 ensureColumn("sales", "freight_charges", "TEXT NOT NULL DEFAULT '0'");
 ensureColumn("sales", "freight_charges_mode", "TEXT");
+ensureColumn("sales", "marka", "TEXT");
+// Existing sales were all to customers; the default backfills them.
+ensureColumn("sales", "party_type", "TEXT NOT NULL DEFAULT 'customer'");
 
 function migrateEnumCasing() {
   const tables: [string, string][] = [

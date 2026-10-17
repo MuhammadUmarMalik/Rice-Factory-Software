@@ -19,6 +19,8 @@ export const settingsSchema = z.object({
       newDialog: z.string().default("Ctrl+N"),
       saveDialog: z.string().default("Ctrl+Enter"),
       addLine: z.string().default("Ctrl+Shift+N"),
+      commandPalette: z.string().default("Ctrl+K"),
+      focusSearch: z.string().default("/"),
     })
     .default({}),
 });

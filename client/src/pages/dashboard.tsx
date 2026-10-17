@@ -130,7 +130,7 @@ function useLazySection<T extends HTMLElement>(rootMargin = "200px") {
 }
 
 export default function Dashboard() {
-  const { t, isRTL, language } = useLanguage();
+  const { t, isRTL } = useLanguage();
   const { reference, detail, isLoading: detailLoading, openDetail, closeDetail } = useReportDetail();
 
   const { range, setRange, fromDate, toDate } = useReportDateRange({ preset: "all" });
@@ -179,7 +179,7 @@ export default function Dashboard() {
     refetchOnReconnect: true,
   });
 
-  const { data: alertsData, isLoading: alertsLoading } = useQuery<DashboardAlerts>({
+  const { data: alertsData } = useQuery<DashboardAlerts>({
     queryKey: ["/api/dashboard/alerts", fromDate, toDate],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -233,7 +233,7 @@ export default function Dashboard() {
         href: `/reports/stock?fromDate=${fromDate}&toDate=${toDate}`,
       },
       {
-        title: "Net Profit",
+        title: t("netProfit"),
         value: money(summary?.kpis.netProfit),
         icon: DollarSign,
         color: "text-chart-5",
@@ -247,7 +247,7 @@ export default function Dashboard() {
   const kpiCards = useMemo(
     () => [
       {
-        title: "Cash Balance",
+        title: t("cashBalance"),
         value: money(summary?.kpis.cashBalance),
         icon: Banknote,
         color: "text-emerald-600",
@@ -255,7 +255,7 @@ export default function Dashboard() {
         href: `/reports/ledger-cash?startDate=${fromDate}&endDate=${toDate}`,
       },
       {
-        title: "Bank Balance",
+        title: t("bankBalance"),
         value: money(summary?.kpis.bankBalance),
         icon: Landmark,
         color: "text-sky-600",
@@ -263,7 +263,7 @@ export default function Dashboard() {
         href: `/reports/ledger-bank?startDate=${fromDate}&endDate=${toDate}`,
       },
       {
-        title: "Outstanding Customers",
+        title: t("outstandingCustomers"),
         value: money(summary?.kpis.outstandingCustomers),
         icon: Users,
         color: "text-amber-600",
@@ -271,7 +271,7 @@ export default function Dashboard() {
         href: `/reports/outstanding-customers?asOfDate=${toDate}`,
       },
       {
-        title: "Outstanding Suppliers",
+        title: t("outstandingSuppliers"),
         value: money(summary?.kpis.outstandingSuppliers),
         icon: UserMinus,
         color: "text-rose-600",
@@ -279,17 +279,21 @@ export default function Dashboard() {
         href: `/reports/outstanding-suppliers?asOfDate=${toDate}`,
       },
     ],
-    [money, summary?.kpis, fromDate, toDate],
+    [t, money, summary?.kpis, fromDate, toDate],
   );
 
   const quickActions = useMemo(
     () => [
-      { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, color: "bg-chart-2 text-white" },
-      { title: t("newSale"), url: "/sales", icon: TrendingUp, color: "bg-primary text-primary-foreground" },
-      { title: t("processStock"), url: "/processing", icon: Factory, color: "bg-chart-3 text-white" },
+      { title: t("newSale"), url: "/sales", icon: TrendingUp, variant: "default" as const },
+      { title: t("newPurchase"), url: "/purchases", icon: ShoppingCart, variant: "outline" as const },
+      { title: t("processStock"), url: "/processing", icon: Factory, variant: "outline" as const },
     ],
     [t],
   );
+
+  const alerts = alertsData?.alerts ?? [];
+  const staleOpenPasses = gatePassDashboard?.staleOpenPasses ?? [];
+  const hasCritical = alerts.some((a) => a.severity === "critical");
 
   const dayBookRows = useMemo(() => details?.dayBook.rows || [], [details?.dayBook.rows]);
 
@@ -364,66 +368,81 @@ export default function Dashboard() {
     <div className={`p-6 space-y-6 ${isRTL ? "font-urdu" : ""}`}>
       <div className={`flex min-h-[72px] items-center justify-between gap-4 ${isRTL ? "flex-row-reverse" : ""}`}>
         <div className={isRTL ? "text-right" : ""}>
-          <h1 className="text-2xl font-semibold">{t("dashboard")}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{t("dashboard")}</h1>
           <p className="text-sm text-muted-foreground">
-            {language === "ur" ? "Accounting-grade overview" : "Accounting-grade overview"}
+            {t("dashboardSubtitle")}
           </p>
         </div>
         <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
           {quickActions.map((action) => (
-            <Link key={action.url} href={action.url}>
-              <Button className={action.color} data-testid={`button-quick-${action.url.split("/").pop()}`}>
+            <Button
+              key={action.url}
+              asChild
+              variant={action.variant}
+              className={action.variant === "outline" ? "bg-card" : ""}
+              data-testid={`button-quick-${action.url.split("/").pop()}`}
+            >
+              <Link href={action.url} aria-label={action.title}>
                 <action.icon className="h-4 w-4" />
                 <span className="hidden sm:inline">{action.title}</span>
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           ))}
         </div>
       </div>
 
-      <Card>
-        <CardContent className="pt-6">
-          <div className={isRTL ? "direction-rtl" : ""}>
-            <Label className={isRTL ? "font-urdu" : ""}>Date Range</Label>
-            <DateRangeFilter value={range} onChange={setRange} />
+      {alerts.length + staleOpenPasses.length > 0 && (
+        <div
+          role="alert"
+          className={`rounded-lg border p-4 space-y-2 ${
+            hasCritical ? "border-destructive/50 bg-destructive/5" : "border-amber-500/50 bg-amber-500/5"
+          } ${isRTL ? "text-right" : ""}`}
+        >
+          <div className={`flex items-center gap-2 font-semibold ${isRTL ? "flex-row-reverse" : ""}`}>
+            <AlertTriangle className={`h-4 w-4 ${hasCritical ? "text-destructive" : "text-amber-500"}`} />
+            {t("needsAttention")}
           </div>
-        </CardContent>
-      </Card>
+          {alerts.map((alert) => (
+            <p
+              key={alert.key}
+              className={`text-sm ${alert.severity === "critical" ? "text-destructive" : ""}`}
+            >
+              {alert.message}
+            </p>
+          ))}
+          {staleOpenPasses.length > 0 && (
+            <div className={`flex flex-wrap items-center gap-2 text-sm ${isRTL ? "flex-row-reverse" : ""}`}>
+              <span>{t("staleOpenPasses")}:</span>
+              {staleOpenPasses.map((pass) => (
+                <Link
+                  key={pass.id}
+                  href={`/gate-passes/${pass.id}`}
+                  className="rounded-md border bg-background px-2 py-0.5 font-mono text-xs hover:bg-muted/50"
+                >
+                  {pass.number} · {pass.vehicleNo || "-"} · {format(new Date(pass.issuedAt), "dd MMM HH:mm")}
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {statCards.map((stat, index) => (
-          <Link key={index} href={stat.href}>
-            <Card className="min-h-[120px] cursor-pointer hover:shadow-sm" data-testid={`card-stat-${index}`}>
-              <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  {stat.title}
-                </CardTitle>
-                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bgColor}`}>
-                  <stat.icon className={`h-4 w-4 ${stat.color}`} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                {summaryLoading ? (
-                  <SkeletonBox className="h-8 w-32" />
-                ) : (
-                  <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
-                    {stat.value}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
+      <div className="w-full max-w-xl">
+        <Label className={isRTL ? "font-urdu" : ""}>{t("dateRange")}</Label>
+        <DateRangeFilter value={range} onChange={setRange} />
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {kpiCards.map((stat, index) => (
-          <Link key={index} href={stat.href}>
-            <Card className="min-h-[120px] cursor-pointer hover:shadow-sm" data-testid={`card-kpi-${index}`}>
-              <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  {stat.title}
-                </CardTitle>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {[...statCards, ...kpiCards].map((stat, index) => (
+          <Link
+            key={stat.href}
+            href={stat.href}
+            className="group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            data-testid={index < 4 ? `card-stat-${index}` : `card-kpi-${index - 4}`}
+          >
+            <Card className="h-full transition-[border-color,box-shadow] duration-200 group-hover:border-primary/40 group-hover:shadow-md">
+              <CardHeader className={`flex flex-row items-center justify-between gap-2 space-y-0 pb-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
                 <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${stat.bgColor}`}>
                   <stat.icon className={`h-4 w-4 ${stat.color}`} />
                 </div>
@@ -432,7 +451,7 @@ export default function Dashboard() {
                 {summaryLoading ? (
                   <SkeletonBox className="h-8 w-32" />
                 ) : (
-                  <div className={`text-2xl font-bold font-mono ${isRTL ? "text-right" : ""}`}>
+                  <div className={`text-2xl font-semibold tracking-tight tabular-nums ${isRTL ? "text-right" : ""}`}>
                     {stat.value}
                   </div>
                 )}
@@ -445,12 +464,12 @@ export default function Dashboard() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-base font-semibold">Trial Balance Health</CardTitle>
+            <CardTitle className="text-base font-semibold">{t("trialBalanceHealth")}</CardTitle>
             {summaryLoading ? (
               <SkeletonBox className="h-6 w-20" />
             ) : (
               <Badge variant={summary?.trialBalance.balanced ? "default" : "destructive"}>
-                {summary?.trialBalance.balanced ? "Balanced" : "Mismatch"}
+                {summary?.trialBalance.balanced ? t("balanced") : t("mismatch")}
               </Badge>
             )}
           </CardHeader>
@@ -465,15 +484,15 @@ export default function Dashboard() {
             ) : (
               <>
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span className="text-muted-foreground">Total Debit</span>
+                  <span className="text-muted-foreground">{t("totalDebit")}</span>
                   <span className="font-mono">{money(summary?.trialBalance.debitTotal)}</span>
                 </div>
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span className="text-muted-foreground">Total Credit</span>
+                  <span className="text-muted-foreground">{t("totalCredit")}</span>
                   <span className="font-mono">{money(summary?.trialBalance.creditTotal)}</span>
                 </div>
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span className="text-muted-foreground">Difference</span>
+                  <span className="text-muted-foreground">{t("difference")}</span>
                   <span
                     className={`font-mono ${summary?.trialBalance.balanced ? "text-emerald-600" : "text-destructive"}`}
                   >
@@ -481,9 +500,9 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <div className={`flex items-center justify-between pt-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <span className="text-sm text-muted-foreground">Profit is final</span>
+                  <span className="text-sm text-muted-foreground">{t("profitIsFinal")}</span>
                   <Badge variant={summary?.trialBalance.balanced ? "default" : "secondary"}>
-                    {summary?.trialBalance.balanced ? "Enabled" : "Disabled"}
+                    {summary?.trialBalance.balanced ? t("enabled") : t("disabled")}
                   </Badge>
                 </div>
               </>
@@ -491,35 +510,6 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-base font-semibold">System Alerts</CardTitle>
-            <AlertTriangle className="h-4 w-4 text-destructive" />
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {alertsLoading ? (
-              <div className="space-y-2">
-                <SkeletonBox className="h-4 w-full" />
-                <SkeletonBox className="h-4 w-5/6" />
-                <SkeletonBox className="h-4 w-2/3" />
-              </div>
-            ) : (alertsData?.alerts || []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No alerts.</p>
-            ) : (
-              (alertsData?.alerts || []).map((alert) => (
-                <div key={alert.key} className="flex items-start gap-3">
-                  <Badge variant={alert.severity === "critical" ? "destructive" : "secondary"}>
-                    {alert.severity.toUpperCase()}
-                  </Badge>
-                  <p className="text-sm">{alert.message}</p>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
             <CardTitle className="text-base font-semibold">{t("vehiclesInsideToday")}</CardTitle>
@@ -541,37 +531,6 @@ export default function Dashboard() {
                   </p>
                 </div>
               </Link>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-            <CardTitle className="text-base font-semibold">{t("staleOpenPasses")}</CardTitle>
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {gatePassDashboardLoading ? (
-              <div className="space-y-2">
-                <SkeletonBox className="h-4 w-full" />
-                <SkeletonBox className="h-4 w-2/3" />
-              </div>
-            ) : (gatePassDashboard?.staleOpenPasses || []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">No alerts.</p>
-            ) : (
-              (gatePassDashboard?.staleOpenPasses || []).map((pass) => (
-                <Link
-                  key={pass.id}
-                  href={`/gate-passes/${pass.id}`}
-                  className={`flex items-center justify-between gap-3 rounded-md border p-2 hover:bg-muted/50 ${isRTL ? "flex-row-reverse" : ""}`}
-                >
-                  <span className="font-mono text-sm font-medium">{pass.number}</span>
-                  <span className="text-sm text-muted-foreground">{pass.vehicleNo || "-"}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {format(new Date(pass.issuedAt), "dd MMM HH:mm")}
-                  </span>
-                </Link>
-              ))
             )}
           </CardContent>
         </Card>
@@ -600,6 +559,7 @@ export default function Dashboard() {
           <Suspense fallback={activityFallback}>
             <DashboardActivitySection
               dayBookRows={dayBookRows}
+              dayBookDate={details?.dayBook.date}
               dayBookLoading={detailsLoading}
               isRTL={isRTL}
               money={money}

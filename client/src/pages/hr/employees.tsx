@@ -1164,7 +1164,7 @@ export default function EmployeesPage() {
             )}
 
             {/* Ledger Table */}
-            <div className="border rounded-lg bg-white overflow-auto">
+            <div className="border rounded-lg bg-card overflow-auto">
               <div className="min-w-[780px]">
                 <div className="grid grid-cols-[90px,1fr,110px,110px,130px,60px] bg-muted/60 text-[11px] font-semibold uppercase tracking-wide border-b">
                   <button
@@ -1200,7 +1200,7 @@ export default function EmployeesPage() {
                         key={row.id}
                         className={clsx(
                           "grid grid-cols-[90px,1fr,110px,110px,130px,60px] text-sm border-b last:border-b-0",
-                          idx % 2 === 0 ? "bg-white" : "bg-muted/20",
+                          idx % 2 === 0 ? "bg-card" : "bg-muted/20",
                           row.cleared && "opacity-60",
                         )}
                       >

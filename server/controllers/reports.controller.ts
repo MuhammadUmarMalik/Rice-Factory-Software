@@ -91,6 +91,7 @@ export async function salesReport(req: Request, res: Response) {
     const customerId = parseOptionalInt(req.query.customerId);
     const productId = parseOptionalInt(req.query.productId);
     const status = req.query.paymentStatus ? paymentStatusSchema.parse(req.query.paymentStatus) : undefined;
+    const partyType = req.query.partyType ? z.enum(["customer", "supplier", "employee"]).parse(req.query.partyType) : undefined;
     assertDateRange(fromDate, toDate);
     const report = await reportsService.getSalesReport({
       fromDate,
@@ -98,6 +99,7 @@ export async function salesReport(req: Request, res: Response) {
       customerId,
       productId,
       paymentStatus: status,
+      partyType,
     });
     res.json(report);
   } catch (error) {

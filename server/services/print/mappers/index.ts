@@ -256,7 +256,12 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
   };
 
   const sections = buildSaleInvoiceSummary({
-    Customer: customer?.name || "-",
+    // Fixed summary label; a supplier/employee party is tagged after the name.
+    Customer: customer?.name
+      ? sale.partyType && sale.partyType !== "customer"
+        ? `${customer.name} (${sale.partyType === "supplier" ? "Supplier" : "Employee"})`
+        : customer.name
+      : "-",
     "Invoice Date": fmtDate(sale.saleDate),
     "Item Name": unique(items.map((it) => productMap.get(it.productId)?.name || `#${it.productId}`)),
     "Total Bag": saleBags > 0 ? num(saleBags) : "",
@@ -271,7 +276,7 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     })),
     Subtotal: money(sale.subtotal),
     "Bardana Charges": chargeValue("Bardana"),
-    "Loading Charges": chargeValue("Loading"),
+    Loading: chargeValue("Loading"),
     "Stitching Charges": chargeValue("Stitching"),
     "Grand Total": money(sale.totalAmount),
   });
@@ -285,6 +290,7 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     meta: baseMeta(ctx, {
       filters: {
         Vehicle: sale.vehicleNumber || "-",
+        Marka: (sale as any).marka || "-",
         GatePass: sale.gatePassNumber || "-",
         ...(gatePassDetailText ? { "Gate Pass Details": gatePassDetailText } : {}),
       },
@@ -355,7 +361,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
       case "freight":
         return "Freight";
       case "loading_filling":
-        return "Loading / Unloading";
+        return "Unloading";
       case "market_fee":
         return "Market Fee";
       case "mitha_sukri":
@@ -1225,6 +1231,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
     customerId: params.customerId ? Number(params.customerId) : undefined,
     productId: params.productId ? Number(params.productId) : undefined,
     paymentStatus: params.paymentStatus,
+    partyType: params.partyType || undefined,
   });
   // Use the report's own totals rather than re-summing here — a second
   // accumulator is a second source of truth that can drift from the screen.
@@ -1233,7 +1240,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
   const columns = buildColumns([
     { key: "invoice", label: "Sales No" },
     { key: "date", label: "Date", width: "14%" },
-    { key: "customer", label: "Customer" },
+    { key: "customer", label: "Party" },
     { key: "subtotal", label: "Subtotal", align: "right" },
     { key: "discount", label: "Discount", align: "right" },
     { key: "tax", label: "Tax", align: "right" },
@@ -1247,7 +1254,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
   const rows = report.rows.map((r) => ({
     invoice: r.invoiceNumber,
     date: fmtDate(r.saleDate),
-    customer: r.customerName,
+    customer: r.partyType === "customer" ? r.customerName : `${r.customerName} (${r.partyType})`,
     subtotal: money(r.subtotal),
     discount: money(r.discount),
     tax: money(r.tax),
@@ -1268,6 +1275,7 @@ export async function mapSalesReport(params: Record<string, any>, ctx: PrintCont
       dateTo: params.toDate,
       filters: {
         Customer: filterLabel(params.customerId, await lookupAccountName(params.customerId)),
+        "Party Type": filterTextLabel(params.partyType),
         Product: filterLabel(params.productId, await lookupProductName(params.productId)),
         Status: filterTextLabel(params.paymentStatus),
       },

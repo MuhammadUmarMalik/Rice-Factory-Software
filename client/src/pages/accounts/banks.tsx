@@ -1,3 +1,5 @@
+import { PAKISTAN_BANK_OPTIONS } from "@/lib/pakistan-banks";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useState } from "react";
 import { Plus, Edit, Eye, Building2, Wallet, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -191,7 +193,7 @@ export default function BanksPage() {
       align: "center",
       render: (item) => (
         <div className="flex items-center justify-center gap-2">
-          <Button
+          <Button aria-label={t("view")}
             size="icon"
             variant="ghost"
             onClick={(e) => {
@@ -202,7 +204,7 @@ export default function BanksPage() {
           >
             <Eye className="h-4 w-4" />
           </Button>
-          <Button
+          <Button aria-label={t("edit")}
             size="icon"
             variant="ghost"
             onClick={(e) => {
@@ -215,7 +217,7 @@ export default function BanksPage() {
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button
+              <Button aria-label={t("delete")}
                 size="icon"
                 variant="ghost"
                 onClick={(e) => e.stopPropagation()}
@@ -297,7 +299,15 @@ export default function BanksPage() {
                     <FormItem>
                       <FormLabel>{language === "ur" ? "بینک کا نام" : "Bank Name"}</FormLabel>
                       <FormControl>
-                        <Input {...field} data-testid="input-name" />
+                        <SearchableSelect
+                          options={PAKISTAN_BANK_OPTIONS}
+                          value={field.value}
+                          onValueChange={field.onChange}
+                          allowCustom
+                          placeholder={language === "ur" ? "بینک منتخب کریں" : "Select bank"}
+                          searchPlaceholder={language === "ur" ? "بینک تلاش کریں..." : "Search bank or type a name..."}
+                          customEmptyLabel={language === "ur" ? "یہ نام استعمال کریں" : "Use this name"}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

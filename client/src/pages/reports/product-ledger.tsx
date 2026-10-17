@@ -206,7 +206,7 @@ export default function ProductLedgerPage({ initialType }: ProductLedgerPageProp
           )}
         </CardHeader>
         <CardContent className="overflow-auto">
-          <div className="min-w-[900px] border rounded-lg bg-white">
+          <div className="min-w-[900px] border rounded-lg bg-card">
             {/* Header */}
             <div className="grid grid-cols-[90px,100px,100px,1fr,80px,90px,90px,90px,90px,100px] bg-muted/60 text-[11px] font-semibold uppercase tracking-wide border-b">
               <div className="px-2 py-2 border-r">{isRTL ? "تاریخ" : "Date"}</div>
@@ -253,7 +253,7 @@ export default function ProductLedgerPage({ initialType }: ProductLedgerPageProp
                       key={`${entry.voucherType}-${entry.id}-${idx}`}
                       className={clsx(
                         "grid grid-cols-[90px,100px,100px,1fr,80px,90px,90px,90px,90px,100px] text-sm border-b last:border-b-0",
-                        idx % 2 === 0 ? "bg-white" : "bg-muted/20",
+                        idx % 2 === 0 ? "bg-card" : "bg-muted/20",
                       )}
                     >
                       <div className="px-2 py-2 border-r text-xs text-muted-foreground font-mono">
