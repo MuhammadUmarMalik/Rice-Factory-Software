@@ -268,3 +268,45 @@ export function buildProcessingNarration(input: {
   ]);
   return preferManualNarration(input.notes, fallback);
 }
+
+/** Lead-in phrases that exist only to introduce a party name in generated narrations. */
+const PARTY_NARRATION_LEAD_INS = [
+  "Sale to ",
+  "Purchase from ",
+  "Payment received from ",
+  "Payment made to ",
+  "Received from ",
+  "Paid to ",
+  "Sales return from ",
+  "Purchase return to ",
+];
+
+/**
+ * Removes a ledger account's own name from a narration line. Ledger reports
+ * already show the account name in their header, so repeating it on every row
+ * is noise. Lead-in phrases that only exist to introduce that name (for example
+ * "Sale to") are dropped along with it.
+ */
+export function stripLedgerAccountName(narration: unknown, accountName: unknown): string {
+  const text = cleanNarrationSegment(narration);
+  const name = cleanNarrationSegment(accountName);
+  if (!text || !name) return text;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const namePattern = new RegExp(`(?<![\\w])${escaped}(?![\\w])`, "gi");
+  const segments = text
+    .split(" — ")
+    .map((segment) => {
+      let result = segment;
+      for (const leadIn of PARTY_NARRATION_LEAD_INS) {
+        const leadPattern = new RegExp(`^${leadIn.trim()}\\s+${escaped}(?![\\w])`, "i");
+        if (leadPattern.test(result)) {
+          result = result.replace(leadPattern, "");
+          break;
+        }
+      }
+      result = result.replace(namePattern, "");
+      return result.replace(/\s{2,}/g, " ").replace(/\s+([,.;:])/g, "$1").trim();
+    })
+    .filter((segment) => Boolean(segment) && segment !== "-");
+  return segments.length ? segments.join(" — ") : "-";
+}

@@ -24,6 +24,9 @@ import { useMutation } from "@tanstack/react-query";
 import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { createReceipt } from "@/api/cash.api";
 import { useToast } from "@/hooks/use-toast";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { usePartyNames } from "@/hooks/use-party-names";
+import { todayLocal } from "@/utils/dateRanges";
 
 const schema = z.object({
   receiptDate: z.string().min(1, "Date is required"),
@@ -34,7 +37,7 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = todayLocal;
 
 export function CashReceiptForm({
   open,
@@ -57,6 +60,8 @@ export function CashReceiptForm({
       description: "",
     },
   });
+
+  const { options: partyOptions } = usePartyNames();
 
   const mutate = useMutation({
     mutationKey: ["/api/cash/receipts", "create"],
@@ -123,7 +128,17 @@ export function CashReceiptForm({
                 <FormItem>
                   <FormLabel>Received From</FormLabel>
                   <FormControl>
-                    <Input placeholder="Name" {...field} />
+                    <SearchableSelect
+                      options={partyOptions}
+                      value={field.value || undefined}
+                      onValueChange={field.onChange}
+                      placeholder="Select name"
+                      searchPlaceholder="Search customer / supplier / employee..."
+                      emptyMessage="No names found."
+                      allowCustom
+                      customEmptyLabel="Use this name"
+                      autoFocus
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
