@@ -9,7 +9,6 @@ import { LanguageProvider, useLanguage } from "@/contexts/language-context";
 import { ThemeProvider } from "@/contexts/theme-context";
 import { useAuthStore } from "@/stores/auth.store";
 import { fetchWithAuth } from "@/lib/authFetch";
-import { ensureMonoFonts } from "@/lib/fonts";
 import { RouteSkeleton } from "@/components/loading/route-skeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Roles, can, readAccountsRoles, readPayrollRoles, readProductsRoles } from "@/lib/roles";
@@ -55,6 +54,7 @@ const GatePassDetail = withRoles(lazy(() => import("@/pages/gate-passes/detail")
 const Sales = withRoles(lazy(() => import("@/pages/sales")), Roles.sales);
 const Settings = withRoles(lazy(() => import("@/pages/settings")), Roles.settings);
 const UsersAdminPage = withRoles(lazy(() => import("@/pages/admin/users")), Roles.adminOnly);
+const AuditLogPage = withRoles(lazy(() => import("@/pages/admin/audit-log")), Roles.settings);
 const Customers = withRoles(lazy(() => import("@/pages/accounts/customers")), readAccountsRoles);
 const Suppliers = withRoles(lazy(() => import("@/pages/accounts/suppliers")), readAccountsRoles);
 const Banks = withRoles(lazy(() => import("@/pages/accounts/banks")), readAccountsRoles);
@@ -63,6 +63,7 @@ const PurchaseReport = withRoles(lazy(() => import("@/pages/reports/purchases"))
 const SalesReport = withRoles(lazy(() => import("@/pages/reports/sales")), Roles.sales);
 const BardanaReport = withRoles(lazy(() => import("@/pages/reports/bardana")), Roles.purchasing);
 const LessReport = withRoles(lazy(() => import("@/pages/reports/less")), Roles.purchasing);
+const RecoveryReport = withRoles(lazy(() => import("@/pages/reports/recovery")), Roles.purchasing);
 const Ledger = withRoles(lazy(() => import("@/pages/reports/ledger")), Roles.finance);
 const ProductLedger = withRoles(lazy(() => import("@/pages/reports/product-ledger")), Roles.purchasing);
 const TrialBalance = withRoles(lazy(() => import("@/pages/reports/trial-balance")), Roles.finance);
@@ -85,6 +86,7 @@ const DayBookSalesReturns = withRoles(lazy(() => import("@/pages/reports/day-boo
 const DayBookPurchaseReturns = withRoles(lazy(() => import("@/pages/reports/day-book-purchase-returns")), Roles.finance);
 const Receipts = withRoles(lazy(() => import("@/pages/receipts")), Roles.finance);
 const PaymentsPage = withRoles(lazy(() => import("@/pages/payments")), Roles.finance);
+const ChequesPage = withRoles(lazy(() => import("@/pages/cheques")), Roles.finance);
 const Journal = withRoles(lazy(() => import("@/pages/journal")), Roles.finance);
 const EmployeesPage = withRoles(lazy(() => import("@/pages/hr/employees")), Roles.all);
 const PayrollPage = withRoles(lazy(() => import("@/pages/hr/payroll")), readPayrollRoles);
@@ -113,6 +115,7 @@ function Router() {
         <Route path="/purchases" component={Purchases} />
         <Route path="/receipts" component={Receipts} />
         <Route path="/payments" component={PaymentsPage} />
+        <Route path="/cheques" component={ChequesPage} />
         <Route path="/expenses" component={ExpensesPage} />
         <Route path="/cash" component={CashDashboard} />
         <Route path="/journal" component={Journal} />
@@ -123,6 +126,7 @@ function Router() {
         <Route path="/sales" component={Sales} />
         <Route path="/settings" component={Settings} />
         <Route path="/admin/users" component={UsersAdminPage} />
+        <Route path="/admin/audit-log" component={AuditLogPage} />
         <Route path="/accounts/customers" component={Customers} />
         <Route path="/accounts/suppliers" component={Suppliers} />
         <Route path="/accounts/banks" component={Banks} />
@@ -131,6 +135,7 @@ function Router() {
         <Route path="/reports/sales" component={SalesReport} />
         <Route path="/reports/bardana" component={BardanaReport} />
         <Route path="/reports/less" component={LessReport} />
+        <Route path="/reports/recovery" component={RecoveryReport} />
         <Route path="/reports/period-purchases" component={PeriodPurchases} />
         <Route path="/reports/period-sales" component={PeriodSales} />
         <Route path="/reports/gross-profit" component={GrossProfit} />
@@ -187,10 +192,6 @@ export default function AuthenticatedApp() {
   // those events onto React Query cache invalidation. One socket, mounted once,
   // app-wide — every window stays in sync without polling.
   useRealtime();
-
-  useEffect(() => {
-    ensureMonoFonts();
-  }, []);
 
   useEffect(() => {
     let alive = true;

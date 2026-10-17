@@ -405,9 +405,9 @@ export default function ReceiptsPage() {
     } },
     { key: "actions", title: t("actions"), render: (r) => (
       <div className="flex gap-2">
-        <Button size="icon" variant="ghost" onClick={() => handleView(r.id)}><Eye className="h-4 w-4" /></Button>
-        <Button size="icon" variant="ghost" onClick={() => handleEdit(r.id)}><Pencil className="h-4 w-4" /></Button>
-        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(r.id)}><Trash2 className="h-4 w-4" /></Button>
+        <Button aria-label={t("view")} size="icon" variant="ghost" onClick={() => handleView(r.id)}><Eye className="h-4 w-4" /></Button>
+        <Button aria-label={t("edit")} size="icon" variant="ghost" onClick={() => handleEdit(r.id)}><Pencil className="h-4 w-4" /></Button>
+        <Button aria-label={t("delete")} size="icon" variant="ghost" onClick={() => deleteMutation.mutate(r.id)}><Trash2 className="h-4 w-4" /></Button>
       </div>
     ) },
   ];
@@ -443,7 +443,7 @@ export default function ReceiptsPage() {
           <DialogHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label="Back">
+                <Button variant="ghost" size="icon" onClick={() => setIsDialogOpen(false)} aria-label={t("back")}>
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
                 <DialogTitle>{dialogTitle}</DialogTitle>

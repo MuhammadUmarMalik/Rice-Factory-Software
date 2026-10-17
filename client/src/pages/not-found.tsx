@@ -1,21 +1,23 @@
-import { Card, CardContent } from "@/components/ui/card";
-import { AlertCircle } from "lucide-react";
+import { Link } from "wouter";
+import Compass from "lucide-react/dist/esm/icons/compass";
+import { Button } from "@/components/ui/button";
+import { useLanguage } from "@/contexts/language-context";
 
 export default function NotFound() {
+  const { t, isRTL } = useLanguage();
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
-      <Card className="w-full max-w-md mx-4">
-        <CardContent className="pt-6">
-          <div className="flex mb-4 gap-2">
-            <AlertCircle className="h-8 w-8 text-red-500" />
-            <h1 className="text-2xl font-bold text-gray-900">404 Page Not Found</h1>
-          </div>
-
-          <p className="mt-4 text-sm text-gray-600">
-            Did you forget to add the page to the router?
-          </p>
-        </CardContent>
-      </Card>
+    <div className={`flex min-h-full w-full flex-col items-center justify-center gap-4 p-6 text-center ${isRTL ? "font-urdu" : ""}`}>
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-muted">
+        <Compass className="h-7 w-7 text-muted-foreground" aria-hidden="true" />
+      </div>
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-muted-foreground">404</p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("pageNotFound")}</h1>
+        <p className="max-w-sm text-sm text-muted-foreground">{t("pageNotFoundHint")}</p>
+      </div>
+      <Button asChild>
+        <Link href="/">{t("goHome")}</Link>
+      </Button>
     </div>
   );
 }

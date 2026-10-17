@@ -45,8 +45,8 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { variant?: DialogVariant }
->(({ className, children, onOpenAutoFocus, onCloseAutoFocus, variant = "page", ...props }, ref) => {
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { variant?: DialogVariant; bare?: boolean }
+>(({ className, children, onOpenAutoFocus, onCloseAutoFocus, variant = "page", bare = false, ...props }, ref) => {
   const focusHandlers = useDialogAutoFocus({ onOpenAutoFocus, onCloseAutoFocus })
   if (variant === "page") {
     // Falls back to a fixed full-screen page when there's no app shell (e.g. login).
@@ -58,15 +58,16 @@ const DialogContent = React.forwardRef<
           <DialogPrimitive.Content
             ref={ref}
             className={cn(
-              "inset-0 z-40 overflow-y-auto bg-muted bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.08),transparent_60%)] focus:outline-none duration-200 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
-              layer ? "absolute" : "fixed"
+              "inset-0 z-40 overflow-y-auto focus:outline-none duration-200 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+              layer ? "absolute" : "fixed",
+              bare ? "bg-background" : "bg-muted bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.08),transparent_60%)]"
             )}
             onOpenAutoFocus={focusHandlers.onOpenAutoFocus}
             onCloseAutoFocus={focusHandlers.onCloseAutoFocus}
             {...props}
           >
             <div className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-              <div className="mx-auto flex h-12 max-w-6xl items-center justify-between px-4 sm:px-6">
+              <div className={cn("mx-auto flex h-12 items-center justify-between px-4 sm:px-6", !bare && "max-w-6xl")}>
                 <DialogPrimitive.Close className="inline-flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <ArrowLeft className="h-4 w-4 rtl:rotate-180" />
                   Back
@@ -74,6 +75,10 @@ const DialogContent = React.forwardRef<
                 <kbd className="hidden rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline">Esc</kbd>
               </div>
             </div>
+            {bare ? (
+              // Full-width working page (long entry forms): no card, content uses the whole area.
+              <div className={cn("flex w-full flex-col gap-6 bg-background px-4 pt-5 sm:px-6", cardClass)}>{children}</div>
+            ) : (
             <div className="px-3 py-6 sm:px-6 sm:py-10">
               <div
                 className={cn(
@@ -84,6 +89,7 @@ const DialogContent = React.forwardRef<
                 {children}
               </div>
             </div>
+            )}
           </DialogPrimitive.Content>
         </DialogPortal>
       </VariantContext.Provider>

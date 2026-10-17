@@ -135,6 +135,7 @@ export function DataTable<T extends Record<string, any>>({
               }}
               className={`${isRTL ? "pr-9 pl-4 text-right font-urdu" : "pl-9 pr-4"}`}
               data-testid={`${testIdPrefix}-search`}
+              aria-label={searchPlaceholder || t("search")}
             />
           </div>
           )}
@@ -159,10 +160,10 @@ export function DataTable<T extends Record<string, any>>({
         </div>
       )}
 
-      <div className="rounded-lg border border-border overflow-hidden">
+      <div className="rounded-lg border border-border bg-card overflow-hidden shadow-sm">
         <Table>
           <TableHeader>
-            <TableRow className="bg-muted/50">
+            <TableRow className="bg-muted/60 hover:bg-muted/60">
               {columns.map((column, index) => (
                 <TableHead
                   key={index}
@@ -259,6 +260,7 @@ export function DataTable<T extends Record<string, any>>({
               disabled={currentPage === 1}
               onClick={() => setCurrentPage(1)}
               data-testid={`${testIdPrefix}-first`}
+              aria-label={t("firstPage")}
             >
               {isRTL ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
             </Button>
@@ -269,6 +271,7 @@ export function DataTable<T extends Record<string, any>>({
               disabled={currentPage === 1}
               onClick={() => setCurrentPage((prev) => prev - 1)}
               data-testid={`${testIdPrefix}-prev`}
+              aria-label={t("previousPage")}
             >
               {isRTL ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
             </Button>
@@ -296,6 +299,7 @@ export function DataTable<T extends Record<string, any>>({
               disabled={currentPage === totalPages}
               onClick={() => setCurrentPage((prev) => prev + 1)}
               data-testid={`${testIdPrefix}-next`}
+              aria-label={t("nextPage")}
             >
               {isRTL ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             </Button>
@@ -306,6 +310,7 @@ export function DataTable<T extends Record<string, any>>({
               disabled={currentPage === totalPages}
               onClick={() => setCurrentPage(totalPages)}
               data-testid={`${testIdPrefix}-last`}
+              aria-label={t("lastPage")}
             >
               {isRTL ? <ChevronsLeft className="h-4 w-4" /> : <ChevronsRight className="h-4 w-4" />}
             </Button>

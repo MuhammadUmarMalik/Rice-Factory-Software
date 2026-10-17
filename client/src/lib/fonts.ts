@@ -1,5 +1,4 @@
 const GOOGLE_FONTS = {
-  mono: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap",
   urdu:
     "https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;600&family=Noto+Sans+Arabic:wght@400;600&display=swap",
 } as const;
@@ -16,11 +15,6 @@ function ensureStylesheet(id: string, href: string) {
     link.media = "all";
   };
   document.head.appendChild(link);
-}
-
-// Keep fonts scoped to the screens that need them to protect /login performance.
-export function ensureMonoFonts() {
-  ensureStylesheet("font-jetbrains-mono", GOOGLE_FONTS.mono);
 }
 
 export function ensureUrduFonts() {

@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { invalidateApi, invalidationGroups } from "@/api/invalidation";
-import { Plus, Calculator, ArrowLeft } from "lucide-react";
+import { Plus, Calculator, Trash2 } from "lucide-react";
+import { FormSection, SummaryRow } from "@/components/form-section";
+import { formatQtyByUnit } from "@/lib/units";
+import { formatMoney } from "@/utils/formatters";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/contexts/language-context";
@@ -116,7 +119,6 @@ const purchaseFormSchema = z.object({
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().min(1, "Product is required"),
-    marka: z.string().optional(),
     bags: z.string().default("0"),
     fillingPerBagKg: z.string().default("0"),
     looseKgs: z.string().default("0"),
@@ -203,7 +205,7 @@ export default function PurchasesPage() {
       paidAmount: "0",
       paymentMode: "cash",
       notes: "",
-      items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
+      items: [{ productId: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "mound" }],
       charges: defaultCharges,
     },
   });
@@ -245,14 +247,13 @@ export default function PurchasesPage() {
       const weightKg = item.weightG / 1000;
       return {
         productId: String(item.productId),
-        marka: "",
         bags: String(bags),
         fillingPerBagKg: bags > 0 ? String(Number((weightKg / bags).toFixed(3))) : "0",
         looseKgs: bags > 0 ? "0" : String(Number(weightKg.toFixed(3))),
         lessKg: "0",
         bardanaKatKg: "0",
         rate: "0",
-        rateUnit: "kg" as const,
+        rateUnit: "mound" as const,
       };
     });
     if (items.length > 0) {
@@ -320,6 +321,7 @@ export default function PurchasesPage() {
     billNo: data.billNo || nextBill?.billNo || undefined,
     bookNo: data.bookNo,
     supplierId: parseInt(data.supplierId),
+    vehicleNumber: data.vehicleNumber || null,
     purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
     brokerId: data.brokerId && data.brokerId !== "none" ? parseInt(data.brokerId) : null,
     paidAmount: data.paidAmount || "0",
@@ -327,7 +329,6 @@ export default function PurchasesPage() {
     moundBaseKg: moundBaseKg.toString(),
     items: data.items.map((item, idx) => ({
       productId: parseInt(item.productId),
-      marka: item.marka,
       serialNo: idx + 1,
       bags: item.bags || "0",
       fillingPerBagKg: item.fillingPerBagKg || "0",
@@ -398,7 +399,7 @@ export default function PurchasesPage() {
       paidAmount: "0",
       paymentMode: "cash",
       notes: "",
-      items: [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }],
+      items: [{ productId: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "mound" }],
       charges: defaultCharges,
     });
     openDialog("purchaseForm");
@@ -415,7 +416,6 @@ export default function PurchasesPage() {
       items.length > 0
         ? items.map((item: any) => ({
             productId: String(item.productId ?? ""),
-            marka: item.marka || "",
             bags: item.bags || "0",
             fillingPerBagKg: item.fillingPerBagKg || "0",
             looseKgs: item.looseKgs || "0",
@@ -424,7 +424,7 @@ export default function PurchasesPage() {
             rate: item.rate || "0",
             rateUnit: (item.rateUnit as PurchaseFormData["items"][number]["rateUnit"]) || "kg",
           }))
-        : [{ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" }];
+        : [{ productId: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "mound" }];
     const chargesByType = new Map(
       charges.map((c: any) => [
         c.type,
@@ -604,6 +604,7 @@ export default function PurchasesPage() {
       netWeight,
       moundQty,
       moundRemainderKg,
+      billingQty,
       amount,
     };
   });
@@ -638,7 +639,7 @@ export default function PurchasesPage() {
   const chargeLabelMap: Record<string, string> = {
     weight: "Weight Charges",
     freight: "Freight",
-    loading_filling: "Loading / Unloading",
+    loading_filling: "Unloading Charges",
     market_fee: "Market Fee",
     mitha_sukri: "Mitha Sukri",
     other: "Other Charges",
@@ -661,6 +662,21 @@ export default function PurchasesPage() {
     .filter((c) => c.amount !== 0);
   const amountInWords = useMemo(() => `${numberToWords(Math.round(grandAmount))} only`, [grandAmount]);
   const isViewMode = purchaseMode === "view";
+  const balanceDue = grandAmount - (parseFloat(form.watch("paidAmount") || "0") || 0);
+  const chargeLabels: Record<string, string> = {
+    weight: "Weight Charges",
+    freight: "Freight",
+    loading_filling: "Unloading Charges",
+    market_fee: "Market Fee",
+    mitha_sukri: "Mitha Sukri",
+    other: "Other Charges",
+    phone_analysis: "Phone / Analysis",
+    brokerage: "Brokerage",
+    commission: "Commission",
+    bardana: bardanaLabel,
+    broken_allowance: "Broken Allowance",
+    accountant_clerk: "Accountant / Clerk",
+  };
 
   return (
     <>
@@ -683,24 +699,18 @@ export default function PurchasesPage() {
           }
         }}
       >
-        <DialogContent
-          className={`${isViewMode ? "sm:max-w-3xl w-full max-h-[80vh]" : "sm:max-w-[96vw] max-w-[96vw] w-[96vw] h-[95vh]"} overflow-y-auto`}
-        >
+        <DialogContent bare={!isViewMode} className={isViewMode ? "sm:max-w-3xl" : "max-w-none"}>
           <DialogHeader>
-            <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-              <div className="flex items-center gap-2">
-                {purchaseMode !== "view" && (
-                  <Button variant="ghost" size="icon" onClick={handleCloseDialog} aria-label="Back">
-                    <ArrowLeft className="h-4 w-4" />
-                  </Button>
-                )}
-                <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-                  {purchaseMode === "view"
-                    ? (language === "ur" ? "Purchase View" : "Purchase View")
-                    : purchaseMode === "edit"
-                      ? (language === "ur" ? "Edit Purchase" : "Edit Purchase")
-                      : (language === "ur" ? "New Purchase" : "New Purchase")}
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-1">
+                <DialogTitle className={`text-xl tracking-tight ${isRTL ? "font-urdu" : ""}`}>
+                  {purchaseMode === "view" ? "Purchase View" : purchaseMode === "edit" ? "Edit Purchase" : "New Purchase"}
                 </DialogTitle>
+                {purchaseMode !== "view" && (
+                  <p className="text-sm text-muted-foreground">
+                    Bill <span className="font-mono">{form.watch("billNo") || nextBill?.billNo || "Auto"}</span> · {form.watch("purchaseDate")}
+                  </p>
+                )}
               </div>
               {purchaseMode === "view" && currentPurchase?.id && (
                 <PrintActions
@@ -715,538 +725,546 @@ export default function PurchasesPage() {
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+            <form onSubmit={form.handleSubmit(handleSubmit)}>
               {purchaseMode !== "view" && (
-                <fieldset>
-                {purchaseMode === "create" && (
-                  <div className="mb-4 space-y-2">
-                    <label htmlFor="linked-gate-pass" className="text-sm font-medium">{t("startFromGatePass")}</label>
-                    <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-                      <Select
-                        value={linkedGatePassId ? String(linkedGatePassId) : "none"}
-                        onValueChange={(value) => setLinkedGatePassId(value === "none" ? null : Number(value))}
-                      >
-                        <SelectTrigger id="linked-gate-pass" data-testid="select-linked-gate-pass" className="flex-1">
-                          <SelectValue placeholder={t("selectGatePass")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
-                          {openInPasses.map((pass) => (
-                            <SelectItem key={pass.id} value={String(pass.id)}>
-                              {pass.number} · {pass.vehicleNo || "-"} · {pass.partyName || "-"} · {pass.totalBags} {t("bags")}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {linkedGatePassId != null && (
-                        <Button type="button" variant="outline" onClick={() => setLinkedGatePassId(null)}>
-                          Clear
-                        </Button>
-                      )}
-                    </div>
-                    {openInPasses.length === 0 && (
-                      <p className="text-xs text-muted-foreground">{t("noOpenPasses")}</p>
-                    )}
-                  </div>
-                )}
-                <div className="grid grid-cols-1 gap-4">
-                <FormField
-                  control={form.control}
-                  name="supplierId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("supplier")}</FormLabel>
-                      <SearchableSelect
-                        options={suppliers.map((s) => ({
-                          value: s.id.toString(),
-                          label: s.name,
-                          sublabel: s.nameUrdu || undefined,
-                        }))}
-                        value={field.value || undefined}
-                        onValueChange={field.onChange}
-                        placeholder="Select supplier"
-                        searchPlaceholder="Search supplier..."
-                        emptyMessage="No suppliers found."
-                        autoFocus
-                      />
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormField
-                  control={form.control}
-                  name="purchaseDate"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("purchaseDate")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="date" max={todayString} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="vehicleNumber"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("vehicleNumber")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" readOnly={linkedGatePassId != null} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="brokerId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("broker")} (optional)</FormLabel>
-                      <SearchableSelect
-                        options={[
-                          { value: "none", label: "None" },
-                          ...suppliers.map((s) => ({
-                            value: s.id.toString(),
-                            label: s.name,
-                            sublabel: s.nameUrdu || undefined,
-                          })),
-                        ]}
-                        value={field.value || undefined}
-                        onValueChange={field.onChange}
-                        placeholder="Select broker"
-                        searchPlaceholder="Search broker..."
-                        emptyMessage="No brokers found."
-                      />
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormField
-                  control={form.control}
-                  name="billNo"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Bill No</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder={nextBill?.billNo || "Auto"} readOnly />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="bookNo"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Book No</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="Book#" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="brokerCommissionPercent"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("brokerCommission")} (%)</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-commission" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="paidAmount"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("paidAmount")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-paid" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="paymentMode"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Payment Mode</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Payment mode" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="cash">Cash</SelectItem>
-                          <SelectItem value="credit">Credit</SelectItem>
-                          <SelectItem value="bank">Bank Transfer</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              <FormField
-                control={form.control}
-                name="notes"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Notes</FormLabel>
-                    <FormControl>
-                      <Textarea {...field} rows={2} data-testid="input-notes" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <div className="space-y-4">
-                <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                  <h3 className="font-medium">Items</h3>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={isViewMode}
-                    onClick={() => !isViewMode && append({ productId: "", marka: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "kg" })}
-                    data-testid="button-add-item"
-                  >
-                    <Plus className="h-4 w-4" />
-                    {t("add")}
-                  </Button>
-                </div>
-                
-                <div className="space-y-3">
-                  {fields.map((field, index) => {
-                    const selectedProductId = form.watch(`items.${index}.productId`);
-                    const unit =
-                      selectedProductId === "__custom__"
-                        ? customProductDrafts[index]?.unit || "unit"
-                        : getUnitForProduct(selectedProductId) || "unit";
-                    const computed = computedItems[index];
-                    return (
-                      <div key={field.id} className="grid grid-cols-12 gap-2 items-end">
-                        <div className="col-span-3">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.productId`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>Product</FormLabel>}
-                                <Select onValueChange={field.onChange} value={field.value ?? ""}>
-                                  <FormControl>
-                                    <SelectTrigger data-testid={`select-product-${index}`}>
-                                      <SelectValue placeholder="Select" />
-                                    </SelectTrigger>
-                                  </FormControl>
-                                  <SelectContent>
-                                    {products.map((p) => (
-                                      <SelectItem key={p.id} value={p.id.toString()}>
-                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.marka`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>Marka</FormLabel>}
-                                <FormControl>
-                                  <Input {...field} />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.bags`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>Bags</FormLabel>}
-                                <FormControl>
-                                  <Input {...field} type="number" step="1" data-testid={`input-bags-${index}`} />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.fillingPerBagKg`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>Filling</FormLabel>}
-                                <FormControl>
-                                  <Input {...field} type="number" step="0.01" />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.looseKgs`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>Kgs</FormLabel>}
-                                <FormControl>
-                                  <Input {...field} type="number" step="0.01" />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.lessKg`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>{lessLabel}</FormLabel>}
-                                <FormControl>
-                                  <Input {...field} type="number" step="0.01" />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.bardanaKatKg`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>{bardanaLabel}</FormLabel>}
-                                <FormControl>
-                                  <Input {...field} type="number" step="0.01" />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.rate`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>Rate</FormLabel>}
-                                <FormControl>
-                                  <Input {...field} type="number" step="0.01" data-testid={`input-rate-${index}`} />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          <FormField
-                            control={form.control}
-                            name={`items.${index}.rateUnit`}
-                            render={({ field }) => (
-                              <FormItem>
-                                {index === 0 && <FormLabel>Unit</FormLabel>}
-                                <Select onValueChange={field.onChange} value={field.value ?? "kg"}>
-                                  <FormControl>
-                                    <SelectTrigger>
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                  </FormControl>
-                                  <SelectContent>
-                                    <SelectItem value="kg">Kg</SelectItem>
-                                    <SelectItem value="mound">Maund</SelectItem>
-                                    <SelectItem value="bag">Bag</SelectItem>
-                                    <SelectItem value="quintal">Quintal</SelectItem>
-                                    <SelectItem value="ton">Ton</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                        <div className="col-span-1">
-                          {index === 0 && <FormLabel>Net (Kg)</FormLabel>}
-                          <Input value={computed?.netWeight?.toFixed(2) ?? "0"} disabled />
-                        </div>
-                        <div className="col-span-1">
-                          {index === 0 && <FormLabel>Amount</FormLabel>}
-                          <Input value={computed?.amount?.toFixed(2) ?? "0"} disabled />
-                        </div>
-                        <div className="col-span-1">
-                          {!isViewMode && fields.length > 1 && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => remove(index)}
-                              data-testid={`button-remove-item-${index}`}
+                <div className="space-y-6">
+                  {/* Entry: what you type, top to bottom in the order the paperwork arrives. */}
+                    <FormSection title={`${t("supplier")} & ${t("vehicleNumber")}`}>
+                      {purchaseMode === "create" && (
+                        <div className="space-y-2 rounded-lg border border-dashed bg-muted/30 p-3">
+                          <label htmlFor="linked-gate-pass" className="text-sm font-medium">{t("startFromGatePass")}</label>
+                          <div className="flex gap-2">
+                            <Select
+                              value={linkedGatePassId ? String(linkedGatePassId) : "none"}
+                              onValueChange={(value) => setLinkedGatePassId(value === "none" ? null : Number(value))}
                             >
-                              &times;
-                            </Button>
-                          )}
+                              <SelectTrigger id="linked-gate-pass" data-testid="select-linked-gate-pass" className="flex-1 bg-card">
+                                <SelectValue placeholder={t("selectGatePass")} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">None</SelectItem>
+                                {openInPasses.map((pass) => (
+                                  <SelectItem key={pass.id} value={String(pass.id)}>
+                                    {pass.number} · {pass.vehicleNo || "-"} · {pass.partyName || "-"} · {pass.totalBags} {t("bags")}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {linkedGatePassId != null && (
+                              <Button type="button" variant="outline" onClick={() => setLinkedGatePassId(null)}>
+                                Clear
+                              </Button>
+                            )}
+                          </div>
+                          {openInPasses.length === 0 && <p className="text-xs text-muted-foreground">{t("noOpenPasses")}</p>}
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <Card>
-                <CardContent className="pt-4 grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <div className="font-medium">Charges</div>
-                    <div className="space-y-2">
-                      {chargeFields.map((charge, idx) => {
-                        const labelMap: Record<string, string> = {
-                          weight: "Weight Charges",
-                          freight: "Freight",
-                          loading_filling: "Loading / Unloading",
-                          market_fee: "Market Fee",
-                          mitha_sukri: "Mitha Sukri",
-                          other: "Other Charges",
-                          phone_analysis: "Phone / Analysis",
-                          brokerage: "Brokerage",
-                          commission: "Commission",
-                          bardana: bardanaLabel,
-                          broken_allowance: "Broken Allowance",
-                          accountant_clerk: "Accountant / Clerk",
-                        };
-                        return (
-                          <div key={charge.id} className="grid grid-cols-5 gap-2 items-center">
-                            <div className="col-span-2 text-sm">{labelMap[charge.type] || charge.type}</div>
-                            <FormField
-                              control={form.control}
-                              name={`charges.${idx}.amount`}
-                              render={({ field }) => (
-                                <FormItem className="col-span-1">
-                                  <FormControl>
-                                    <Input {...field} type="number" step="0.01" />
-                                  </FormControl>
-                                </FormItem>
-                              )}
-                            />
-                            <FormField
-                              control={form.control}
-                              name={`charges.${idx}.mode`}
-                              render={({ field }) => (
-                                <FormItem className="col-span-1">
-                                  <Select onValueChange={field.onChange} value={field.value}>
-                                    <FormControl>
-                                      <SelectTrigger>
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                      <SelectItem value="add">Add</SelectItem>
-                                      <SelectItem value="less">Less</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                </FormItem>
-                              )}
-                            />
+                      )}
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        <FormField
+                          control={form.control}
+                          name="supplierId"
+                          render={({ field }) => (
+                            <FormItem className="sm:col-span-2 lg:col-span-1">
+                              <FormLabel>{t("supplier")}</FormLabel>
+                              <SearchableSelect
+                                options={suppliers.map((s) => ({ value: s.id.toString(), label: s.name, sublabel: s.nameUrdu || undefined }))}
+                                value={field.value || undefined}
+                                onValueChange={field.onChange}
+                                placeholder="Select supplier"
+                                searchPlaceholder="Search supplier..."
+                                emptyMessage="No suppliers found."
+                                autoFocus
+                              />
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="purchaseDate"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("purchaseDate")}</FormLabel>
+                              <FormControl>
+                                <Input {...field} type="date" max={todayString} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="vehicleNumber"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("vehicleNumber")}</FormLabel>
+                              <FormControl>
+                                <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" readOnly={linkedGatePassId != null} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="brokerId"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t("broker")} <span className="font-normal text-muted-foreground">(optional)</span>
+                              </FormLabel>
+                              <SearchableSelect
+                                options={[
+                                  { value: "none", label: "None" },
+                                  ...suppliers.map((s) => ({ value: s.id.toString(), label: s.name, sublabel: s.nameUrdu || undefined })),
+                                ]}
+                                value={field.value || undefined}
+                                onValueChange={field.onChange}
+                                placeholder="Select broker"
+                                searchPlaceholder="Search broker..."
+                                emptyMessage="No brokers found."
+                              />
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="brokerCommissionPercent"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t("brokerCommission")} (%)</FormLabel>
+                              <FormControl>
+                                <Input {...field} type="number" inputMode="decimal" step="0.01" className="tabular-nums" data-testid="input-commission" />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
                           <FormField
                             control={form.control}
-                            name={`charges.${idx}.accountId`}
+                            name="billNo"
                             render={({ field }) => (
-                              <FormItem className="col-span-1">
-                                <Select onValueChange={field.onChange} value={field.value ?? "none"}>
-                                  <FormControl>
-                                    <SelectTrigger>
-                                      <SelectValue placeholder="A/C" />
-                                    </SelectTrigger>
-                                  </FormControl>
-                                    <SelectContent>
-                                      <SelectItem value="none">None</SelectItem>
-                                      {accounts.map((acc) => (
-                                        <SelectItem key={acc.id} value={acc.id.toString()}>
-                                          {acc.name}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </FormItem>
-                              )}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="font-medium">Summary</div>
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between"><span>Total Bags</span><span className="font-mono">{totalBags.toFixed(2)}</span></div>
-                      <div className="flex justify-between"><span>Total Weight</span><span className="font-mono">{totalGross.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Net Weight</span><span className="font-mono">{totalNet.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>{bardanaLabel}</span><span className="font-mono">{totalBardana.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>{lessLabel}</span><span className="font-mono">{totalLess.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>{qualityLessPerBagLabel}</span><span className="font-mono">{qualityLessPerBag.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Weight per Bag</span><span className="font-mono">{totalWeightPerBag.toFixed(2)} kg</span></div>
-                      <div className="flex justify-between"><span>Maund ({moundBaseKg} kg)</span><span className="font-mono">{totalMound} + {totalMoundRemainder.toFixed(2)}kg</span></div>
-                      <div className="flex justify-between"><span>Subtotal</span><span className="font-mono">Rs. {subtotal.toLocaleString()}</span></div>
-                      <div className="flex justify-between"><span>Commission</span><span className="font-mono">Rs. {commissionAmount.toLocaleString()}</span></div>
-                      <div className="flex justify-between"><span>Accountant / Clerk</span><span className="font-mono">Rs. {accountantClerkCharges.toLocaleString()}</span></div>
-                      {chargeBreakdown.length > 0 ? (
-                        <>
-                          {chargeBreakdown.map((charge, index) => (
-                            <div key={`${charge.label}-${index}`} className="flex justify-between">
-                              <span>{charge.label} ({charge.mode === "less" ? lessLabel : "Add"})</span>
-                              <span className="font-mono">Rs. {charge.amount.toLocaleString()}</span>
-                            </div>
-                          ))}
-                        </>
-                      ) : null}
-                      <div className="flex justify-between"><span>Charges +</span><span className="font-mono">Rs. {chargesAdd.toLocaleString()}</span></div>
-                      <div className="flex justify-between"><span>Charges -</span><span className="font-mono">Rs. {chargesLess.toLocaleString()}</span></div>
-                      <div className="flex justify-between text-lg font-semibold pt-1 border-t">
-                        <span>Grand Amount</span>
-                        <span className="font-mono">Rs. {grandAmount.toLocaleString()}</span>
+                              <FormItem>
+                                <FormLabel>Bill No</FormLabel>
+                                <FormControl>
+                                  <Input {...field} placeholder={nextBill?.billNo || "Auto"} readOnly className="bg-muted/50 font-mono" />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name="bookNo"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Book No</FormLabel>
+                                <FormControl>
+                                  <Input {...field} placeholder="Book#" />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
                       </div>
-                      <div className="text-muted-foreground text-xs">In words: {amountInWords}</div>
-                    </div>
+                    </FormSection>
+
+                    <FormSection title="Items" description={`${fields.length} ${fields.length === 1 ? "line" : "lines"} · ${totalNet.toFixed(2)} kg net`}>
+                      {/* Full page width + fixed columns: fits a laptop screen without sideways scrolling. */}
+                      <div className="overflow-x-auto rounded-lg border">
+                        <table className="w-full min-w-[880px] table-fixed text-sm">
+                          <colgroup>
+                            <col className="w-9" />
+                            <col />
+                            <col className="w-[7%]" />
+                            <col className="w-[7%]" />
+                            <col className="w-[7%]" />
+                            <col className="w-[7%]" />
+                            <col className="w-[7%]" />
+                            <col className="w-[15%]" />
+                            <col className="w-[11%]" />
+                            <col className="w-10" />
+                          </colgroup>
+                          <thead className="border-b bg-muted/50 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            <tr className="[&>th]:whitespace-nowrap [&>th]:px-2 [&>th]:py-2.5">
+                              <th className="text-start">#</th>
+                              <th className="text-start">Product</th>
+                              <th className="text-end">Bags</th>
+                              <th className="text-end" title="Filling per bag (kg)">Filling kg</th>
+                              <th className="text-end" title="Loose kgs">Loose kg</th>
+                              <th className="text-end" title={lessLabel}>
+                                <abbr className="no-underline">Kaat kg</abbr>
+                              </th>
+                              <th className="text-end" title={bardanaLabel}>
+                                <abbr className="no-underline">Bardana</abbr>
+                              </th>
+                              <th className="text-end">Rate / unit</th>
+                              <th className="text-end">Amount</th>
+                              <th>
+                                <span className="sr-only">{t("actions")}</span>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {fields.map((field, index) => {
+                              const computed = computedItems[index];
+                              const num = (name: "bags" | "fillingPerBagKg" | "looseKgs" | "lessKg" | "bardanaKatKg", label: string, step = "0.01", testId?: string) => (
+                                <td className="px-1 py-1.5">
+                                  <FormField
+                                    control={form.control}
+                                    name={`items.${index}.${name}`}
+                                    render={({ field }) => (
+                                      <FormItem className="space-y-1">
+                                        <FormControl>
+                                          <Input
+                                            {...field}
+                                            type="number"
+                                            inputMode="decimal"
+                                            step={step}
+                                            onFocus={(e) => e.currentTarget.select()}
+                                            aria-label={`${label}, line ${index + 1}`}
+                                            className="h-9 px-2 text-end tabular-nums"
+                                            data-testid={testId}
+                                          />
+                                        </FormControl>
+                                        <FormMessage className="text-[11px]" />
+                                      </FormItem>
+                                    )}
+                                  />
+                                </td>
+                              );
+                              return (
+                                <tr key={field.id} className="align-top transition-colors hover:bg-muted/30">
+                                  <td className="px-2 py-3.5 text-xs tabular-nums text-muted-foreground">{index + 1}</td>
+                                  <td className="px-1 py-1.5">
+                                    <FormField
+                                      control={form.control}
+                                      name={`items.${index}.productId`}
+                                      render={({ field }) => (
+                                        <FormItem className="space-y-1">
+                                          <Select onValueChange={field.onChange} value={field.value ?? ""}>
+                                            <FormControl>
+                                              <SelectTrigger className="h-9" aria-label={`Product, line ${index + 1}`} data-testid={`select-product-${index}`}>
+                                                <SelectValue placeholder="Select product" />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent>
+                                              {/* Purchases are raw stock; keep an old non-raw pick visible on edit. */}
+                                              {products.filter((p) => p.productType === "raw" || p.id.toString() === field.value).map((p) => (
+                                                <SelectItem key={p.id} value={p.id.toString()}>
+                                                  {p.name}
+                                                  {p.nameUrdu ? ` (${p.nameUrdu})` : ""}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                          <FormMessage className="text-[11px]" />
+                                        </FormItem>
+                                      )}
+                                    />
+                                  </td>
+                                  {num("bags", "Bags", "1", `input-bags-${index}`)}
+                                  {num("fillingPerBagKg", "Filling per bag kg")}
+                                  {num("looseKgs", "Loose kgs")}
+                                  {num("lessKg", lessLabel)}
+                                  {num("bardanaKatKg", bardanaLabel)}
+                                  {/* Rate and its unit read as one value: "2,450 / Maund". */}
+                                  <td className="px-1 py-1.5">
+                                    <div className="flex rounded-md shadow-xs">
+                                      <FormField
+                                        control={form.control}
+                                        name={`items.${index}.rate`}
+                                        render={({ field }) => (
+                                          <FormItem className="min-w-0 flex-1 space-y-1">
+                                            <FormControl>
+                                              <Input
+                                                {...field}
+                                                type="number"
+                                                inputMode="decimal"
+                                                step="0.01"
+                                                onFocus={(e) => e.currentTarget.select()}
+                                                aria-label={`Rate, line ${index + 1}`}
+                                                className="h-9 rounded-e-none px-2 text-end tabular-nums focus-visible:z-10"
+                                                data-testid={`input-rate-${index}`}
+                                              />
+                                            </FormControl>
+                                            <FormMessage className="text-[11px]" />
+                                          </FormItem>
+                                        )}
+                                      />
+                                      <FormField
+                                        control={form.control}
+                                        name={`items.${index}.rateUnit`}
+                                        render={({ field }) => (
+                                          <FormItem className="space-y-1">
+                                            <Select onValueChange={field.onChange} value={field.value ?? "kg"}>
+                                              <FormControl>
+                                                <SelectTrigger
+                                                  className="h-9 w-[4.75rem] gap-1 rounded-s-none border-s-0 bg-muted/50 px-2 text-xs"
+                                                  aria-label={`Rate unit, line ${index + 1}`}
+                                                >
+                                                  <SelectValue />
+                                                </SelectTrigger>
+                                              </FormControl>
+                                              <SelectContent>
+                                                <SelectItem value="kg">Kg</SelectItem>
+                                                <SelectItem value="mound">Maund</SelectItem>
+                                                <SelectItem value="bag">Bag</SelectItem>
+                                                <SelectItem value="quintal">Quintal</SelectItem>
+                                                <SelectItem value="ton">Ton</SelectItem>
+                                              </SelectContent>
+                                            </Select>
+                                          </FormItem>
+                                        )}
+                                      />
+                                    </div>
+                                  </td>
+                                  {/* Computed, so plain text, not a disabled input. */}
+                                  <td className="px-2 py-1.5 text-end">
+                                    <div className="pt-1 font-semibold tabular-nums">
+                                      {(computed?.amount ?? 0).toLocaleString("en-PK", { maximumFractionDigits: 2 })}
+                                    </div>
+                                    <div className="text-[11px] tabular-nums text-muted-foreground">{(computed?.netWeight ?? 0).toFixed(2)} kg net</div>
+                                  </td>
+                                  <td className="px-1 py-1.5">
+                                    {fields.length > 1 && (
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-9 w-9 text-muted-foreground hover:text-destructive"
+                                        onClick={() => remove(index)}
+                                        data-testid={`button-remove-item-${index}`}
+                                        aria-label={`${t("removeLine")} ${index + 1}`}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          {fields.length > 1 && (
+                            <tfoot className="border-t bg-muted/30 text-xs font-medium">
+                              <tr className="[&>td]:px-2 [&>td]:py-2">
+                                <td />
+                                <td className="text-muted-foreground">Total</td>
+                                <td className="text-end tabular-nums">{totalBags.toLocaleString()}</td>
+                                <td colSpan={4} />
+                                <td />
+                                <td className="text-end">
+                                  <div className="text-sm font-semibold tabular-nums">{subtotal.toLocaleString("en-PK", { maximumFractionDigits: 2 })}</div>
+                                  <div className="tabular-nums text-muted-foreground">{totalNet.toFixed(2)} kg net</div>
+                                </td>
+                                <td />
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full border-dashed bg-transparent text-muted-foreground hover:text-foreground"
+                        onClick={() => append({ productId: "", bags: "0", fillingPerBagKg: "0", looseKgs: "0", lessKg: "0", bardanaKatKg: "0", rate: "0", rateUnit: "mound" })}
+                        data-testid="button-add-item"
+                      >
+                        <Plus className="h-4 w-4" /> {t("add")} item
+                      </Button>
+                    </FormSection>
+
+                  <div className="grid gap-8 border-t pt-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+                  <div className="min-w-0 space-y-6">
+                    <FormSection title="Charges" description="Added to or deducted from the bill, posted to the chosen account.">
+                      <div className="overflow-x-auto rounded-lg border">
+                        <table className="w-full min-w-[560px] text-sm">
+                          <thead className="bg-muted/60 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <tr>
+                              <th className="px-3 py-2 text-start">Charge</th>
+                              <th className="w-32 px-2 py-2 text-end">Amount</th>
+                              <th className="w-28 px-2 py-2 text-start">Add / Less</th>
+                              <th className="w-48 px-2 py-2 text-start">Account</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {chargeFields.map((charge, idx) => {
+                              const label = chargeLabels[charge.type] || charge.type;
+                              return (
+                                <tr key={charge.id}>
+                                  <td className="px-3 py-1.5 font-medium">{label}</td>
+                                  <td className="px-1.5 py-1.5">
+                                    <FormField
+                                      control={form.control}
+                                      name={`charges.${idx}.amount`}
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <FormControl>
+                                            <Input {...field} type="number" inputMode="decimal" step="0.01" aria-label={`${label} amount`} className="h-9 text-end tabular-nums" />
+                                          </FormControl>
+                                        </FormItem>
+                                      )}
+                                    />
+                                  </td>
+                                  <td className="px-1.5 py-1.5">
+                                    <FormField
+                                      control={form.control}
+                                      name={`charges.${idx}.mode`}
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <Select onValueChange={field.onChange} value={field.value}>
+                                            <FormControl>
+                                              <SelectTrigger className="h-9" aria-label={`${label} add or less`}>
+                                                <SelectValue />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent>
+                                              <SelectItem value="add">Add</SelectItem>
+                                              <SelectItem value="less">Less</SelectItem>
+                                            </SelectContent>
+                                          </Select>
+                                        </FormItem>
+                                      )}
+                                    />
+                                  </td>
+                                  <td className="px-1.5 py-1.5">
+                                    <FormField
+                                      control={form.control}
+                                      name={`charges.${idx}.accountId`}
+                                      render={({ field }) => (
+                                        <FormItem>
+                                          <Select onValueChange={field.onChange} value={field.value ?? "none"}>
+                                            <FormControl>
+                                              <SelectTrigger className="h-9" aria-label={`${label} account`}>
+                                                <SelectValue placeholder="A/C" />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent>
+                                              <SelectItem value="none">None</SelectItem>
+                                              {accounts.map((acc) => (
+                                                <SelectItem key={acc.id} value={acc.id.toString()}>
+                                                  {acc.name}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </FormItem>
+                                      )}
+                                    />
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </FormSection>
+
+                    <FormSection title="Notes">
+                      <FormField
+                        control={form.control}
+                        name="notes"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <Textarea {...field} rows={2} aria-label="Notes" placeholder="Anything worth remembering about this purchase" data-testid="input-notes" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </FormSection>
                   </div>
-                </CardContent>
-              </Card>
-                </fieldset>
+
+                  {/* Summary: stays in view while the items and charges above change. */}
+                  <aside className="space-y-5 border-t pt-6 lg:border-s lg:border-t-0 lg:ps-6 lg:pt-0">
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-semibold">Summary</h3>
+                      <dl className="space-y-1.5 text-xs">
+                        <SummaryRow label="Total bags" value={totalBags.toFixed(2)} />
+                        <SummaryRow label="Gross weight" value={`${totalGross.toFixed(2)} kg`} />
+                        <SummaryRow label={bardanaLabel} value={`${totalBardana.toFixed(2)} kg`} />
+                        <SummaryRow label={lessLabel} value={`${totalLess.toFixed(2)} kg`} />
+                        <SummaryRow label={qualityLessPerBagLabel} value={`${qualityLessPerBag.toFixed(2)} kg`} />
+                        <SummaryRow label="Weight per bag" value={`${totalWeightPerBag.toFixed(2)} kg`} />
+                        <SummaryRow label="Net weight" value={`${totalNet.toFixed(2)} kg`} className="text-sm" />
+                        <SummaryRow label={`Maund (${moundBaseKg} kg)`} value={`${totalMound} + ${totalMoundRemainder.toFixed(2)} kg`} />
+                        <SummaryRow
+                          label="Billed quantity"
+                          value={formatQtyByUnit(computedItems.map((c, i) => ({ qty: c.billingQty, unit: watchItems[i]?.rateUnit })))}
+                          className="text-sm"
+                        />
+                      </dl>
+                      <dl className="space-y-1.5 border-t pt-3 text-xs">
+                        <SummaryRow label={t("subtotal")} value={formatMoney(subtotal)} className="text-sm" />
+                        <SummaryRow label="Commission" value={formatMoney(commissionAmount)} />
+                        <SummaryRow label="Accountant / Clerk" value={formatMoney(accountantClerkCharges)} />
+                        {chargeBreakdown.map((charge, index) => (
+                          <SummaryRow
+                            key={`${charge.label}-${index}`}
+                            label={charge.label}
+                            value={`${charge.mode === "less" ? "− " : "+ "}${formatMoney(charge.amount)}`}
+                          />
+                        ))}
+                        <SummaryRow label="Charges added" value={`+ ${formatMoney(chargesAdd)}`} />
+                        <SummaryRow label="Charges deducted" value={`− ${formatMoney(chargesLess)}`} />
+                      </dl>
+                      <div className="space-y-1 border-t pt-3">
+                        <p className="text-xs font-medium text-muted-foreground">Grand amount</p>
+                        <p className="text-2xl font-semibold tracking-tight tabular-nums">{formatMoney(grandAmount)}</p>
+                        <p className="text-xs capitalize text-muted-foreground">{amountInWords}</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 border-t pt-5">
+                      <h3 className="text-sm font-semibold">Payment</h3>
+                      <FormField
+                        control={form.control}
+                        name="paidAmount"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("paidAmount")}</FormLabel>
+                            <FormControl>
+                              <Input {...field} type="number" inputMode="decimal" step="0.01" className="tabular-nums" data-testid="input-paid" />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="paymentMode"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Payment Mode</FormLabel>
+                            <Select onValueChange={field.onChange} value={field.value}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Payment mode" />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="cash">Cash</SelectItem>
+                                <SelectItem value="credit">Credit</SelectItem>
+                                <SelectItem value="bank">Bank Transfer</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <dl className="text-sm">
+                        <SummaryRow
+                          label="Balance due"
+                          value={formatMoney(balanceDue)}
+                          className={balanceDue > 0 ? "[&>dd]:text-destructive" : "[&>dd]:text-primary"}
+                        />
+                      </dl>
+                    </div>
+                  </aside>
+                  </div>
+                </div>
               )}
 
               {purchaseMode === "view" && currentPurchase && (
@@ -1257,7 +1275,7 @@ export default function PurchasesPage() {
                         <p className="text-xs text-muted-foreground">Invoice #</p>
                         <p className="font-mono font-medium">{currentPurchase.invoiceNumber}</p>
                       </div>
-                      <div className="text-right">
+                      <div className="text-end">
                         <p className="text-xs text-muted-foreground">Date</p>
                         <p className="font-medium">
                           {currentPurchase.purchaseDate ? format(new Date(currentPurchase.purchaseDate), "dd MMM yyyy") : "-"}
@@ -1267,31 +1285,31 @@ export default function PurchasesPage() {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <p className="text-xs text-muted-foreground">Supplier</p>
-                        <p className="font-medium">{(currentPurchase as any).supplier?.name || "-"}</p>
-                        {(currentPurchase as any).supplier?.nameUrdu && (
-                          <p className="text-sm text-muted-foreground font-urdu">{(currentPurchase as any).supplier?.nameUrdu}</p>
-                        )}
+                        {/* The detail endpoint returns supplierId only, so resolve the name here. */}
+                        {(() => {
+                          const supplier = suppliers.find((s) => s.id === Number(currentPurchase.supplierId));
+                          return (
+                            <>
+                              <p className="font-medium">{supplier?.name || "-"}</p>
+                              {supplier?.nameUrdu && <p className="text-sm text-muted-foreground font-urdu">{supplier.nameUrdu}</p>}
+                            </>
+                          );
+                        })()}
                       </div>
-                      <div className="text-right">
+                      <div className="text-end">
                         <p className="text-xs text-muted-foreground">Vehicle</p>
                         <p className="font-mono">{currentPurchase.vehicleNumber || "-"}</p>
                       </div>
                     </div>
                     {currentPurchase.gatePasses && currentPurchase.gatePasses.length > 0 && (
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <p className="text-xs text-muted-foreground">{t("gatePassNumber")}</p>
-                          <div className="flex flex-wrap gap-2">
-                            {currentPurchase.gatePasses.map((pass) => (
-                              <Link
-                                key={pass.id}
-                                href={`/gate-passes/${pass.id}`}
-                                className="font-mono text-sm text-primary hover:underline"
-                              >
-                                {pass.number}
-                              </Link>
-                            ))}
-                          </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("gatePassNumber")}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {currentPurchase.gatePasses.map((pass) => (
+                            <Link key={pass.id} href={`/gate-passes/${pass.id}`} className="font-mono text-sm text-primary hover:underline">
+                              {pass.number}
+                            </Link>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -1342,29 +1360,35 @@ export default function PurchasesPage() {
                         </div>
                       </div>
                     )}
-                    <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Total Amount</p>
-                        <p className="font-mono font-semibold">Rs. {Number(currentPurchase.totalAmount || 0).toLocaleString()}</p>
-                      </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Total Amount</p>
+                      <p className="font-mono font-semibold">{formatMoney(currentPurchase.totalAmount || 0)}</p>
                     </div>
                   </CardContent>
                 </Card>
               )}
 
-              <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
-                {purchaseMode !== "view" && (
-                  <>
-                    <Button type="button" variant="outline" onClick={handleCloseDialog}>
-                      {t("cancel")}
-                    </Button>
-                    <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
-                      <Calculator className="h-4 w-4" />
-                      {createMutation.isPending || updateMutation.isPending ? t("loading") : t("save")}
-                    </Button>
-                  </>
-                )}
-              </div>
+              {purchaseMode !== "view" && (
+                <div className="sticky bottom-0 z-10 -mx-4 mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 border-t bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+                  <div className="flex flex-1 flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                    <span>
+                      <span className="text-muted-foreground">Grand amount </span>
+                      <span className="font-semibold tabular-nums">{formatMoney(grandAmount)}</span>
+                    </span>
+                    <span>
+                      <span className="text-muted-foreground">Balance due </span>
+                      <span className={`font-semibold tabular-nums ${balanceDue > 0 ? "text-destructive" : "text-primary"}`}>{formatMoney(balanceDue)}</span>
+                    </span>
+                  </div>
+                  <Button type="button" variant="outline" onClick={handleCloseDialog}>
+                    {t("cancel")}
+                  </Button>
+                  <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
+                    <Calculator className="h-4 w-4" />
+                    {createMutation.isPending || updateMutation.isPending ? t("loading") : t("save")}
+                  </Button>
+                </div>
+              )}
             </form>
           </Form>
         </DialogContent>
