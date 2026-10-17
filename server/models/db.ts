@@ -50,4 +50,34 @@ function ensureColumn(table: string, column: string, definition: string) {
 // Mirrors script/0003_users_must_change_password.sql.
 ensureColumn("users", "must_change_password", "INTEGER NOT NULL DEFAULT 0");
 
+ensureColumn("ledger_entries", "cleared", "INTEGER NOT NULL DEFAULT 0");
+
+ensureColumn("employees", "opening_balance", "TEXT NOT NULL DEFAULT '0'");
+
+ensureColumn("accounts", "description", "TEXT");
+
+ensureColumn("expense_entries", "direction", "TEXT NOT NULL DEFAULT 'debit'");
+
+// Sales charge mode columns (add/less) and freight charge
+ensureColumn("sales", "loading_charges_mode", "TEXT");
+ensureColumn("sales", "weighing_charges_mode", "TEXT");
+ensureColumn("sales", "other_charges_mode", "TEXT");
+ensureColumn("sales", "rent_charges_mode", "TEXT");
+ensureColumn("sales", "freight_charges", "TEXT NOT NULL DEFAULT '0'");
+ensureColumn("sales", "freight_charges_mode", "TEXT");
+
+function migrateEnumCasing() {
+  const tables: [string, string][] = [
+    ["journal_voucher_entries", "entry_type"],
+    ["cash_transactions", "transaction_type"],
+    ["contra_voucher_lines", "entry_type"],
+  ];
+  for (const [table, col] of tables) {
+    const exists = sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+    if (!exists) continue;
+    sqlite.exec(`UPDATE "${table}" SET "${col}" = LOWER("${col}") WHERE "${col}" != LOWER("${col}")`);
+  }
+}
+migrateEnumCasing();
+
 export const db = drizzle(sqlite, { schema });

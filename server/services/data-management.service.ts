@@ -224,15 +224,21 @@ export function importJsonBackup(payload: BackupPayload, mode: "replace" | "merg
           const value = (row as any)[col];
           return value === undefined ? null : value;
         });
-        stmt.run(values);
-        rowCount += 1;
+        const result = stmt.run(values) as { changes?: number };
+        rowCount += result.changes ?? 1;
       }
 
       importedTables.push({ name: table, rows: rowCount });
     });
 
     const fkErrors = db.pragma("foreign_key_check") as Array<Record<string, unknown>>;
-    if (fkErrors.length) throw new Error(`Backup violates ${fkErrors.length} foreign-key constraint(s)`);
+    if (fkErrors.length) {
+      const details = fkErrors
+        .slice(0, 5)
+        .map((err) => `table=${err.table} rowid=${err.rowid} parent=${err.parent} fkid=${err.fkid}`)
+        .join("; ");
+      throw new Error(`Backup violates ${fkErrors.length} foreign-key constraint(s): ${details}`);
+    }
   });
 
   try {

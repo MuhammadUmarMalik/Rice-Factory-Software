@@ -60,8 +60,9 @@ export async function importDatabaseHandler(req: Request, res: Response) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: "Invalid backup format", details: error.errors });
     }
+    const message = error instanceof Error ? error.message : "Failed to import database";
     console.error(error);
-    res.status(500).json({ error: "Failed to import database" });
+    return res.status(400).json({ error: message, message });
   }
 }
 

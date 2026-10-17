@@ -16,15 +16,6 @@ type ListFilters = {
   offset?: number;
 };
 
-type JournalLineInput = {
-  accountId?: number;
-  accountName: string;
-  debitAmount: string;
-  creditAmount: string;
-  lineDescription?: string;
-  notes?: string;
-};
-
 function nowMs() {
   return Date.now();
 }
@@ -81,16 +72,6 @@ function columnExists(tableName: string, columnName: string) {
   }
 }
 
-function addColumnIfMissing(tableName: string, columnName: string, ddlType: string) {
-  if (!tableExists(tableName)) return;
-  if (columnExists(tableName, columnName)) return;
-  try {
-    sqlite.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${ddlType}`);
-  } catch (error) {
-    console.error(`Failed to add ${tableName}.${columnName}`, error);
-  }
-}
-
 function tableExists(tableName: string) {
   try {
     const row = sqlite
@@ -119,17 +100,6 @@ function assertNotFutureDate(value?: Date | string | number | null, label = "Dat
   const check = new Date(ms);
   const checkStart = new Date(check.getFullYear(), check.getMonth(), check.getDate()).getTime();
   if (checkStart > todayStart) throw new Error(`${label} cannot be in the future`);
-}
-
-function sumLines(lines: JournalLineInput[]) {
-  return lines.reduce(
-    (acc, line) => {
-      acc.debit += parseAmount(line.debitAmount);
-      acc.credit += parseAmount(line.creditAmount);
-      return acc;
-    },
-    { debit: 0, credit: 0 },
-  );
 }
 
 /**
@@ -189,8 +159,8 @@ function buildCommonFilters(filters: ListFilters, partyColumn: string, amountCol
 function insertAuditLog(daybookType: string, recordId: number, action: string, beforeJson: any, afterJson: any, userId?: number) {
   sqlite
     .prepare(
-      `INSERT INTO daybook_audit_logs(daybook_type, record_id, action, before_json, after_json, changed_by, changed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO audit_logs(entity, entity_id, action, before_json, after_json, performed_by, performed_at, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'daybook')`,
     )
     .run(
       daybookType,
@@ -203,58 +173,96 @@ function insertAuditLog(daybookType: string, recordId: number, action: string, b
     );
 }
 
+function paymentStatusSql() {
+  return `CASE
+    WHEN CAST(COALESCE(s.paid_amount, '0') AS REAL) <= 0 THEN 'Pending'
+    WHEN CAST(COALESCE(s.paid_amount, '0') AS REAL) >= CAST(COALESCE(s.total_amount, '0') AS REAL) THEN 'Fully Paid'
+    ELSE 'Partially Paid'
+  END`;
+}
+
+function ensureViews() {
+  const hasSales = tableExists("sales");
+  const hasPurchases = tableExists("purchases");
+
+  sqlite.exec(`DROP VIEW IF EXISTS sales_daybook`);
+  if (hasSales) {
+    sqlite.exec(`
+CREATE VIEW sales_daybook AS
+SELECT
+  s.id,
+  s.id AS sale_id,
+  CAST(s.sale_date AS INTEGER) AS transaction_date,
+  s.invoice_number,
+  s.customer_id,
+  COALESCE(a.name, 'Unknown Customer') AS customer_name,
+  NULL AS customer_account_details,
+  s.notes AS description,
+  '1' AS quantity,
+  s.subtotal AS unit_price,
+  s.subtotal AS subtotal_amount,
+  COALESCE(s.tax_amount, '0') AS tax_amount,
+  COALESCE(s.total_amount, '0') AS total_amount,
+  'Net 30' AS payment_terms,
+  CAST(s.due_date AS INTEGER) AS due_date,
+  COALESCE(s.paid_amount, '0') AS paid_amount,
+  ${paymentStatusSql()} AS status,
+  s.notes,
+  s.created_by,
+  s.created_by AS updated_by,
+  CAST(s.created_at AS INTEGER) AS created_at,
+  CAST(s.created_at AS INTEGER) AS updated_at,
+  0 AS is_deleted
+FROM sales s
+LEFT JOIN accounts a ON a.id = s.customer_id
+    `);
+  }
+
+  sqlite.exec(`DROP VIEW IF EXISTS purchases_daybook`);
+  if (hasPurchases) {
+    const hasDeletedAt = columnExists("purchases", "deleted_at");
+    sqlite.exec(`
+CREATE VIEW purchases_daybook AS
+SELECT
+  s.id,
+  s.id AS purchase_id,
+  CAST(s.purchase_date AS INTEGER) AS transaction_date,
+  s.invoice_number,
+  s.supplier_id,
+  COALESCE(a.name, 'Unknown Supplier') AS supplier_name,
+  NULL AS supplier_account_details,
+  s.notes AS description,
+  CASE
+    WHEN CAST(COALESCE(s.total_bags, '0') AS REAL) > 0 THEN s.total_bags
+    WHEN CAST(COALESCE(s.total_net_weight_kg, '0') AS REAL) > 0 THEN s.total_net_weight_kg
+    ELSE '1'
+  END AS quantity,
+  CASE
+    WHEN CAST(COALESCE(s.total_bags, '0') AS REAL) > 0 THEN CAST(CAST(COALESCE(s.subtotal, '0') AS REAL) / CAST(s.total_bags AS REAL) AS TEXT)
+    WHEN CAST(COALESCE(s.total_net_weight_kg, '0') AS REAL) > 0 THEN CAST(CAST(COALESCE(s.subtotal, '0') AS REAL) / CAST(s.total_net_weight_kg AS REAL) AS TEXT)
+    ELSE COALESCE(s.subtotal, '0')
+  END AS unit_price,
+  COALESCE(s.subtotal, '0') AS subtotal_amount,
+  COALESCE(s.tax_amount, '0') AS tax_amount,
+  COALESCE(s.total_amount, '0') AS total_amount,
+  'Net 30' AS payment_terms,
+  CAST(s.due_date AS INTEGER) AS due_date,
+  COALESCE(s.paid_amount, '0') AS paid_amount,
+  ${paymentStatusSql()} AS status,
+  s.notes,
+  s.created_by,
+  s.created_by AS updated_by,
+  CAST(s.created_at AS INTEGER) AS created_at,
+  CAST(s.created_at AS INTEGER) AS updated_at,
+  ${hasDeletedAt ? "CASE WHEN s.deleted_at IS NOT NULL THEN 1 ELSE 0 END" : "0"} AS is_deleted
+FROM purchases s
+LEFT JOIN accounts a ON a.id = s.supplier_id
+    `);
+  }
+}
+
 function ensureTables() {
   sqlite.exec(`
-CREATE TABLE IF NOT EXISTS sales_daybook (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  transaction_date INTEGER NOT NULL,
-  invoice_number TEXT NOT NULL,
-  customer_id INTEGER,
-  customer_name TEXT NOT NULL,
-  customer_account_details TEXT,
-  description TEXT,
-  quantity TEXT NOT NULL DEFAULT '0',
-  unit_price TEXT NOT NULL DEFAULT '0',
-  subtotal_amount TEXT NOT NULL DEFAULT '0',
-  tax_amount TEXT NOT NULL DEFAULT '0',
-  total_amount TEXT NOT NULL DEFAULT '0',
-  payment_terms TEXT,
-  due_date INTEGER,
-  paid_amount TEXT NOT NULL DEFAULT '0',
-  status TEXT NOT NULL DEFAULT 'Pending',
-  notes TEXT,
-  created_by INTEGER,
-  updated_by INTEGER,
-  created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  is_deleted INTEGER NOT NULL DEFAULT 0,
-  migration_date INTEGER
-);
-CREATE TABLE IF NOT EXISTS purchases_daybook (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  transaction_date INTEGER NOT NULL,
-  invoice_number TEXT NOT NULL,
-  supplier_id INTEGER,
-  supplier_name TEXT NOT NULL,
-  supplier_account_details TEXT,
-  description TEXT,
-  quantity TEXT NOT NULL DEFAULT '0',
-  unit_price TEXT NOT NULL DEFAULT '0',
-  subtotal_amount TEXT NOT NULL DEFAULT '0',
-  tax_amount TEXT NOT NULL DEFAULT '0',
-  total_amount TEXT NOT NULL DEFAULT '0',
-  payment_terms TEXT,
-  due_date INTEGER,
-  paid_amount TEXT NOT NULL DEFAULT '0',
-  status TEXT NOT NULL DEFAULT 'Pending',
-  notes TEXT,
-  created_by INTEGER,
-  updated_by INTEGER,
-  created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  is_deleted INTEGER NOT NULL DEFAULT 0,
-  migration_date INTEGER
-);
 CREATE TABLE IF NOT EXISTS cash_book (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   transaction_date INTEGER NOT NULL,
@@ -319,75 +327,20 @@ CREATE TABLE IF NOT EXISTS purchase_returns_daybook (
   is_deleted INTEGER NOT NULL DEFAULT 0,
   migration_date INTEGER
 );
-CREATE TABLE IF NOT EXISTS general_journal (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  transaction_date INTEGER NOT NULL,
-  journal_entry_number TEXT NOT NULL UNIQUE,
-  description TEXT NOT NULL,
-  entry_type TEXT,
-  total_debits TEXT NOT NULL DEFAULT '0',
-  total_credits TEXT NOT NULL DEFAULT '0',
-  status TEXT NOT NULL DEFAULT 'Draft',
-  approved_by INTEGER,
-  attachment_paths TEXT,
-  notes TEXT,
-  created_by INTEGER,
-  updated_by INTEGER,
-  created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  is_deleted INTEGER NOT NULL DEFAULT 0,
-  migration_date INTEGER
-);
-CREATE TABLE IF NOT EXISTS journal_lines (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  journal_id INTEGER NOT NULL,
-  account_id INTEGER,
-  account_name TEXT NOT NULL,
-  debit_amount TEXT NOT NULL DEFAULT '0',
-  credit_amount TEXT NOT NULL DEFAULT '0',
-  line_description TEXT,
-  notes TEXT,
-  created_by INTEGER,
-  created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
-  is_deleted INTEGER NOT NULL DEFAULT 0,
-  FOREIGN KEY (journal_id) REFERENCES general_journal(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS daybook_audit_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  daybook_type TEXT NOT NULL,
-  record_id INTEGER NOT NULL,
-  action TEXT NOT NULL,
-  before_json TEXT,
-  after_json TEXT,
-  changed_by INTEGER,
-  changed_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000)
-);
-CREATE INDEX IF NOT EXISTS idx_sales_daybook_date ON sales_daybook(transaction_date);
-CREATE INDEX IF NOT EXISTS idx_sales_daybook_customer ON sales_daybook(customer_name);
-CREATE INDEX IF NOT EXISTS idx_purchases_daybook_date ON purchases_daybook(transaction_date);
-CREATE INDEX IF NOT EXISTS idx_purchases_daybook_supplier ON purchases_daybook(supplier_name);
 CREATE INDEX IF NOT EXISTS idx_cash_book_date ON cash_book(transaction_date);
 CREATE INDEX IF NOT EXISTS idx_sales_returns_date ON sales_returns_daybook(return_date);
 CREATE INDEX IF NOT EXISTS idx_purchase_returns_date ON purchase_returns_daybook(return_date);
-CREATE INDEX IF NOT EXISTS idx_general_journal_date ON general_journal(transaction_date);
-CREATE INDEX IF NOT EXISTS idx_daybook_audit ON daybook_audit_logs(daybook_type, record_id, changed_at);
 `);
 }
 
 ensureTables();
+ensureViews();
 
 function normalizeLegacyEpochColumns() {
   const updates = [
-    `UPDATE sales_daybook SET transaction_date = transaction_date * 1000 WHERE transaction_date > 0 AND transaction_date < 1000000000000`,
-    `UPDATE sales_daybook SET due_date = due_date * 1000 WHERE due_date > 0 AND due_date < 1000000000000`,
-    `UPDATE purchases_daybook SET transaction_date = transaction_date * 1000 WHERE transaction_date > 0 AND transaction_date < 1000000000000`,
-    `UPDATE purchases_daybook SET due_date = due_date * 1000 WHERE due_date > 0 AND due_date < 1000000000000`,
     `UPDATE cash_book SET transaction_date = transaction_date * 1000 WHERE transaction_date > 0 AND transaction_date < 1000000000000`,
     `UPDATE sales_returns_daybook SET return_date = return_date * 1000 WHERE return_date > 0 AND return_date < 1000000000000`,
     `UPDATE purchase_returns_daybook SET return_date = return_date * 1000 WHERE return_date > 0 AND return_date < 1000000000000`,
-    `UPDATE general_journal SET transaction_date = transaction_date * 1000 WHERE transaction_date > 0 AND transaction_date < 1000000000000`,
-    `UPDATE daybook_audit_logs SET changed_at = changed_at * 1000 WHERE changed_at > 0 AND changed_at < 1000000000000`,
   ];
   for (const statement of updates) {
     sqlite.prepare(statement).run();
@@ -426,233 +379,8 @@ function dedupeCashBookRows() {
 
 dedupeCashBookRows();
 
-/**
- * The daybook tables are a denormalized *projection* of the transactional
- * tables (sales, purchases, ...), not an independent ledger. They used to be
- * populated by a single "seed if empty" migration which:
- *   - never wrote the sale_id / purchase_id link column, so rows could not be
- *     matched back to their source;
- *   - never ran again once any daybook row existed, so sales created after the
- *     first seed never appeared in the Sales Daybook at all;
- *   - never updated or removed a row when the underlying invoice was edited or
- *     deleted, leaving stale rows reporting superseded amounts.
- *
- * Reconciliation below replaces that. Every read syncs the projection against
- * its source: insert missing, update changed, soft-delete orphaned. Rows with a
- * NULL source id are hand-entered daybook records and are never touched.
- */
-function ensureDaybookLinkColumns() {
-  addColumnIfMissing("sales_daybook", "sale_id", "INTEGER");
-  addColumnIfMissing("purchases_daybook", "purchase_id", "INTEGER");
-
-  // Pre-existing migrated rows have no link id — recover it from the invoice
-  // number, which the old migration did copy across verbatim.
-  try {
-    if (tableExists("sales")) {
-      sqlite.exec(`
-        UPDATE sales_daybook
-        SET sale_id = (SELECT s.id FROM sales s WHERE s.invoice_number = sales_daybook.invoice_number)
-        WHERE sale_id IS NULL
-          AND EXISTS (SELECT 1 FROM sales s WHERE s.invoice_number = sales_daybook.invoice_number)
-      `);
-    }
-    if (tableExists("purchases")) {
-      sqlite.exec(`
-        UPDATE purchases_daybook
-        SET purchase_id = (SELECT p.id FROM purchases p WHERE p.invoice_number = purchases_daybook.invoice_number)
-        WHERE purchase_id IS NULL
-          AND EXISTS (SELECT 1 FROM purchases p WHERE p.invoice_number = purchases_daybook.invoice_number)
-      `);
-    }
-  } catch (error) {
-    console.error("Daybook link backfill failed", error);
-  }
-}
-
-ensureDaybookLinkColumns();
-
-function paymentStatus(total: unknown, paid: unknown) {
-  const t = parseAmount(total as any);
-  const p = parseAmount(paid as any);
-  if (p <= 0) return "Pending";
-  return p >= t ? "Fully Paid" : "Partially Paid";
-}
-
-function syncSalesDaybook(): number {
-  if (!tableExists("sales")) return 0;
-  const rows = sqlite
-    .prepare(`SELECT s.*, a.name as customer_name FROM sales s LEFT JOIN accounts a ON a.id = s.customer_id`)
-    .all() as any[];
-  const liveIds = new Set<number>();
-
-  const upsert = sqlite.transaction(() => {
-    for (const row of rows) {
-      liveIds.add(Number(row.id));
-      const values = {
-        sale_id: Number(row.id),
-        transaction_date: toMs(row.sale_date),
-        invoice_number: row.invoice_number,
-        customer_id: row.customer_id ?? null,
-        customer_name: row.customer_name || "Unknown Customer",
-        description: row.notes ?? null,
-        quantity: "1",
-        unit_price: row.subtotal || "0",
-        subtotal_amount: row.subtotal || "0",
-        tax_amount: row.tax_amount || "0",
-        total_amount: row.total_amount || "0",
-        due_date: toMs(row.due_date ?? null),
-        paid_amount: row.paid_amount || "0",
-        status: paymentStatus(row.total_amount, row.paid_amount),
-        notes: row.notes ?? null,
-      };
-      const existing = sqlite.prepare(`SELECT * FROM sales_daybook WHERE sale_id = ?`).get(row.id) as any;
-      if (existing) {
-        sqlite
-          .prepare(
-            `UPDATE sales_daybook SET transaction_date=?, invoice_number=?, customer_id=?, customer_name=?,
-               description=?, quantity=?, unit_price=?, subtotal_amount=?, tax_amount=?, total_amount=?,
-               due_date=?, paid_amount=?, status=?, notes=?, is_deleted=0, updated_at=?
-             WHERE id=?`,
-          )
-          .run(
-            values.transaction_date, values.invoice_number, values.customer_id, values.customer_name,
-            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
-            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes, nowMs(),
-            existing.id,
-          );
-      } else {
-        sqlite
-          .prepare(
-            `INSERT INTO sales_daybook(
-               sale_id, transaction_date, invoice_number, customer_id, customer_name, description, quantity,
-               unit_price, subtotal_amount, tax_amount, total_amount, payment_terms, due_date, paid_amount,
-               status, notes, created_by, created_at, updated_at, is_deleted
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Net 30', ?, ?, ?, ?, ?, ?, ?, 0)`,
-          )
-          .run(
-            values.sale_id, values.transaction_date, values.invoice_number, values.customer_id, values.customer_name,
-            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
-            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes,
-            row.created_by ?? null, nowMs(), nowMs(),
-          );
-      }
-    }
-
-    // Source invoice deleted → retire its projection instead of leaving a
-    // phantom row that inflates Sales Daybook totals.
-    const orphans = sqlite
-      .prepare(`SELECT id, sale_id FROM sales_daybook WHERE sale_id IS NOT NULL AND is_deleted = 0`)
-      .all() as any[];
-    for (const o of orphans) {
-      if (!liveIds.has(Number(o.sale_id))) {
-        sqlite.prepare(`UPDATE sales_daybook SET is_deleted = 1, updated_at = ? WHERE id = ?`).run(nowMs(), o.id);
-      }
-    }
-  });
-  upsert();
-  return rows.length;
-}
-
-/** Bags where the purchase is bagged, otherwise net kg; never zero. */
-function purchaseQuantity(row: any) {
-  const bags = parseAmount(row.total_bags);
-  if (bags > 0) return bags;
-  const netKg = parseAmount(row.total_net_weight_kg);
-  if (netKg > 0) return netKg;
-  return 1;
-}
-
-function syncPurchasesDaybook(): number {
-  if (!tableExists("purchases")) return 0;
-  const deletedAware = columnExists("purchases", "deleted_at");
-  const rows = sqlite
-    .prepare(
-      `SELECT p.*, a.name as supplier_name FROM purchases p LEFT JOIN accounts a ON a.id = p.supplier_id
-       ${deletedAware ? "WHERE p.deleted_at IS NULL" : ""}`,
-    )
-    .all() as any[];
-  const liveIds = new Set<number>();
-
-  const upsert = sqlite.transaction(() => {
-    for (const row of rows) {
-      liveIds.add(Number(row.id));
-      // Bags are only populated for bag-based purchases; weight-based ones carry
-      // their quantity in net kg. Taking `total_bags` verbatim wrote quantity 0
-      // against a non-zero subtotal, so the exported quantity x unit price did
-      // not reconstruct the line value.
-      const quantity = purchaseQuantity(row);
-      const subtotal = parseAmount(row.subtotal);
-      const values = {
-        transaction_date: toMs(row.purchase_date),
-        invoice_number: row.invoice_number,
-        supplier_id: row.supplier_id ?? null,
-        supplier_name: row.supplier_name || "Unknown Supplier",
-        description: row.notes ?? null,
-        quantity: String(quantity),
-        unit_price: String(subtotal / quantity),
-        subtotal_amount: row.subtotal || "0",
-        tax_amount: row.tax_amount || "0",
-        total_amount: row.total_amount || "0",
-        due_date: toMs(row.due_date ?? null),
-        paid_amount: row.paid_amount || "0",
-        status: paymentStatus(row.total_amount, row.paid_amount),
-        notes: row.notes ?? null,
-      };
-      const existing = sqlite.prepare(`SELECT * FROM purchases_daybook WHERE purchase_id = ?`).get(row.id) as any;
-      if (existing) {
-        sqlite
-          .prepare(
-            `UPDATE purchases_daybook SET transaction_date=?, invoice_number=?, supplier_id=?, supplier_name=?,
-               description=?, quantity=?, unit_price=?, subtotal_amount=?, tax_amount=?, total_amount=?,
-               due_date=?, paid_amount=?, status=?, notes=?, is_deleted=0, updated_at=?
-             WHERE id=?`,
-          )
-          .run(
-            values.transaction_date, values.invoice_number, values.supplier_id, values.supplier_name,
-            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
-            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes, nowMs(),
-            existing.id,
-          );
-      } else {
-        sqlite
-          .prepare(
-            `INSERT INTO purchases_daybook(
-               purchase_id, transaction_date, invoice_number, supplier_id, supplier_name, description, quantity,
-               unit_price, subtotal_amount, tax_amount, total_amount, payment_terms, due_date, paid_amount,
-               status, notes, created_by, created_at, updated_at, is_deleted
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Net 30', ?, ?, ?, ?, ?, ?, ?, 0)`,
-          )
-          .run(
-            Number(row.id), values.transaction_date, values.invoice_number, values.supplier_id, values.supplier_name,
-            values.description, values.quantity, values.unit_price, values.subtotal_amount, values.tax_amount,
-            values.total_amount, values.due_date, values.paid_amount, values.status, values.notes,
-            row.created_by ?? null, nowMs(), nowMs(),
-          );
-      }
-    }
-
-    const orphans = sqlite
-      .prepare(`SELECT id, purchase_id FROM purchases_daybook WHERE purchase_id IS NOT NULL AND is_deleted = 0`)
-      .all() as any[];
-    for (const o of orphans) {
-      if (!liveIds.has(Number(o.purchase_id))) {
-        sqlite.prepare(`UPDATE purchases_daybook SET is_deleted = 1, updated_at = ? WHERE id = ?`).run(nowMs(), o.id);
-      }
-    }
-  });
-  upsert();
-  return rows.length;
-}
-
 function ensureDaybookSeededFromLegacy() {
-  try {
-    syncSalesDaybook();
-    syncPurchasesDaybook();
-  } catch (error) {
-    console.error("Daybook sync failed", error);
-  }
-
-  // The remaining projections (cash book, journals, returns) still rely on the
+  // The remaining projections (cash book, returns) still rely on the
   // one-shot legacy seed; only run it while they are completely empty.
   if (autoMigrationAttempted) return;
   autoMigrationAttempted = true;
@@ -664,8 +392,7 @@ function ensureDaybookSeededFromLegacy() {
             `SELECT
                (SELECT COUNT(*) FROM cash_book) +
                (SELECT COUNT(*) FROM sales_returns_daybook) +
-               (SELECT COUNT(*) FROM purchase_returns_daybook) +
-               (SELECT COUNT(*) FROM general_journal) AS c`,
+               (SELECT COUNT(*) FROM purchase_returns_daybook) AS c`,
           )
           .get() as any
       )?.c ?? 0,
@@ -720,101 +447,6 @@ export function getSalesDaybook(id: number) {
   return findOne("sales_daybook", id);
 }
 
-export function createSalesDaybook(input: any, userId?: number) {
-  assertNotFutureDate(input.transactionDate, "Transaction date");
-  // Closes a period-lock bypass: this write skipped the period/fiscal checks
-  // that storage.ts applies to every other posting flow.
-  assertPostingAllowed(sqlite, input.transactionDate, "sales daybook");
-  const dup = sqlite.prepare(`SELECT id FROM sales_daybook WHERE invoice_number = ? AND is_deleted = 0`).get(input.invoiceNumber) as any;
-  if (dup) throw new Error("Duplicate invoice number");
-  const now = nowMs();
-  const result = sqlite
-    .prepare(
-      `INSERT INTO sales_daybook(
-        transaction_date, invoice_number, customer_id, customer_name, customer_account_details, description,
-        quantity, unit_price, subtotal_amount, tax_amount, total_amount, payment_terms, due_date, paid_amount, status,
-        notes, created_by, updated_by, created_at, updated_at, is_deleted
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-    )
-    .run(
-      toMs(input.transactionDate),
-      input.invoiceNumber,
-      input.customerId ?? null,
-      input.customerName,
-      input.customerAccountDetails ?? null,
-      input.description ?? null,
-      input.quantity,
-      input.unitPrice,
-      input.subtotalAmount,
-      input.taxAmount ?? "0",
-      input.totalAmount,
-      input.paymentTerms ?? null,
-      toMs(input.dueDate),
-      input.paidAmount ?? "0",
-      input.status ?? "Pending",
-      input.notes ?? null,
-      userId ?? null,
-      userId ?? null,
-      now,
-      now,
-    );
-  const row = getSalesDaybook(Number(result.lastInsertRowid));
-  insertAuditLog("sales_daybook", Number(result.lastInsertRowid), "create", null, row, userId);
-  return row;
-}
-
-export function updateSalesDaybook(id: number, input: any, userId?: number) {
-  const existing = getSalesDaybook(id);
-  if (!existing) return undefined;
-  assertNotFutureDate(input.transactionDate ?? existing.transaction_date, "Transaction date");
-  // Closes a period-lock bypass: guard both the period the row sits in today and
-  // the period it would be moved into.
-  assertPostingAllowed(sqlite, existing.transaction_date, "sales daybook");
-  assertPostingAllowed(sqlite, input.transactionDate ?? existing.transaction_date, "sales daybook");
-  if (input.invoiceNumber && input.invoiceNumber !== existing.invoice_number) {
-    const dup = sqlite
-      .prepare(`SELECT id FROM sales_daybook WHERE invoice_number = ? AND is_deleted = 0 AND id != ?`)
-      .get(input.invoiceNumber, id) as any;
-    if (dup) throw new Error("Duplicate invoice number");
-  }
-  sqlite
-    .prepare(
-      `UPDATE sales_daybook SET
-        transaction_date = ?, invoice_number = ?, customer_id = ?, customer_name = ?, customer_account_details = ?, description = ?,
-        quantity = ?, unit_price = ?, subtotal_amount = ?, tax_amount = ?, total_amount = ?, payment_terms = ?,
-        due_date = ?, paid_amount = ?, status = ?, notes = ?, updated_by = ?, updated_at = ?
-       WHERE id = ?`,
-    )
-    .run(
-      toMs(input.transactionDate ?? existing.transaction_date),
-      input.invoiceNumber ?? existing.invoice_number,
-      input.customerId ?? existing.customer_id ?? null,
-      input.customerName ?? existing.customer_name,
-      input.customerAccountDetails ?? existing.customer_account_details ?? null,
-      input.description ?? existing.description ?? null,
-      input.quantity ?? existing.quantity,
-      input.unitPrice ?? existing.unit_price,
-      input.subtotalAmount ?? existing.subtotal_amount,
-      input.taxAmount ?? existing.tax_amount,
-      input.totalAmount ?? existing.total_amount,
-      input.paymentTerms ?? existing.payment_terms ?? null,
-      toMs(input.dueDate ?? existing.due_date),
-      input.paidAmount ?? existing.paid_amount,
-      input.status ?? existing.status,
-      input.notes ?? existing.notes ?? null,
-      userId ?? null,
-      nowMs(),
-      id,
-    );
-  const updated = getSalesDaybook(id);
-  insertAuditLog("sales_daybook", id, "update", existing, updated, userId);
-  return updated;
-}
-
-export function deleteSalesDaybook(id: number, userId?: number) {
-  return softDelete("sales_daybook", id, userId, "transaction_date", "sales daybook");
-}
-
 export function getSalesCustomerSummary(filters: ListFilters = {}) {
   ensureDaybookSeededFromLegacy();
   const { whereSql, params } = buildCommonFilters(filters, "customer_name", "total_amount", "transaction_date");
@@ -861,101 +493,6 @@ export function listPurchasesDaybook(filters: ListFilters = {}) {
 
 export function getPurchasesDaybook(id: number) {
   return findOne("purchases_daybook", id);
-}
-
-export function createPurchasesDaybook(input: any, userId?: number) {
-  assertNotFutureDate(input.transactionDate, "Transaction date");
-  // Closes a period-lock bypass: this write skipped the period/fiscal checks
-  // that storage.ts applies to every other posting flow.
-  assertPostingAllowed(sqlite, input.transactionDate, "purchases daybook");
-  const dup = sqlite.prepare(`SELECT id FROM purchases_daybook WHERE invoice_number = ? AND is_deleted = 0`).get(input.invoiceNumber) as any;
-  if (dup) throw new Error("Duplicate invoice number");
-  const now = nowMs();
-  const result = sqlite
-    .prepare(
-      `INSERT INTO purchases_daybook(
-        transaction_date, invoice_number, supplier_id, supplier_name, supplier_account_details, description,
-        quantity, unit_price, subtotal_amount, tax_amount, total_amount, payment_terms, due_date, paid_amount, status,
-        notes, created_by, updated_by, created_at, updated_at, is_deleted
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-    )
-    .run(
-      toMs(input.transactionDate),
-      input.invoiceNumber,
-      input.supplierId ?? null,
-      input.supplierName,
-      input.supplierAccountDetails ?? null,
-      input.description ?? null,
-      input.quantity,
-      input.unitPrice,
-      input.subtotalAmount,
-      input.taxAmount ?? "0",
-      input.totalAmount,
-      input.paymentTerms ?? null,
-      toMs(input.dueDate),
-      input.paidAmount ?? "0",
-      input.status ?? "Pending",
-      input.notes ?? null,
-      userId ?? null,
-      userId ?? null,
-      now,
-      now,
-    );
-  const row = getPurchasesDaybook(Number(result.lastInsertRowid));
-  insertAuditLog("purchases_daybook", Number(result.lastInsertRowid), "create", null, row, userId);
-  return row;
-}
-
-export function updatePurchasesDaybook(id: number, input: any, userId?: number) {
-  const existing = getPurchasesDaybook(id);
-  if (!existing) return undefined;
-  assertNotFutureDate(input.transactionDate ?? existing.transaction_date, "Transaction date");
-  // Closes a period-lock bypass: guard both the period the row sits in today and
-  // the period it would be moved into.
-  assertPostingAllowed(sqlite, existing.transaction_date, "purchases daybook");
-  assertPostingAllowed(sqlite, input.transactionDate ?? existing.transaction_date, "purchases daybook");
-  if (input.invoiceNumber && input.invoiceNumber !== existing.invoice_number) {
-    const dup = sqlite
-      .prepare(`SELECT id FROM purchases_daybook WHERE invoice_number = ? AND is_deleted = 0 AND id != ?`)
-      .get(input.invoiceNumber, id) as any;
-    if (dup) throw new Error("Duplicate invoice number");
-  }
-  sqlite
-    .prepare(
-      `UPDATE purchases_daybook SET
-        transaction_date = ?, invoice_number = ?, supplier_id = ?, supplier_name = ?, supplier_account_details = ?, description = ?,
-        quantity = ?, unit_price = ?, subtotal_amount = ?, tax_amount = ?, total_amount = ?, payment_terms = ?,
-        due_date = ?, paid_amount = ?, status = ?, notes = ?, updated_by = ?, updated_at = ?
-       WHERE id = ?`,
-    )
-    .run(
-      toMs(input.transactionDate ?? existing.transaction_date),
-      input.invoiceNumber ?? existing.invoice_number,
-      input.supplierId ?? existing.supplier_id ?? null,
-      input.supplierName ?? existing.supplier_name,
-      input.supplierAccountDetails ?? existing.supplier_account_details ?? null,
-      input.description ?? existing.description ?? null,
-      input.quantity ?? existing.quantity,
-      input.unitPrice ?? existing.unit_price,
-      input.subtotalAmount ?? existing.subtotal_amount,
-      input.taxAmount ?? existing.tax_amount,
-      input.totalAmount ?? existing.total_amount,
-      input.paymentTerms ?? existing.payment_terms ?? null,
-      toMs(input.dueDate ?? existing.due_date),
-      input.paidAmount ?? existing.paid_amount,
-      input.status ?? existing.status,
-      input.notes ?? existing.notes ?? null,
-      userId ?? null,
-      nowMs(),
-      id,
-    );
-  const updated = getPurchasesDaybook(id);
-  insertAuditLog("purchases_daybook", id, "update", existing, updated, userId);
-  return updated;
-}
-
-export function deletePurchasesDaybook(id: number, userId?: number) {
-  return softDelete("purchases_daybook", id, userId, "transaction_date", "purchases daybook");
 }
 
 export function getPurchasesSupplierSummary(filters: ListFilters = {}) {
@@ -1532,236 +1069,7 @@ export function deletePurchaseReturnsDaybook(id: number, userId?: number) {
   return softDelete("purchase_returns_daybook", id, userId, "return_date", "purchase returns daybook");
 }
 
-function nextJournalEntryNumber() {
-  const row = sqlite.prepare(`SELECT id FROM general_journal ORDER BY id DESC LIMIT 1`).get() as any;
-  const next = Number(row?.id || 0) + 1;
-  return `GJ-${String(next).padStart(6, "0")}`;
-}
 
-export function listGeneralJournal(filters: ListFilters & { account?: string; entryType?: string; limit?: number } = {}) {
-  ensureDaybookSeededFromLegacy();
-  const where: string[] = ["gj.is_deleted = 0"];
-  const params: any[] = [];
-  if (filters.dateFrom) {
-    where.push("gj.transaction_date >= ?");
-    params.push(toMs(filters.dateFrom));
-  }
-  if (filters.dateTo) {
-    where.push("gj.transaction_date <= ?");
-    params.push(toEndOfDayMs(filters.dateTo));
-  }
-  if (filters.status) {
-    where.push("gj.status = ?");
-    params.push(filters.status);
-  }
-  if (filters.entryType) {
-    where.push("gj.entry_type = ?");
-    params.push(filters.entryType);
-  }
-  if (filters.search) {
-    where.push("(COALESCE(gj.description,'') LIKE ? OR COALESCE(gj.notes,'') LIKE ? OR COALESCE(gj.journal_entry_number,'') LIKE ?)");
-    params.push(`%${filters.search}%`, `%${filters.search}%`, `%${filters.search}%`);
-  }
-  if (filters.account) {
-    where.push(`EXISTS (SELECT 1 FROM journal_lines jl WHERE jl.journal_id = gj.id AND jl.is_deleted = 0 AND jl.account_name LIKE ?)`);
-    params.push(`%${filters.account}%`);
-  }
-  const sortBy = safeSort(filters.sortBy, "gj.transaction_date", ["gj.transaction_date", "gj.journal_entry_number", "gj.total_debits", "gj.status", "gj.created_at"]);
-  const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
-  const limit = filters.limit == null ? "" : ` LIMIT ${clampInt(filters.limit, 100, 1, 500)}`;
-  const rows = sqlite.prepare(`SELECT gj.* FROM general_journal gj WHERE ${where.join(" AND ")} ORDER BY ${sortBy} ${sortDir}, gj.id DESC${limit}`).all(...params) as any[];
-  const lineStmt = sqlite.prepare(`SELECT * FROM journal_lines WHERE journal_id = ? AND is_deleted = 0 ORDER BY id ASC`);
-  return rows.map((row) => ({ ...row, lines: lineStmt.all(row.id) }));
-}
-
-export function getGeneralJournal(id: number) {
-  const head = findOne("general_journal", id);
-  if (!head) return undefined;
-  const lines = sqlite.prepare(`SELECT * FROM journal_lines WHERE journal_id = ? AND is_deleted = 0 ORDER BY id ASC`).all(id);
-  return { ...head, lines };
-}
-
-export function createGeneralJournal(input: any, userId?: number) {
-  assertNotFutureDate(input.transactionDate, "Transaction date");
-  // Closes a period-lock bypass: this write skipped the period/fiscal checks
-  // that storage.ts applies to every other posting flow.
-  assertPostingAllowed(sqlite, input.transactionDate, "general journal");
-  const lines = (input.lines || []) as JournalLineInput[];
-  if (lines.length < 2) throw new Error("At least two journal lines are required");
-  const totals = sumLines(lines);
-  if (Math.abs(totals.debit - totals.credit) > 0.0001) throw new Error("Total debits must equal total credits");
-  const entryNo = input.journalEntryNumber || nextJournalEntryNumber();
-  const dup = sqlite.prepare(`SELECT id FROM general_journal WHERE journal_entry_number = ? AND is_deleted = 0`).get(entryNo) as any;
-  if (dup) throw new Error("Duplicate journal entry number");
-  const now = nowMs();
-  const trx = sqlite.transaction(() => {
-    const result = sqlite
-      .prepare(
-        `INSERT INTO general_journal(
-          transaction_date, journal_entry_number, description, entry_type, total_debits, total_credits, status,
-          approved_by, attachment_paths, notes, created_by, updated_by, created_at, updated_at, is_deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-      )
-      .run(
-        toMs(input.transactionDate),
-        entryNo,
-        input.description,
-        input.entryType ?? null,
-        totals.debit.toFixed(2),
-        totals.credit.toFixed(2),
-        input.status ?? "Draft",
-        input.approvedBy ?? null,
-        input.attachmentPaths ? JSON.stringify(input.attachmentPaths) : null,
-        input.notes ?? null,
-        userId ?? null,
-        userId ?? null,
-        now,
-        now,
-      );
-    const journalId = Number(result.lastInsertRowid);
-    const insertLine = sqlite.prepare(
-      `INSERT INTO journal_lines(
-        journal_id, account_id, account_name, debit_amount, credit_amount, line_description, notes, created_by, created_at, updated_at, is_deleted
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-    );
-    for (const line of lines) {
-      insertLine.run(
-        journalId,
-        line.accountId ?? null,
-        line.accountName,
-        line.debitAmount ?? "0",
-        line.creditAmount ?? "0",
-        line.lineDescription ?? null,
-        line.notes ?? null,
-        userId ?? null,
-        now,
-        now,
-      );
-    }
-    const row = getGeneralJournal(journalId);
-    insertAuditLog("general_journal", journalId, "create", null, row, userId);
-    return row;
-  });
-  return trx();
-}
-
-export function updateGeneralJournal(id: number, input: any, userId?: number) {
-  const existing = getGeneralJournal(id);
-  if (!existing) return undefined;
-  if (existing.status === "Approved") throw new Error("Approved journal entries cannot be edited");
-  assertNotFutureDate(input.transactionDate ?? existing.transaction_date, "Transaction date");
-  // Closes a period-lock bypass: guard both the period the entry sits in today
-  // and the period it would be moved into.
-  assertPostingAllowed(sqlite, existing.transaction_date, "general journal");
-  assertPostingAllowed(sqlite, input.transactionDate ?? existing.transaction_date, "general journal");
-  const lines = (input.lines || existing.lines) as JournalLineInput[];
-  if (lines.length < 2) throw new Error("At least two journal lines are required");
-  const totals = sumLines(lines);
-  if (Math.abs(totals.debit - totals.credit) > 0.0001) throw new Error("Total debits must equal total credits");
-  const entryNo = input.journalEntryNumber ?? existing.journal_entry_number;
-  if (entryNo !== existing.journal_entry_number) {
-    const dup = sqlite.prepare(`SELECT id FROM general_journal WHERE journal_entry_number = ? AND is_deleted = 0 AND id != ?`).get(entryNo, id) as any;
-    if (dup) throw new Error("Duplicate journal entry number");
-  }
-  const trx = sqlite.transaction(() => {
-    sqlite
-      .prepare(
-        `UPDATE general_journal SET
-          transaction_date=?, journal_entry_number=?, description=?, entry_type=?, total_debits=?, total_credits=?,
-          status=?, approved_by=?, attachment_paths=?, notes=?, updated_by=?, updated_at=?
-         WHERE id=?`,
-      )
-      .run(
-        toMs(input.transactionDate ?? existing.transaction_date),
-        entryNo,
-        input.description ?? existing.description,
-        input.entryType ?? existing.entry_type ?? null,
-        totals.debit.toFixed(2),
-        totals.credit.toFixed(2),
-        input.status ?? existing.status,
-        input.approvedBy ?? existing.approved_by ?? null,
-        input.attachmentPaths ? JSON.stringify(input.attachmentPaths) : existing.attachment_paths ?? null,
-        input.notes ?? existing.notes ?? null,
-        userId ?? null,
-        nowMs(),
-        id,
-      );
-    sqlite.prepare(`UPDATE journal_lines SET is_deleted = 1, updated_at = ? WHERE journal_id = ?`).run(nowMs(), id);
-    const insertLine = sqlite.prepare(
-      `INSERT INTO journal_lines(
-        journal_id, account_id, account_name, debit_amount, credit_amount, line_description, notes, created_by, created_at, updated_at, is_deleted
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-    );
-    const now = nowMs();
-    for (const line of lines) {
-      insertLine.run(
-        id,
-        line.accountId ?? null,
-        line.accountName,
-        line.debitAmount ?? "0",
-        line.creditAmount ?? "0",
-        line.lineDescription ?? null,
-        line.notes ?? null,
-        userId ?? null,
-        now,
-        now,
-      );
-    }
-    const updated = getGeneralJournal(id);
-    insertAuditLog("general_journal", id, "update", existing, updated, userId);
-    return updated;
-  });
-  return trx();
-}
-
-export function deleteGeneralJournal(id: number, userId?: number) {
-  return softDelete("general_journal", id, userId, "transaction_date", "general journal");
-}
-
-export function reverseGeneralJournal(id: number, userId?: number) {
-  const existing = getGeneralJournal(id);
-  if (!existing) return undefined;
-  if (existing.status === "Reversed") throw new Error("Journal entry already reversed");
-  // Closes a period-lock bypass: the original entry's status is rewritten here,
-  // so its own period must still be open (the reversal entry is dated today and
-  // is guarded separately by createGeneralJournal).
-  assertPostingAllowed(sqlite, existing.transaction_date, "general journal reversal");
-  const reversedLines = (existing.lines || []).map((line: any) => ({
-    accountId: line.account_id ?? undefined,
-    accountName: line.account_name,
-    debitAmount: String(line.credit_amount ?? "0"),
-    creditAmount: String(line.debit_amount ?? "0"),
-    lineDescription: `Reverse: ${line.line_description || ""}`.trim(),
-    notes: line.notes ?? undefined,
-  }));
-  const reverse = createGeneralJournal(
-    {
-      transactionDate: new Date(),
-      description: `Reversal of ${existing.journal_entry_number}: ${existing.description}`,
-      entryType: "Reversal",
-      status: "Approved",
-      lines: reversedLines,
-      notes: `Auto-reversal for journal ${existing.journal_entry_number}`,
-    },
-    userId,
-  );
-  sqlite.prepare(`UPDATE general_journal SET status = 'Reversed', updated_by = ?, updated_at = ? WHERE id = ?`).run(userId ?? null, nowMs(), id);
-  const updated = getGeneralJournal(id);
-  insertAuditLog("general_journal", id, "reverse", existing, updated, userId);
-  return { reversedFrom: updated, reversalEntry: reverse };
-}
-
-export function cancelGeneralJournal(id: number, userId?: number) {
-  const existing = getGeneralJournal(id);
-  if (!existing) return undefined;
-  // Closes a period-lock bypass: cancelling rewrites a posted entry, so its
-  // period must still be open.
-  assertPostingAllowed(sqlite, existing.transaction_date, "general journal cancellation");
-  sqlite.prepare(`UPDATE general_journal SET status = 'Cancelled', updated_by = ?, updated_at = ? WHERE id = ?`).run(userId ?? null, nowMs(), id);
-  const updated = getGeneralJournal(id);
-  insertAuditLog("general_journal", id, "cancel", existing, updated, userId);
-  return updated;
-}
 
 function escapeCsvCell(value: any): string {
   if (value == null) return "";
@@ -1775,28 +1083,27 @@ function toCsv(headers: string[], rows: any[]) {
   return [head, ...lines].join("\r\n");
 }
 
-export function exportDaybookCsv(kind: "sales" | "purchases" | "cash" | "sales-returns" | "purchase-returns" | "general-journal", filters: any = {}) {
+export function exportDaybookCsv(kind: "sales" | "purchases" | "cash" | "sales-returns" | "purchase-returns", filters: any = {}) {
   if (kind === "sales") return toCsv(Object.keys((listSalesDaybook(filters)[0] as any) || {}), listSalesDaybook(filters) as any[]);
   if (kind === "purchases") return toCsv(Object.keys((listPurchasesDaybook(filters)[0] as any) || {}), listPurchasesDaybook(filters) as any[]);
   if (kind === "cash") return toCsv(Object.keys((listCashBook(filters)[0] as any) || {}), listCashBook(filters) as any[]);
   if (kind === "sales-returns") return toCsv(Object.keys((listSalesReturnsDaybook(filters)[0] as any) || {}), listSalesReturnsDaybook(filters) as any[]);
   if (kind === "purchase-returns") return toCsv(Object.keys((listPurchaseReturnsDaybook(filters)[0] as any) || {}), listPurchaseReturnsDaybook(filters) as any[]);
-  const rows = listGeneralJournal(filters);
-  return toCsv(Object.keys((rows[0] as any) || {}), rows as any[]);
+  return "";
 }
 
 export function getDaybookAudit(daybookType?: string, recordId?: number) {
-  const where: string[] = [];
+  const where: string[] = ["source = 'daybook'"];
   const params: any[] = [];
   if (daybookType) {
-    where.push("daybook_type = ?");
+    where.push("entity = ?");
     params.push(daybookType);
   }
   if (recordId) {
-    where.push("record_id = ?");
+    where.push("entity_id = ?");
     params.push(recordId);
   }
-  const sql = `SELECT * FROM daybook_audit_logs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY changed_at DESC LIMIT 500`;
+  const sql = `SELECT * FROM audit_logs WHERE ${where.join(" AND ")} ORDER BY performed_at DESC LIMIT 500`;
   return sqlite.prepare(sql).all(...params);
 }
 
@@ -1813,20 +1120,12 @@ export function getDaybookDashboardSummary() {
     totalCreditPurchases: Number(purchases?.total || 0).toFixed(2),
     cashBankBalances: getCashBookBalances(),
     pendingReturns,
-    recentJournalEntries: listGeneralJournal({ limit: 5 }),
   };
 }
 
 export function migrateLegacyDayBook(migrationDate?: Date, userId?: number) {
   const mig = toMs(migrationDate ?? new Date()) ?? nowMs();
   const trx = sqlite.transaction(() => {
-    // Sales and purchases are reconciled continuously by syncSalesDaybook /
-    // syncPurchasesDaybook, which key on sale_id / purchase_id. Re-inserting
-    // them here matched on invoice_number only and produced unlinked duplicates.
-    const salesSynced = syncSalesDaybook();
-    const purchasesSynced = syncPurchasesDaybook();
-
-
     const cashRows = sqlite.prepare(`SELECT ct.*, a.name as account_name FROM cash_transactions ct LEFT JOIN accounts a ON a.id = ct.account_id WHERE ct.deleted_at IS NULL`).all() as any[];
     for (const row of cashRows) {
       const refNo = `${row.reference_type || "cash"}-${row.reference_id || row.id}`;
@@ -1843,7 +1142,7 @@ export function migrateLegacyDayBook(migrationDate?: Date, userId?: number) {
         )
         .run(
           toMs(row.transaction_date),
-          row.transaction_type === "DEBIT" ? "Receipt" : "Payment",
+          row.transaction_type === "debit" ? "Receipt" : "Payment",
           (row.account_name || "").toLowerCase().includes("bank") ? "Bank" : "Cash",
           (row.account_name || "").toLowerCase().includes("bank") ? row.account_id : null,
           (row.account_name || "").toLowerCase().includes("bank") ? row.account_name : null,
@@ -1863,62 +1162,9 @@ export function migrateLegacyDayBook(migrationDate?: Date, userId?: number) {
 
     dedupeCashBookRows();
 
-    const journalRows = sqlite.prepare(`SELECT * FROM journal_vouchers`).all() as any[];
-    const journalLinesStmt = sqlite.prepare(`SELECT * FROM journal_voucher_entries WHERE journal_voucher_id = ?`);
-    for (const row of journalRows) {
-      const exists = sqlite.prepare(`SELECT id FROM general_journal WHERE journal_entry_number = ? AND is_deleted = 0`).get(row.voucher_no) as any;
-      if (exists) continue;
-      const lines = journalLinesStmt.all(row.id) as any[];
-      const result = sqlite
-        .prepare(
-          `INSERT INTO general_journal(
-            transaction_date, journal_entry_number, description, entry_type, total_debits, total_credits, status,
-            approved_by, notes, created_by, updated_by, created_at, updated_at, is_deleted, migration_date
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-        )
-        .run(
-          toMs(row.voucher_date),
-          row.voucher_no,
-          row.narration || "",
-          "Migration",
-          row.total_amount || "0",
-          row.total_amount || "0",
-          row.status === "approved" ? "Approved" : "Draft",
-          row.approved_by ?? null,
-          "Migrated from journal_vouchers",
-          row.created_by ?? userId ?? null,
-          userId ?? null,
-          nowMs(),
-          nowMs(),
-          mig,
-        );
-      const journalId = Number(result.lastInsertRowid);
-      const insertLine = sqlite.prepare(
-        `INSERT INTO journal_lines(
-          journal_id, account_id, account_name, debit_amount, credit_amount, line_description, created_by, created_at, updated_at, is_deleted
-        ) VALUES (?, ?, COALESCE((SELECT name FROM accounts WHERE id = ?), 'Unknown Account'), ?, ?, ?, ?, ?, ?, 0)`,
-      );
-      for (const line of lines) {
-        insertLine.run(
-          journalId,
-          line.account_id ?? null,
-          line.account_id ?? null,
-          line.entry_type === "DEBIT" ? line.amount : "0",
-          line.entry_type === "CREDIT" ? line.amount : "0",
-          "Migrated line",
-          userId ?? null,
-          nowMs(),
-          nowMs(),
-        );
-      }
-    }
-
     return {
       migrationDate: mig,
-      salesMigrated: salesSynced,
-      purchasesMigrated: purchasesSynced,
       cashMigrated: cashRows.length,
-      journalsMigrated: journalRows.length,
     };
   });
 
