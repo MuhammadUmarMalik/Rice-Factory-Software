@@ -17,44 +17,6 @@ export const daybookQuerySchema = z.object({
   offset: z.string().optional(),
 });
 
-export const salesDaybookInputSchema = z.object({
-  transactionDate: asDate,
-  invoiceNumber: z.string().min(1),
-  customerId: z.number().int().positive().optional(),
-  customerName: z.string().min(1),
-  customerAccountDetails: z.string().optional(),
-  description: z.string().optional(),
-  quantity: numericString,
-  unitPrice: numericString,
-  subtotalAmount: numericString,
-  taxAmount: numericString.optional().default("0"),
-  totalAmount: numericString,
-  paymentTerms: z.string().optional(),
-  dueDate: asDate.optional(),
-  paidAmount: numericString.optional().default("0"),
-  status: z.enum(["Pending", "Partially Paid", "Fully Paid"]).default("Pending"),
-  notes: z.string().optional(),
-});
-
-export const purchasesDaybookInputSchema = z.object({
-  transactionDate: asDate,
-  invoiceNumber: z.string().min(1),
-  supplierId: z.number().int().positive().optional(),
-  supplierName: z.string().min(1),
-  supplierAccountDetails: z.string().optional(),
-  description: z.string().optional(),
-  quantity: numericString,
-  unitPrice: numericString,
-  subtotalAmount: numericString,
-  taxAmount: numericString.optional().default("0"),
-  totalAmount: numericString,
-  paymentTerms: z.string().optional(),
-  dueDate: asDate.optional(),
-  paidAmount: numericString.optional().default("0"),
-  status: z.enum(["Pending", "Partially Paid", "Fully Paid"]).default("Pending"),
-  notes: z.string().optional(),
-});
-
 export const cashBookInputSchema = z.object({
   transactionDate: asDate,
   transactionType: z.enum(["Receipt", "Payment"]),
@@ -99,27 +61,6 @@ export const purchaseReturnsDaybookInputSchema = z.object({
   totalDebitAmount: numericString,
   status: z.enum(["Pending", "Processed", "Credited"]).default("Pending"),
   notes: z.string().optional(),
-});
-
-export const journalLineInputSchema = z.object({
-  accountId: z.number().int().positive().optional(),
-  accountName: z.string().min(1),
-  debitAmount: numericString.optional().default("0"),
-  creditAmount: numericString.optional().default("0"),
-  lineDescription: z.string().optional(),
-  notes: z.string().optional(),
-});
-
-export const generalJournalInputSchema = z.object({
-  transactionDate: asDate,
-  journalEntryNumber: z.string().min(1).optional(),
-  description: z.string().min(1),
-  entryType: z.string().optional(),
-  status: z.enum(["Draft", "Approved", "Reversed", "Cancelled"]).optional(),
-  approvedBy: z.number().int().positive().optional(),
-  attachmentPaths: z.array(z.string()).optional(),
-  notes: z.string().optional(),
-  lines: z.array(journalLineInputSchema).min(2),
 });
 
 export const migrationPayloadSchema = z.object({

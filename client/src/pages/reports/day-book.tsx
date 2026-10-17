@@ -31,6 +31,7 @@ type DayBookReport = {
 
 type DayBookDisplayRow = {
   srNo: string;
+  date: string;
   id: string;
   type: string;
   particulars: string;
@@ -41,7 +42,7 @@ type DayBookDisplayRow = {
   isTotal?: boolean;
 };
 
-type DayBookTab = "sales" | "purchases" | "cash" | "sales-returns" | "purchase-returns" | "general-journal";
+type DayBookTab = "sales" | "purchases" | "cash" | "sales-returns" | "purchase-returns";
 
 const DAYBOOK_API_MAP: Record<DayBookTab, string> = {
   sales: "/api/daybooks/sales",
@@ -49,7 +50,6 @@ const DAYBOOK_API_MAP: Record<DayBookTab, string> = {
   cash: "/api/daybooks/cash",
   "sales-returns": "/api/daybooks/sales-returns",
   "purchase-returns": "/api/daybooks/purchase-returns",
-  "general-journal": "/api/daybooks/general-journal",
 };
 
 type DayBookPageProps = {
@@ -142,6 +142,22 @@ export default function DayBookPage(props: any = {}) {
     return `${Math.abs(num).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${side}`;
   };
 
+  // An entry date arrives in three shapes: the registers store an epoch, but
+  // which unit depends on the table (the cash/returns projections normalise to
+  // milliseconds, the sales/purchases views read straight off the sale_date
+  // column), and the daily report hands back a real Date. Anything unparseable
+  // prints blank rather than "Invalid Date".
+  const formatEntryDate = (value?: string | number | Date | null) => {
+    if (value == null || value === "") return "";
+    const epoch = typeof value === "number"
+      ? value
+      : typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim())
+        ? Number(value.trim())
+        : null;
+    const date = new Date(epoch != null ? (Math.abs(epoch) < 1_000_000_000_000 ? epoch * 1000 : epoch) : value);
+    return Number.isNaN(date.getTime()) ? "" : format(date, "dd MMM yyyy");
+  };
+
   const mapSpecializedToDisplay = (): DayBookDisplayRow[] => {
     if (!initialTab || !specializedData?.length) return [];
     const rows = specializedData as any[];
@@ -149,6 +165,7 @@ export default function DayBookPage(props: any = {}) {
       case "sales":
         return rows.map((r, i) => ({
           srNo: String(i + 1),
+          date: formatEntryDate(r.transaction_date),
           id: r.invoice_number || String(r.id || "-"),
           type: "Sale",
           particulars: [r.customer_name || "-", r.description || "-"].join("\n"),
@@ -160,6 +177,7 @@ export default function DayBookPage(props: any = {}) {
       case "purchases":
         return rows.map((r, i) => ({
           srNo: String(i + 1),
+          date: formatEntryDate(r.transaction_date),
           id: r.invoice_number || String(r.id || "-"),
           type: "Purchase",
           particulars: [r.supplier_name || "-", r.description || "-"].join("\n"),
@@ -171,6 +189,7 @@ export default function DayBookPage(props: any = {}) {
       case "cash":
         return rows.map((r, i) => ({
           srNo: String(i + 1),
+          date: formatEntryDate(r.transaction_date),
           id: r.reference_number || String(r.id || "-"),
           type: r.transaction_type || "-",
           particulars: [r.party_name || "-", r.description || r.notes || "-"].join("\n"),
@@ -182,6 +201,7 @@ export default function DayBookPage(props: any = {}) {
       case "sales-returns":
         return rows.map((r, i) => ({
           srNo: String(i + 1),
+          date: formatEntryDate(r.return_date),
           id: r.credit_note_number || String(r.id || "-"),
           type: "Sales Return",
           particulars: [r.customer_name || "-", r.description || r.reason || r.notes || "-"].join("\n"),
@@ -193,22 +213,12 @@ export default function DayBookPage(props: any = {}) {
       case "purchase-returns":
         return rows.map((r, i) => ({
           srNo: String(i + 1),
+          date: formatEntryDate(r.return_date),
           id: r.debit_note_number || String(r.id || "-"),
           type: "Purchase Return",
           particulars: [r.supplier_name || "-", r.description || r.reason || r.notes || "-"].join("\n"),
           receipt: formatAmount(r.total_debit_amount),
           payment: "0.00",
-          balance: "",
-          isTotal: false,
-        }));
-      case "general-journal":
-        return rows.map((r, i) => ({
-          srNo: String(i + 1),
-          id: r.journal_entry_number || String(r.id || "-"),
-          type: "Journal",
-          particulars: r.description || "-",
-          receipt: formatAmount(r.total_debits),
-          payment: formatAmount(r.total_credits),
           balance: "",
           isTotal: false,
         }));
@@ -242,11 +252,6 @@ export default function DayBookPage(props: any = {}) {
       const total = rows.reduce((s, r) => s + parseFloat(r.total_debit_amount || "0"), 0);
       return { receipt: formatAmount(total), payment: "0.00" };
     }
-    if (initialTab === "general-journal") {
-      const debit = rows.reduce((s, r) => s + parseFloat(r.total_debits || "0"), 0);
-      const credit = rows.reduce((s, r) => s + parseFloat(r.total_credits || "0"), 0);
-      return { receipt: formatAmount(debit), payment: formatAmount(credit) };
-    }
     return { receipt: "0.00", payment: "0.00" };
   }, [initialTab, specializedData]);
 
@@ -255,6 +260,7 @@ export default function DayBookPage(props: any = {}) {
       const mapped = mapSpecializedToDisplay();
       const totalRow: DayBookDisplayRow = {
         srNo: "",
+        date: "",
         id: "",
         type: "",
         particulars: "Total:",
@@ -269,12 +275,14 @@ export default function DayBookPage(props: any = {}) {
       // with none, there is no opening figure to state and the row is dropped
       // rather than printed as a misleading 0.00.
       if (initialTab !== "cash" || !mapped.length) return [...mapped, totalRow];
+      totalRow.balance = mapped[mapped.length - 1].balance;
       const openingCash = (specializedData as any[]).find(
         (r) => r.account_type !== "Bank" && r.openingBalance != null,
       )?.openingBalance;
       if (openingCash == null) return [...mapped, totalRow];
       const openingRow: DayBookDisplayRow = {
         srNo: "",
+        date: "",
         id: "",
         type: "",
         particulars: "Opening Balance",
@@ -293,6 +301,7 @@ export default function DayBookPage(props: any = {}) {
     // has no way to see it on the report at all.
     const openingRow: DayBookDisplayRow = {
       srNo: "",
+      date: "",
       id: "",
       type: "",
       particulars: "Opening Balance",
@@ -303,6 +312,7 @@ export default function DayBookPage(props: any = {}) {
     };
     const voucherRows = rows.map((row) => ({
       srNo: String(row.srNo),
+      date: formatEntryDate(row.date),
       id: row.id || "-",
       type: row.type || "-",
       particulars: [`[${row.partyName || "-"}]`, row.mode || ""].filter(Boolean).join("\n"),
@@ -313,12 +323,13 @@ export default function DayBookPage(props: any = {}) {
     }));
     const totalRow: DayBookDisplayRow = {
       srNo: "",
+      date: "",
       id: "",
       type: "",
       particulars: "Total:",
       receipt: formatAmount(totals.receipt),
       payment: formatAmount(totals.payment),
-      balance: "",
+      balance: (voucherRows.length ? voucherRows[voucherRows.length - 1] : openingRow).balance,
       isTotal: true,
     };
     return [openingRow, ...voucherRows, totalRow];
@@ -326,6 +337,7 @@ export default function DayBookPage(props: any = {}) {
 
   const columns: Column<DayBookDisplayRow>[] = [
     { key: "srNo", title: "Sr.No", align: "center" },
+    { key: "date", title: "Date", align: "center" },
     { key: "id", title: "ID", align: "center" },
     { key: "type", title: "Type", align: "center" },
     {
@@ -358,6 +370,16 @@ export default function DayBookPage(props: any = {}) {
       ),
     },
   ];
+
+  // Balance-carrying books (cash, combined) end every page but the last with the
+  // running balance so far; the last page already ends on the Total row.
+  const carriesBalance = !isSpecialized || initialTab === "cash";
+  const balanceCarriedForward = (pageRows: DayBookDisplayRow[]): DayBookDisplayRow | null => {
+    if (pageRows[pageRows.length - 1]?.isTotal) return null;
+    const balance = [...pageRows].reverse().find((r) => r.balance)?.balance;
+    if (!balance) return null;
+    return { srNo: "", date: "", id: "", type: "", particulars: "Balance c/f", receipt: "", payment: "", balance, isOpening: true };
+  };
 
   const title = pageTitle || "Day Book";
   const selectedDateLabel = (selectedDate || dateForApi) ? format(new Date(selectedDate || dateForApi), "dd MMM yyyy") : "";
@@ -417,6 +439,7 @@ export default function DayBookPage(props: any = {}) {
             isLoading={isLoading}
             searchable={false}
             emptyMessage="No entries found"
+            footerRow={carriesBalance ? balanceCarriedForward : undefined}
           />
         </CardContent>
       </Card>

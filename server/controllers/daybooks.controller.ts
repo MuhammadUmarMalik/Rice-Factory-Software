@@ -3,11 +3,8 @@ import { z } from "zod";
 import {
   cashBookInputSchema,
   daybookQuerySchema,
-  generalJournalInputSchema,
   migrationPayloadSchema,
   purchaseReturnsDaybookInputSchema,
-  purchasesDaybookInputSchema,
-  salesDaybookInputSchema,
   salesReturnsDaybookInputSchema,
 } from "../schemas/daybooks.schema";
 import * as service from "../services/daybooks.service";
@@ -102,9 +99,6 @@ async function deleteHandler(req: Request, res: Response, fn: (id: number, userI
 
 export const listSalesDaybook = (req: Request, res: Response) => listHandler(req, res, service.listSalesDaybook);
 export const getSalesDaybook = (req: Request, res: Response) => getHandler(req, res, service.getSalesDaybook);
-export const createSalesDaybook = (req: Request, res: Response) => createHandler(req, res, salesDaybookInputSchema, service.createSalesDaybook);
-export const updateSalesDaybook = (req: Request, res: Response) => updateHandler(req, res, salesDaybookInputSchema, service.updateSalesDaybook);
-export const deleteSalesDaybook = (req: Request, res: Response) => deleteHandler(req, res, service.deleteSalesDaybook);
 
 export async function salesCustomerSummary(req: Request, res: Response) {
   try {
@@ -129,9 +123,6 @@ export async function salesAging(req: Request, res: Response) {
 
 export const listPurchasesDaybook = (req: Request, res: Response) => listHandler(req, res, service.listPurchasesDaybook);
 export const getPurchasesDaybook = (req: Request, res: Response) => getHandler(req, res, service.getPurchasesDaybook);
-export const createPurchasesDaybook = (req: Request, res: Response) => createHandler(req, res, purchasesDaybookInputSchema, service.createPurchasesDaybook);
-export const updatePurchasesDaybook = (req: Request, res: Response) => updateHandler(req, res, purchasesDaybookInputSchema, service.updatePurchasesDaybook);
-export const deletePurchasesDaybook = (req: Request, res: Response) => deleteHandler(req, res, service.deletePurchasesDaybook);
 
 export async function purchasesSupplierSummary(req: Request, res: Response) {
   try {
@@ -179,40 +170,6 @@ export const getPurchaseReturnsDaybook = (req: Request, res: Response) => getHan
 export const createPurchaseReturnsDaybook = (req: Request, res: Response) => createHandler(req, res, purchaseReturnsDaybookInputSchema, service.createPurchaseReturnsDaybook);
 export const updatePurchaseReturnsDaybook = (req: Request, res: Response) => updateHandler(req, res, purchaseReturnsDaybookInputSchema, service.updatePurchaseReturnsDaybook);
 export const deletePurchaseReturnsDaybook = (req: Request, res: Response) => deleteHandler(req, res, service.deletePurchaseReturnsDaybook);
-
-export const listGeneralJournal = (req: Request, res: Response) => listHandler(req, res, service.listGeneralJournal);
-export const getGeneralJournal = (req: Request, res: Response) => getHandler(req, res, service.getGeneralJournal);
-export const createGeneralJournal = (req: Request, res: Response) => createHandler(req, res, generalJournalInputSchema, service.createGeneralJournal);
-export const updateGeneralJournal = (req: Request, res: Response) => updateHandler(req, res, generalJournalInputSchema, service.updateGeneralJournal);
-export const deleteGeneralJournal = (req: Request, res: Response) => deleteHandler(req, res, service.deleteGeneralJournal);
-
-export async function reverseGeneralJournal(req: Request, res: Response) {
-  try {
-    const id = parseRequiredInt(req.params.id, "id");
-    if (!id) return res.status(400).json({ error: "Invalid id" });
-    const row = service.reverseGeneralJournal(id, getUserId(req));
-    if (!row) return res.status(404).json({ error: "Entry not found" });
-    return res.json(row);
-  } catch (error) {
-    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
-    console.error(error);
-    return res.status(500).json({ error: "Failed to reverse entry" });
-  }
-}
-
-export async function cancelGeneralJournal(req: Request, res: Response) {
-  try {
-    const id = parseRequiredInt(req.params.id, "id");
-    if (!id) return res.status(400).json({ error: "Invalid id" });
-    const row = service.cancelGeneralJournal(id, getUserId(req));
-    if (!row) return res.status(404).json({ error: "Entry not found" });
-    return res.json(row);
-  } catch (error) {
-    if (isBusinessRuleError(error)) return res.status(400).json({ error: error.message });
-    console.error(error);
-    return res.status(500).json({ error: "Failed to cancel entry" });
-  }
-}
 
 export async function exportDaybook(req: Request, res: Response) {
   try {

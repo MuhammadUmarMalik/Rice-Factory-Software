@@ -54,7 +54,8 @@ export interface IPurchasesRepository {
     purchase: InsertPurchase,
     items: PurchaseItemInput[],
     charges: PurchaseChargeInput[],
-    moundBaseKg?: number
+    moundBaseKg?: number,
+    options?: { gatePassId?: number | null; performedBy?: number | null }
   ): Promise<Purchase>;
   updatePurchase(
     id: number,
