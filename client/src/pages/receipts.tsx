@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/select";
 import type { Account } from "@/types/schema";
 import { format } from "date-fns";
+import { todayLocal, toLocalDateString } from "@/utils/dateRanges";
 
 const lineSchema = z.object({
   accountId: z.string().optional(),
@@ -49,7 +50,7 @@ const lineSchema = z.object({
 const receiptFormSchema = z.object({
   voucherType: z.enum(["CR", "DR"]).default("CR"),
   voucherNumber: z.string().optional(),
-  voucherDate: z.string().default(new Date().toISOString().slice(0, 10)),
+  voucherDate: z.string().default(""),
   narration: z.string().optional(),
   linkToSaleId: z.string().optional(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
@@ -120,11 +121,11 @@ export default function ReceiptsPage() {
 
   const buildDefaults = (): ReceiptFormData => ({
     voucherType: "CR",
-    voucherDate: new Date().toISOString().slice(0, 10),
+    voucherDate: todayLocal(),
     voucherNumber: "",
     narration: "",
     linkToSaleId: "",
-    lines: [{ accountId: "", narration: "", amount: "0" }],
+    lines: [{ accountId: undefined, narration: "", amount: "0" }],
   });
 
   const form = useForm<ReceiptFormData>({
@@ -274,9 +275,9 @@ export default function ReceiptsPage() {
     form.reset({
       voucherType: "CR",
       voucherNumber: voucher.voucherNumber,
-      voucherDate: new Date(voucher.voucherDate).toISOString().slice(0, 10),
+      voucherDate: toLocalDateString(new Date(voucher.voucherDate)),
       narration: voucher.narration || "",
-      linkToSaleId: firstLineSaleId ? String(firstLineSaleId) : "",
+      linkToSaleId: firstLineSaleId ? String(firstLineSaleId) : undefined,
       lines: paymentLines.map((l: { accountId: number; narration?: string; debit?: string; credit?: string }) => ({
         accountId: l.accountId.toString(),
         narration: l.narration || "",
@@ -574,7 +575,7 @@ export default function ReceiptsPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Link to Sale (optional)</FormLabel>
-                        <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)}>
+                        <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? undefined : v)}>
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue placeholder="None – receipt will not update a sale" />
@@ -620,20 +621,20 @@ export default function ReceiptsPage() {
                               render={({ field }) => (
                                 <FormItem>
                                   {idx === 0 && <FormLabel>{t("account")}</FormLabel>}
-                                  <Select value={field.value} onValueChange={field.onChange}>
-                                    <FormControl>
-                                      <SelectTrigger>
-                                        <SelectValue placeholder="Select account" />
-                                      </SelectTrigger>
-                                    </FormControl>
-                                    <SelectContent>
-                                      {accounts.map((a) => (
-                                        <SelectItem key={a.id} value={a.id.toString()}>
-                                          {a.name} ({a.type})
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+<Select value={field.value || undefined} onValueChange={field.onChange}>
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Select account" />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent>
+                                        {accounts.map((a) => (
+                                          <SelectItem key={a.id} value={a.id.toString()}>
+                                            {a.name} ({a.type})
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
                                   <FormMessage />
                                 </FormItem>
                               )}

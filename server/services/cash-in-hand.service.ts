@@ -7,29 +7,39 @@ import {
   cashAccounts,
   cashReceipts,
   cashPayments,
-  cashJournalVouchers,
-  cashJournalItems,
   journalVouchers,
   journalVoucherEntries,
   accounts,
   sales,
   purchases,
+  ledgerEntries,
+  cashTransactions,
 } from "../db/schema";
 import { eq, and, gte, lte, desc, inArray } from "drizzle-orm";
 import type { InsertCashReceipt, InsertCashPayment, CashReceipt, CashPayment } from "../db/schema";
 import {
-  buildCashJournalVoucherNarration,
   buildCashPaymentNarration,
   buildCashReceiptNarration,
   cleanNarrationSegment,
   displayNarration,
-  joinNarration,
-  preferManualNarration,
-  summarizeNarrationValues,
 } from "../utils/narration";
 import { formatMoney, sumAmounts, toDecimal } from "../utils/money";
-import { ensureCashAccount as ensureCashLedgerAccount } from "../models/ledger.model";
+import {
+  ensureCashAccount as ensureCashLedgerAccount,
+  ensureSystemAccount,
+  postBalancedLedgerEntries,
+  getLedgerReferenceColumns,
+  createReceiptVoucher,
+  updateReceiptVoucher,
+  deleteReceiptVoucher,
+  type ReceiptLineInput,
+} from "../models/ledger.model";
 import { recomputeAccountBalances } from "../models/accounts.model";
+import {
+  VOUCHER_MIRROR_REFERENCE,
+  findCashMirrorForVoucher,
+  syncCashMirrorForVoucher,
+} from "./cash-voucher-sync.service";
 
 /** Either the shared client or a transaction-scoped one. */
 type DbClient = typeof db;
@@ -71,6 +81,35 @@ const VOUCHER_TABLES = {
   "CP": "cash_payments",
   "JV": "cash_journal_vouchers",
 } as const;
+
+/**
+ * Reference types whose cash movement was already posted to the ledger by
+ * whoever created the row — an invoice, a journal voucher, or a CR/CP receipt
+ * voucher. The cash module keeps these rows in its register for display and
+ * balance, but must never post or reverse their ledger entries: doing so would
+ * count the same money twice.
+ */
+const POSTED_ELSEWHERE = new Set([
+  "sale",
+  "purchase",
+  "journal",
+  "journal_voucher",
+  VOUCHER_MIRROR_REFERENCE,
+]);
+
+function isPostedElsewhere(referenceType?: string | null) {
+  return POSTED_ELSEWHERE.has(String(referenceType ?? "").toLowerCase());
+}
+
+/** A row that mirrors a CR/CP voucher, rather than being posted in its own right. */
+function isVoucherMirror(
+  row: { referenceType?: string | null; referenceId?: number | null },
+): row is { referenceType: string; referenceId: number } {
+  return (
+    String(row.referenceType ?? "").toLowerCase() === VOUCHER_MIRROR_REFERENCE &&
+    row.referenceId != null
+  );
+}
 
 function getNextVoucherNo(prefix: "CR" | "CP" | "JV"): string {
   const year = new Date().getFullYear();
@@ -171,6 +210,69 @@ export async function getReceiptById(id: number): Promise<CashReceipt | null> {
   return r ?? null;
 }
 
+function findAccountByName(client: DbClient, name: string): any {
+  const normalized = (name || "").trim().toLowerCase();
+  if (!normalized) return null;
+  const rows = client.select().from(accounts).all();
+  return rows.find((row) => String(row && row.name || "").trim().toLowerCase() === normalized) || null;
+}
+
+/** A register row's reference as the cash ledger shows it, voucher mirrors included. */
+function cashLedgerReference(referenceType: string | null | undefined, referenceId: number | null | undefined, kind: "sale" | "purchase") {
+  const type = String(referenceType ?? "").toLowerCase();
+  if (!referenceId) return type;
+  if (type === kind) return `${kind === "sale" ? "Sale" : "Purchase"} #${referenceId}`;
+  if (type === VOUCHER_MIRROR_REFERENCE) return `${kind === "sale" ? "Receipt" : "Payment"} #${referenceId}`;
+  return type;
+}
+
+/**
+ * One voucher line for a manual cash movement. `createReceiptVoucher` derives
+ * the debit/credit side from the voucher type, so only the amount is supplied.
+ */
+function cashVoucherLine(accountId: number, amount: number, narration: string): ReceiptLineInput {
+  return { accountId, debit: "0", credit: "0", amount: String(amount), narration } as ReceiptLineInput;
+}
+
+/** The ledger account a manual cash movement settles against. */
+function resolveCashContraAccount(client: DbClient, partyName: string, kind: "CR" | "CP") {
+  return (
+    findAccountByName(client, partyName) ||
+    ensureSystemAccount(client, kind === "CR" ? "Cash Receipts" : "Cash Payments", kind === "CR" ? "income" : "expense")
+  );
+}
+
+/**
+ * Raises a standalone cash receipt as a CR voucher and returns its cash-register
+ * mirror.
+ *
+ * Going through the voucher is what keeps the two screens in step: the voucher is
+ * what the Cash Receipts page lists and what owns the ledger entry, and the
+ * mirror is what Cash in Hand lists and balances from. Posting the ledger inline
+ * instead left a receipt visible on one screen and invisible — and unposted — on
+ * the other.
+ */
+async function createReceiptThroughVoucher(input: {
+  receiptDate: Date;
+  receivedFrom: string;
+  amount: number;
+  description: string;
+}): Promise<CashReceipt> {
+  const contra = resolveCashContraAccount(db, input.receivedFrom, "CR");
+  const voucher = await createReceiptVoucher(
+    {
+      voucherType: "CR",
+      voucherDate: input.receiptDate,
+      narration: input.description,
+    } as any,
+    [cashVoucherLine(contra.id, input.amount, input.description)],
+  );
+  syncCashMirrorForVoucher(voucher.id);
+  const mirror = findCashMirrorForVoucher("CR", voucher.id);
+  if (!mirror) throw new Error("Failed to record cash receipt in the cash register");
+  return mirror as CashReceipt;
+}
+
 export async function createReceipt(data: Omit<InsertCashReceipt, "voucherNo" | "createdAt"> & { voucherNo?: string }): Promise<CashReceipt> {
   const voucherNo = data.voucherNo ?? getNextVoucherNo("CR");
   const amount = parseNum(data.amount);
@@ -192,18 +294,39 @@ export async function createReceipt(data: Omit<InsertCashReceipt, "voucherNo" | 
     invoiceNumber: linkedSale?.invoiceNumber,
     reference: data.referenceId || voucherNo,
   });
-  const [inserted] = db.insert(cashReceipts).values({
-    voucherNo,
-    receiptDate: toDateValue(data.receiptDate as any, "receipt date"),
-    receivedFrom: data.receivedFrom,
-    amount: String(amount),
-    description,
-    paymentMode: data.paymentMode ?? "cash",
-    referenceType: data.referenceType ?? null,
-    referenceId: data.referenceId ?? null,
-    cashAccountId: data.cashAccountId ?? 1,
-  }).returning().all();
-  return inserted!;
+  const receiptDate = toDateValue(data.receiptDate as any, "receipt date");
+  const isStandalone = !isPostedElsewhere(data.referenceType);
+
+  // A standalone entry is a real cash movement nobody else has posted, so it
+  // becomes a voucher. An invoice- or journal-linked row is only a register
+  // mirror — that document posted the ledger entry itself.
+  if (isStandalone) {
+    return createReceiptThroughVoucher({
+      receiptDate,
+      receivedFrom: String(data.receivedFrom),
+      amount,
+      description,
+    });
+  }
+
+  const inserted = db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
+    const [row] = db.insert(cashReceipts).values({
+      voucherNo,
+      receiptDate,
+      receivedFrom: data.receivedFrom,
+      amount: String(amount),
+      description,
+      paymentMode: data.paymentMode ?? "cash",
+      referenceType: data.referenceType ?? null,
+      referenceId: data.referenceId ?? null,
+      cashAccountId: data.cashAccountId ?? 1,
+    }).returning().all();
+    const receipt = row!;
+    return receipt;
+  });
+
+  return inserted;
 }
 
 export async function updateReceipt(id: number, data: Partial<Omit<InsertCashReceipt, "voucherNo" | "createdAt">>): Promise<CashReceipt | null> {
@@ -221,13 +344,70 @@ export async function updateReceipt(id: number, data: Partial<Omit<InsertCashRec
         partyName: data.receivedFrom ?? existing.receivedFrom,
         reference: existing.referenceId || existing.voucherNo,
       });
-  const [updated] = db.update(cashReceipts).set({
-    ...(data.receiptDate != null && { receiptDate: toDateValue(data.receiptDate as any, "receipt date") }),
-    ...(data.receivedFrom != null && { receivedFrom: data.receivedFrom }),
-    ...(data.amount != null && { amount: String(amount) }),
-    ...(data.description !== undefined && { description }),
-  }).where(eq(cashReceipts.id, id)).returning().all();
-  return updated ?? null;
+  const isStandalone = !isPostedElsewhere(existing.referenceType);
+  const postingDate = data.receiptDate != null
+    ? toDateValue(data.receiptDate as any, "receipt date")
+    : (existing.receiptDate instanceof Date ? existing.receiptDate : new Date(existing.receiptDate as any));
+
+  // A voucher mirror is edited through its voucher, so the Cash Receipts screen
+  // and the ledger see the same change. The mirror itself posts nothing.
+  if (isVoucherMirror(existing)) {
+    const contra = resolveCashContraAccount(db, String(data.receivedFrom ?? existing.receivedFrom), "CR");
+    await updateReceiptVoucher(
+      existing.referenceId,
+      {
+        ...(data.receiptDate != null && { voucherDate: postingDate }),
+        ...(data.description !== undefined && { narration: description ?? "" }),
+      } as any,
+      [cashVoucherLine(contra.id, amount, description ?? "")],
+    );
+    syncCashMirrorForVoucher(existing.referenceId);
+    return (db.select().from(cashReceipts).where(eq(cashReceipts.id, id)).all()[0] as CashReceipt) ?? null;
+  }
+
+  return db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
+    if (isStandalone) {
+      const prior = client.select().from(ledgerEntries).where(eq(ledgerEntries.cashReceiptId, id)).all();
+      const affected = Array.from(new Set(prior.map((e: any) => e.accountId)));
+      client.delete(ledgerEntries).where(eq(ledgerEntries.cashReceiptId, id)).run();
+      client.delete(cashTransactions).where(eq(cashTransactions.cashReceiptId, id)).run();
+      recomputeAccountBalances(client, affected);
+    }
+    const [updated] = db.update(cashReceipts).set({
+      ...(data.receiptDate != null && { receiptDate: postingDate }),
+      ...(data.receivedFrom != null && { receivedFrom: data.receivedFrom }),
+      ...(data.amount != null && { amount: String(amount) }),
+      ...(data.description !== undefined && { description }),
+    }).where(eq(cashReceipts.id, id)).returning().all();
+    if (!updated) return null;
+    if (isStandalone && amount > 0) {
+      const receivedFrom = data.receivedFrom ?? existing.receivedFrom;
+      const matched = findAccountByName(client, String(receivedFrom));
+      const contra = matched || ensureSystemAccount(client, "Cash Receipts", "income");
+      const cashLedger = ensureCashLedgerAccount(client);
+      const narration = updated.description || description || existing.description || "";
+      postBalancedLedgerEntries(client, [
+        {
+          accountId: cashLedger.id,
+          transactionType: "debit",
+          amount: String(amount),
+          description: narration,
+          ...getLedgerReferenceColumns("cash_receipt", id),
+          entryDate: postingDate,
+        },
+        {
+          accountId: contra.id,
+          transactionType: "credit",
+          amount: String(amount),
+          description: narration,
+          ...getLedgerReferenceColumns("cash_receipt", id),
+          entryDate: postingDate,
+        },
+      ], `cash receipt ${updated.voucherNo}`);
+    }
+    return updated;
+  });
 }
 
 export async function deleteReceipt(id: number): Promise<{ ok: boolean; error?: string }> {
@@ -236,8 +416,26 @@ export async function deleteReceipt(id: number): Promise<{ ok: boolean; error?: 
   if (r.referenceType === "sale" && r.referenceId) {
     return { ok: false, error: `This entry is linked to Sale #${r.referenceId}, delete the sale instead.` };
   }
-  db.delete(cashReceipts).where(eq(cashReceipts.id, id)).run();
-  return { ok: true };
+  const isStandalone = !isPostedElsewhere(r.referenceType);
+  // Deleting a voucher mirror deletes the voucher, which reverses the ledger
+  // entry and clears it off the Cash Receipts screen in the same step.
+  if (isVoucherMirror(r)) {
+    await deleteReceiptVoucher(r.referenceId);
+    syncCashMirrorForVoucher(r.referenceId);
+    return { ok: true };
+  }
+  return db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
+    if (isStandalone) {
+      const prior = client.select().from(ledgerEntries).where(eq(ledgerEntries.cashReceiptId, id)).all();
+      const affected = Array.from(new Set(prior.map((e: any) => e.accountId)));
+      client.delete(ledgerEntries).where(eq(ledgerEntries.cashReceiptId, id)).run();
+      client.delete(cashTransactions).where(eq(cashTransactions.cashReceiptId, id)).run();
+      recomputeAccountBalances(client, affected);
+    }
+    db.delete(cashReceipts).where(eq(cashReceipts.id, id)).run();
+    return { ok: true };
+  });
 }
 
 export async function getPayments(filters?: {
@@ -268,6 +466,31 @@ export async function getPaymentById(id: number): Promise<CashPayment | null> {
   return p ?? null;
 }
 
+/**
+ * Raises a standalone cash payment as a CP voucher and returns its cash-register
+ * mirror — the payment-side counterpart of createReceiptThroughVoucher.
+ */
+async function createPaymentThroughVoucher(input: {
+  paymentDate: Date;
+  paidTo: string;
+  amount: number;
+  description: string;
+}): Promise<CashPayment> {
+  const contra = resolveCashContraAccount(db, input.paidTo, "CP");
+  const voucher = await createReceiptVoucher(
+    {
+      voucherType: "CP",
+      voucherDate: input.paymentDate,
+      narration: input.description,
+    } as any,
+    [cashVoucherLine(contra.id, input.amount, input.description)],
+  );
+  syncCashMirrorForVoucher(voucher.id);
+  const mirror = findCashMirrorForVoucher("CP", voucher.id);
+  if (!mirror) throw new Error("Failed to record cash payment in the cash register");
+  return mirror as CashPayment;
+}
+
 export async function createPayment(data: Omit<InsertCashPayment, "voucherNo" | "createdAt"> & { voucherNo?: string }): Promise<CashPayment> {
   const voucherNo = data.voucherNo ?? getNextVoucherNo("CP");
   const amount = parseNum(data.amount);
@@ -289,18 +512,36 @@ export async function createPayment(data: Omit<InsertCashPayment, "voucherNo" | 
     invoiceNumber: linkedPurchase?.invoiceNumber,
     reference: data.referenceId || voucherNo,
   });
-  const [inserted] = db.insert(cashPayments).values({
-    voucherNo,
-    paymentDate: toDateValue(data.paymentDate as any, "payment date"),
-    paidTo: data.paidTo,
-    amount: String(amount),
-    description,
-    paymentMode: data.paymentMode ?? "cash",
-    referenceType: data.referenceType ?? null,
-    referenceId: data.referenceId ?? null,
-    cashAccountId: data.cashAccountId ?? 1,
-  }).returning().all();
-  return inserted!;
+  const paymentDate = toDateValue(data.paymentDate as any, "payment date");
+  const isStandalone = !isPostedElsewhere(data.referenceType);
+
+  if (isStandalone) {
+    return createPaymentThroughVoucher({
+      paymentDate,
+      paidTo: String(data.paidTo),
+      amount,
+      description,
+    });
+  }
+
+  const inserted = db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
+    const [row] = db.insert(cashPayments).values({
+      voucherNo,
+      paymentDate,
+      paidTo: data.paidTo,
+      amount: String(amount),
+      description,
+      paymentMode: data.paymentMode ?? "cash",
+      referenceType: data.referenceType ?? null,
+      referenceId: data.referenceId ?? null,
+      cashAccountId: data.cashAccountId ?? 1,
+    }).returning().all();
+    const payment = row!;
+    return payment;
+  });
+
+  return inserted;
 }
 
 export async function updatePayment(id: number, data: Partial<Omit<InsertCashPayment, "voucherNo" | "createdAt">>): Promise<CashPayment | null> {
@@ -318,13 +559,70 @@ export async function updatePayment(id: number, data: Partial<Omit<InsertCashPay
         partyName: data.paidTo ?? existing.paidTo,
         reference: existing.referenceId || existing.voucherNo,
       });
-  const [updated] = db.update(cashPayments).set({
-    ...(data.paymentDate != null && { paymentDate: toDateValue(data.paymentDate as any, "payment date") }),
-    ...(data.paidTo != null && { paidTo: data.paidTo }),
-    ...(data.amount != null && { amount: String(amount) }),
-    ...(data.description !== undefined && { description }),
-  }).where(eq(cashPayments.id, id)).returning().all();
-  return updated ?? null;
+  const isStandalone = !isPostedElsewhere(existing.referenceType);
+  const postingDate = data.paymentDate != null
+    ? toDateValue(data.paymentDate as any, "payment date")
+    : (existing.paymentDate instanceof Date ? existing.paymentDate : new Date(existing.paymentDate as any));
+
+  // Mirror rows are edited through their voucher, so the Cash Payments screen
+  // and the ledger see the same change.
+  if (isVoucherMirror(existing)) {
+    const contra = resolveCashContraAccount(db, String(data.paidTo ?? existing.paidTo), "CP");
+    await updateReceiptVoucher(
+      existing.referenceId,
+      {
+        ...(data.paymentDate != null && { voucherDate: postingDate }),
+        ...(data.description !== undefined && { narration: description ?? "" }),
+      } as any,
+      [cashVoucherLine(contra.id, amount, description ?? "")],
+    );
+    syncCashMirrorForVoucher(existing.referenceId);
+    return (db.select().from(cashPayments).where(eq(cashPayments.id, id)).all()[0] as CashPayment) ?? null;
+  }
+
+  return db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
+    if (isStandalone) {
+      const prior = client.select().from(ledgerEntries).where(eq(ledgerEntries.cashPaymentId, id)).all();
+      const affected = Array.from(new Set(prior.map((e: any) => e.accountId)));
+      client.delete(ledgerEntries).where(eq(ledgerEntries.cashPaymentId, id)).run();
+      client.delete(cashTransactions).where(eq(cashTransactions.cashPaymentId, id)).run();
+      recomputeAccountBalances(client, affected);
+    }
+    const [updated] = db.update(cashPayments).set({
+      ...(data.paymentDate != null && { paymentDate: postingDate }),
+      ...(data.paidTo != null && { paidTo: data.paidTo }),
+      ...(data.amount != null && { amount: String(amount) }),
+      ...(data.description !== undefined && { description }),
+    }).where(eq(cashPayments.id, id)).returning().all();
+    if (!updated) return null;
+    if (isStandalone && amount > 0) {
+      const paidTo = data.paidTo ?? existing.paidTo;
+      const matched = findAccountByName(client, String(paidTo));
+      const contra = matched || ensureSystemAccount(client, "Cash Payments", "expense");
+      const cashLedger = ensureCashLedgerAccount(client);
+      const narration = updated.description || description || existing.description || "";
+      postBalancedLedgerEntries(client, [
+        {
+          accountId: contra.id,
+          transactionType: "debit",
+          amount: String(amount),
+          description: narration,
+          ...getLedgerReferenceColumns("cash_payment", id),
+          entryDate: postingDate,
+        },
+        {
+          accountId: cashLedger.id,
+          transactionType: "credit",
+          amount: String(amount),
+          description: narration,
+          ...getLedgerReferenceColumns("cash_payment", id),
+          entryDate: postingDate,
+        },
+      ], `cash payment ${updated.voucherNo}`);
+    }
+    return updated;
+  });
 }
 
 export async function deletePayment(id: number): Promise<{ ok: boolean; error?: string }> {
@@ -333,8 +631,26 @@ export async function deletePayment(id: number): Promise<{ ok: boolean; error?: 
   if (p.referenceType === "purchase" && p.referenceId) {
     return { ok: false, error: `This entry is linked to Purchase #${p.referenceId}, delete the purchase instead.` };
   }
-  db.delete(cashPayments).where(eq(cashPayments.id, id)).run();
-  return { ok: true };
+  const isStandalone = !isPostedElsewhere(p.referenceType);
+  // Deleting a voucher mirror deletes the voucher, which reverses the ledger
+  // entry and clears it off the Cash Payments screen in the same step.
+  if (isVoucherMirror(p)) {
+    await deleteReceiptVoucher(p.referenceId);
+    syncCashMirrorForVoucher(p.referenceId);
+    return { ok: true };
+  }
+  return db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
+    if (isStandalone) {
+      const prior = client.select().from(ledgerEntries).where(eq(ledgerEntries.cashPaymentId, id)).all();
+      const affected = Array.from(new Set(prior.map((e: any) => e.accountId)));
+      client.delete(ledgerEntries).where(eq(ledgerEntries.cashPaymentId, id)).run();
+      client.delete(cashTransactions).where(eq(cashTransactions.cashPaymentId, id)).run();
+      recomputeAccountBalances(client, affected);
+    }
+    db.delete(cashPayments).where(eq(cashPayments.id, id)).run();
+    return { ok: true };
+  });
 }
 
 export type LedgerRow = {
@@ -375,7 +691,7 @@ export async function getLedger(filters?: { from?: string; to?: string; cashAcco
       type: "receipt",
       voucherNo: r.voucherNo,
       desc: displayNarration(r.description),
-      ref: r.referenceType === "sale" && r.referenceId ? `Sale #${r.referenceId}` : (r.referenceType || ""),
+      ref: cashLedgerReference(r.referenceType, r.referenceId, "sale"),
       refType: r.referenceType ?? undefined,
       refId: r.referenceId ?? undefined,
       debit: parseNum(r.amount),
@@ -388,7 +704,7 @@ export async function getLedger(filters?: { from?: string; to?: string; cashAcco
       type: "payment",
       voucherNo: p.voucherNo,
       desc: displayNarration(p.description),
-      ref: p.referenceType === "purchase" && p.referenceId ? `Purchase #${p.referenceId}` : (p.referenceType || ""),
+      ref: cashLedgerReference(p.referenceType, p.referenceId, "purchase"),
       refType: p.referenceType ?? undefined,
       refId: p.referenceId ?? undefined,
       debit: 0,
@@ -469,100 +785,6 @@ export async function getTodaySummary(cashAccountId = 1): Promise<{
   };
 }
 
-// Journal Vouchers (Cash module)
-export type CashJournalItemInput = { accountHead: string; debitAmount: string; creditAmount: string; narration?: string };
-
-export async function getJournalVouchers(): Promise<typeof cashJournalVouchers.$inferSelect[]> {
-  return db.select().from(cashJournalVouchers).orderBy(desc(cashJournalVouchers.voucherDate)).all();
-}
-
-export async function getJournalVoucherById(id: number): Promise<{
-  voucher: typeof cashJournalVouchers.$inferSelect;
-  items: typeof cashJournalItems.$inferSelect[];
-} | null> {
-  const [v] = db.select().from(cashJournalVouchers).where(eq(cashJournalVouchers.id, id)).all();
-  if (!v) return null;
-  const items = db.select().from(cashJournalItems).where(eq(cashJournalItems.journalId, id)).all();
-  return { voucher: v, items };
-}
-
-export async function createJournalVoucher(data: {
-  voucherDate: string | number;
-  narration?: string;
-  items: CashJournalItemInput[];
-}): Promise<{ id: number; voucherNo: string }> {
-  const totalDebit = Number(sumAmounts(data.items.map((it) => it.debitAmount)));
-  const totalCredit = Number(sumAmounts(data.items.map((it) => it.creditAmount)));
-  // Tolerance kept at 0.001 so the accepted/rejected boundary is unchanged;
-  // the comparison itself is now exact rather than a float subtraction.
-  if (toDecimal(totalDebit).minus(toDecimal(totalCredit)).abs().gt("0.001")) {
-    throw new Error("Total debit must equal total credit");
-  }
-  const voucherNo = getNextVoucherNo("JV");
-  const debitSummary = summarizeNarrationValues(
-    data.items.filter((item) => parseNum(item.debitAmount) > 0).map((item) => item.accountHead),
-  );
-  const creditSummary = summarizeNarrationValues(
-    data.items.filter((item) => parseNum(item.creditAmount) > 0).map((item) => item.accountHead),
-  );
-  const transactionSummary = joinNarration([debitSummary, creditSummary], " to ");
-  const resolvedNarration = buildCashJournalVoucherNarration({
-    headerNarration: data.narration,
-    itemNarrations: data.items.map((item) => item.narration),
-    voucherNumber: voucherNo,
-    summary: transactionSummary,
-  });
-  const [v] = db.insert(cashJournalVouchers).values({
-    voucherNo,
-    voucherDate: toDateValue(data.voucherDate as any, "voucher date"),
-    narration: resolvedNarration,
-    totalDebit: String(totalDebit),
-    totalCredit: String(totalCredit),
-  }).returning().all();
-  if (!v) throw new Error("Failed to create journal voucher");
-  for (const it of data.items) {
-    db.insert(cashJournalItems).values({
-      journalId: v.id,
-      accountHead: it.accountHead,
-      debitAmount: it.debitAmount || "0",
-      creditAmount: it.creditAmount || "0",
-      narration: preferManualNarration(it.narration, resolvedNarration),
-    }).run();
-  }
-  // Auto-create cash receipt/payment if Cash is in account heads
-  const cashAccountId = 1;
-  for (const it of data.items) {
-    const head = (it.accountHead || "").toLowerCase();
-    if (head === "cash" || head === "main cash") {
-      const debit = parseNum(it.debitAmount);
-      const credit = parseNum(it.creditAmount);
-      if (debit > 0) {
-        await createReceipt({
-          receiptDate: toDateValue(data.voucherDate as any, "receipt date"),
-          receivedFrom: resolvedNarration,
-          amount: String(debit),
-          description: resolvedNarration,
-          referenceType: "journal",
-          referenceId: v.id,
-          cashAccountId,
-        });
-      }
-      if (credit > 0) {
-        await createPayment({
-          paymentDate: toDateValue(data.voucherDate as any, "payment date"),
-          paidTo: resolvedNarration,
-          amount: String(credit),
-          description: resolvedNarration,
-          referenceType: "journal",
-          referenceId: v.id,
-          cashAccountId,
-        });
-      }
-      break;
-    }
-  }
-  return { id: v.id, voucherNo };
-}
 
 /**
  * Interlink: When existing journal voucher (journalVouchers) affects Cash account,
@@ -582,7 +804,7 @@ export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
     if (e.accountId !== cashAccount.id) continue;
     const amt = parseNum(e.amount);
     if (amt <= 0) continue;
-    if (e.entryType === "DEBIT") {
+    if (e.entryType === "debit") {
       await createReceipt({
         receiptDate,
         receivedFrom: narration,
@@ -592,7 +814,7 @@ export async function syncCashFromJournalVoucher(jvId: number): Promise<void> {
         referenceId: jvId,
         cashAccountId: 1,
       });
-    } else if (e.entryType === "CREDIT") {
+    } else if (e.entryType === "credit") {
       await createPayment({
         paymentDate: receiptDate,
         paidTo: narration,
@@ -851,3 +1073,4 @@ export function getCashPaymentVoucherNos(cashPaymentIds: number[]): Map<number, 
     .all();
   return new Map(rows.map((r) => [r.id, r.voucherNo]));
 }
+

@@ -19,4 +19,7 @@ export const journalVoucherInputSchema = insertJournalVoucherSchema.extend({
     return Number.isFinite(d) && Number.isFinite(c) && Math.abs(d - c) < 1e-6;
   },
   { message: "Debit amount must equal credit amount", path: ["creditAmount"] }
+).refine(
+  (data) => data.debitAccountId !== data.creditAccountId,
+  { message: "Debit and credit accounts must be different", path: ["creditAccountId"] }
 );

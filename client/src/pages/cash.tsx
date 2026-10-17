@@ -1,6 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
 import { useQuery } from "@tanstack/react-query";
 import { useLanguage } from "@/contexts/language-context";
@@ -12,7 +11,7 @@ type CashSummary = { opening: number; debit: number; credit: number; closing: nu
 type CashTransaction = {
   id: number;
   transactionDate: string;
-  transactionType: "DEBIT" | "CREDIT";
+  transactionType: "debit" | "credit";
   referenceType?: string;
   referenceId?: number;
   amount: string;
@@ -57,7 +56,7 @@ export default function CashPage() {
         title: "Debit",
         align: "right",
         render: (item) =>
-          item.transactionType === "DEBIT" ? (
+          item.transactionType === "debit" ? (
             <div className="flex items-center gap-1 justify-end text-emerald-600 font-mono">
               <ArrowDownRight className="h-3 w-3" />
               {parseFloat(item.amount).toLocaleString()}
@@ -71,7 +70,7 @@ export default function CashPage() {
         title: "Credit",
         align: "right",
         render: (item) =>
-          item.transactionType === "CREDIT" ? (
+          item.transactionType === "credit" ? (
             <div className="flex items-center gap-1 justify-end text-red-600 font-mono">
               <ArrowUpRight className="h-3 w-3" />
               {parseFloat(item.amount).toLocaleString()}

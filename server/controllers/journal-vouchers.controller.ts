@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { journalVoucherInputSchema } from "../schemas/journal.schema";
 import * as journalService from "../services/journal-vouchers.service";
-import { parseOptionalInt, parseRequiredInt } from "../utils/parse";
+import { parseRequiredInt } from "../utils/parse";
 import { isBusinessRuleError } from "../utils/errors";
 
 export async function listJournalVouchers(_req: Request, res: Response) {
@@ -25,6 +25,24 @@ export async function getNextJournalNumber(_req: Request, res: Response) {
   }
 }
 
+export async function checkDuplicateJournalVoucher(req: Request, res: Response) {
+  try {
+    const { voucherDate, debitAccountId, creditAccountId, amount, narration, excludeId } = req.body;
+    const duplicate = await journalService.checkDuplicateJournalVoucher({
+      voucherDate,
+      debitAccountId,
+      creditAccountId,
+      amount,
+      narration,
+      excludeId,
+    });
+    res.json({ duplicate: !!duplicate, duplicateVoucher: duplicate });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to check duplicate" });
+  }
+}
+
 export async function getJournalVoucher(req: Request, res: Response) {
   try {
     const id = parseRequiredInt(req.params.id, "id");
@@ -41,6 +59,14 @@ export async function getJournalVoucher(req: Request, res: Response) {
 export async function createJournalVoucher(req: Request, res: Response) {
   try {
     const parsed = journalVoucherInputSchema.parse(req.body);
+    // Force status to "draft" on create unless caller is admin/manager
+    const userRole = req.user?.role?.toLowerCase() || "";
+    const canBypassDraft = userRole === "admin" || userRole === "manager";
+    if (!canBypassDraft) {
+      parsed.status = "draft";
+    }
+    // Inject createdBy from authenticated user
+    parsed.createdBy = req.user?.id;
     const voucher = await journalService.createJournalVoucher(parsed);
     res.status(201).json(voucher);
   } catch (error) {
@@ -60,6 +86,8 @@ export async function updateJournalVoucher(req: Request, res: Response) {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
     const parsed = journalVoucherInputSchema.parse(req.body);
+    // Inject createdBy from authenticated user for audit trail
+    parsed.createdBy = req.user?.id;
     const voucher = await journalService.updateJournalVoucher(id, parsed);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
@@ -79,7 +107,7 @@ export async function approveJournalVoucher(req: Request, res: Response) {
   try {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid voucher id" });
-    const approverId = parseOptionalInt(req.body?.approvedBy);
+    const approverId = req.user?.id;
     const voucher = await journalService.approveJournalVoucher(id, approverId);
     if (!voucher) return res.status(404).json({ error: "Voucher not found" });
     res.json(voucher);
