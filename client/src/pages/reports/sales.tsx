@@ -1,7 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
-import { Download, TrendingUp, Truck, Calendar } from "lucide-react";
+import { TrendingUp, Truck, Calendar } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";

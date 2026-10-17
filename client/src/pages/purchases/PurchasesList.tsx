@@ -78,6 +78,27 @@ export function PurchasesList({
       ),
     },
     {
+      key: "gatePasses",
+      title: "Gate Pass",
+      render: (item) =>
+        item.gatePasses && item.gatePasses.length > 0 ? (
+          <div className="flex flex-wrap gap-1">
+            {item.gatePasses.map((pass) => (
+              <Link
+                key={pass.id}
+                href={`/gate-passes/${pass.id}`}
+                className="font-mono text-sm text-primary hover:underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {pass.number}
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <span className="text-muted-foreground">-</span>
+        ),
+    },
+    {
       key: "purchaseDate",
       title: "Date",
       render: (item) => (

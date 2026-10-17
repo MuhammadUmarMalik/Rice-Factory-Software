@@ -132,7 +132,7 @@ function DashboardChartsComponent({
       <Card>
         <CardHeader className={isRTL ? "text-right" : ""}>
           <CardTitle className="text-base font-semibold">Product Stock</CardTitle>
-          <p className="text-sm text-muted-foreground">Closing balances</p>
+          <p className="text-sm text-muted-foreground">Top 12 closing balances (kg)</p>
         </CardHeader>
         <CardContent>
           <div className="h-96">
@@ -156,7 +156,7 @@ function DashboardChartsComponent({
                       border: "1px solid hsl(var(--border))",
                       borderRadius: "6px",
                     }}
-                    formatter={(value: number) => [`${value.toLocaleString()}`, ""]}
+                    formatter={(value: number) => [`${value.toLocaleString()} kg`, ""]}
                   />
                   <Bar dataKey="stock" fill="url(#productStockGradient)" radius={[8, 8, 0, 0]}>
                     <LabelList

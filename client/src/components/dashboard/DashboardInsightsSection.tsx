@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkeletonBox } from "@/components/ui/skeletons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
+import { formatStock } from "@/lib/units";
 
 type DashboardInsightsSectionProps = {
   charges?: {
@@ -144,15 +145,15 @@ export function DashboardInsightsSection({
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="rounded-lg border p-3">
                   <p className="text-xs text-muted-foreground">Paddy Stock</p>
-                  <p className="font-mono font-semibold">{(stock?.paddyQty || 0).toLocaleString()}</p>
+                  <p className="font-mono font-semibold">{(stock?.paddyQty || 0).toLocaleString()} kg</p>
                 </div>
                 <div className="rounded-lg border p-3">
                   <p className="text-xs text-muted-foreground">Rice Stock</p>
-                  <p className="font-mono font-semibold">{(stock?.riceQty || 0).toLocaleString()}</p>
+                  <p className="font-mono font-semibold">{(stock?.riceQty || 0).toLocaleString()} kg</p>
                 </div>
                 <div className="rounded-lg border p-3">
                   <p className="text-xs text-muted-foreground">Broken Stock</p>
-                  <p className="font-mono font-semibold">{(stock?.brokenQty || 0).toLocaleString()}</p>
+                  <p className="font-mono font-semibold">{(stock?.brokenQty || 0).toLocaleString()} kg</p>
                 </div>
                 <div className="rounded-lg border p-3">
                   <p className="text-xs text-muted-foreground">Bardana Balance</p>
@@ -176,7 +177,7 @@ export function DashboardInsightsSection({
                     {stock.lowStock.map((item) => (
                       <div key={item.id} className="flex items-center justify-between">
                         <span>{item.name}</span>
-                        <span className="font-mono">{item.stock} {item.unit}</span>
+                        <span className="font-mono">{formatStock(item.stock, item.unit)}</span>
                       </div>
                     ))}
                   </div>

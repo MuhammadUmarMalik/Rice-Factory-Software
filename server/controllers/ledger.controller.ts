@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import * as ledgerService from "../services/ledger.service";
+import * as ledgerModel from "../models/ledger.model";
 
 function parseDateQuery(value?: string) {
   if (!value) return undefined;
@@ -34,5 +35,20 @@ export async function getLedger(req: Request, res: Response) {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Failed to fetch ledger entries" });
+  }
+}
+
+export async function toggleCleared(req: Request, res: Response) {
+  try {
+    const id = parseInt(req.params.id as string);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id" });
+    const cleared = await ledgerModel.toggleLedgerEntryCleared(id);
+    res.json({ id, cleared });
+  } catch (error: any) {
+    if (error?.message === "Ledger entry not found") {
+      return res.status(404).json({ error: error.message });
+    }
+    console.error(error);
+    res.status(500).json({ error: "Failed to update cleared status" });
   }
 }

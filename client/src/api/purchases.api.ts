@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPatch, apiDelete } from "./base";
+import { apiGet, apiPost, apiPatch } from "./base";
 import { apiRequest } from "@/lib/queryClient";
 import type { Purchase } from "@/types/schema";
 

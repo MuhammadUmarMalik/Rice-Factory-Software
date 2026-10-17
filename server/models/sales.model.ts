@@ -3,13 +3,12 @@
  * storage.ts. Posting helpers come from ./ledger.model and the period guard
  * from ../services/posting-guard.service (previously `this.assertPostingAllowed`).
  */
-import { db, sqlite } from "./db";
-import { eq, and, asc, desc, sql, gte, lte, lt, isNull, inArray, or } from "drizzle-orm";
+import { db } from "./db";
+import { eq, desc } from "drizzle-orm";
 import {
   accounts, products, sales, saleItems,
-  ledgerEntries, cashTransactions, taxLedgers, taxTypes, invoiceAllocations, auditLogs,
-  type InsertLedgerEntry,
-  type Sale, type InsertSale, type SaleItem, type InsertSaleItem,
+  ledgerEntries, taxLedgers, taxTypes, type InsertLedgerEntry,
+  type Sale, type InsertSale, type SaleItem,
 } from "../db/schema";
 import { parseAmount, roundMoney } from "../utils/parse";
 import { assertPostingAllowed } from "../services/posting-guard.service";
@@ -18,7 +17,6 @@ import { updateProductStockOn } from "./products.model";
 import {
   buildLedgerReferenceWhere,
   calculateTaxAmount,
-  deleteDaybookProjection,
   ensureSalesChargeAccount,
   ensureSystemAccount,
   getLedgerReferenceColumns,
@@ -30,6 +28,7 @@ import type { SaleItemInput } from "../repositories/types";
 import { nextDocumentSequence } from "./sequences.model";
 import { toValidDate } from "../services/posting-guard.service";
 import { buildSaleNarration as buildSaleNarrationText } from "../utils/narration";
+import { assertSaleReductionAllowed, assertSourceHasNoActiveGatePass } from "./gate-passes.model";
 
 type DbClient = typeof db;
 
@@ -105,8 +104,28 @@ export async function createSale(sale: InsertSale, items: SaleItemInput[]): Prom
     const weighingCharge = parseAmount(sale.weighingCharges || "0");
     const otherCharge = parseAmount(sale.otherCharges || "0");
     const rentCharge = parseAmount((sale as any).rentCharges || "0");
+    const freightCharge = parseAmount((sale as any).freightCharges || "0");
     const discountAmount = parseAmount((sale as any).discountAmount || "0");
-    const charges = roundMoney(loadingCharge + weighingCharge + otherCharge + rentCharge);
+    const loadingMode = ((sale as any).loadingChargesMode || "add") as "add" | "less";
+    const weighingMode = ((sale as any).weighingChargesMode || "add") as "add" | "less";
+    const otherMode = ((sale as any).otherChargesMode || "add") as "add" | "less";
+    const rentMode = ((sale as any).rentChargesMode || "add") as "add" | "less";
+    const freightMode = ((sale as any).freightChargesMode || "add") as "add" | "less";
+    const chargesAdd = roundMoney(
+      (loadingMode === "add" ? loadingCharge : 0) +
+      (weighingMode === "add" ? weighingCharge : 0) +
+      (otherMode === "add" ? otherCharge : 0) +
+      (rentMode === "add" ? rentCharge : 0) +
+      (freightMode === "add" ? freightCharge : 0)
+    );
+    const chargesLess = roundMoney(
+      (loadingMode === "less" ? loadingCharge : 0) +
+      (weighingMode === "less" ? weighingCharge : 0) +
+      (otherMode === "less" ? otherCharge : 0) +
+      (rentMode === "less" ? rentCharge : 0) +
+      (freightMode === "less" ? freightCharge : 0)
+    );
+    const charges = roundMoney(chargesAdd - chargesLess);
     if (discountAmount > subtotal + charges) throw new Error("Discount cannot exceed the invoice value");
     const taxAmount = roundMoney(calculateTaxAmount(client, (sale as any).taxTypeId, roundMoney(subtotal + charges - discountAmount), postingDate, "sales"));
     const totalAmount = roundMoney(Math.max(0, subtotal + charges - discountAmount + taxAmount));
@@ -174,16 +193,17 @@ export async function createSale(sale: InsertSale, items: SaleItemInput[]): Prom
     }
 
     const chargeLines = [
-      { label: "LOADING", amount: loadingCharge },
-      { label: "WEIGHING", amount: weighingCharge },
-      { label: "OTHER", amount: otherCharge },
-      { label: "RENT", amount: rentCharge },
+      { label: "LOADING" as const, amount: loadingCharge, mode: loadingMode },
+      { label: "WEIGHING" as const, amount: weighingCharge, mode: weighingMode },
+      { label: "OTHER" as const, amount: otherCharge, mode: otherMode },
+      { label: "RENT" as const, amount: rentCharge, mode: rentMode },
+      { label: "FREIGHT" as const, amount: freightCharge, mode: freightMode },
     ];
     for (const line of chargeLines) {
       if (line.amount === 0) continue;
-      const entryType = line.amount > 0 ? "credit" : "debit";
+      const entryType = line.mode === "less" ? "debit" : "credit";
       const amount = Math.abs(line.amount).toString();
-      const chargeAccount = ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER" | "RENT");
+      const chargeAccount = ensureSalesChargeAccount(client, line.label);
       pushLine({
         accountId: chargeAccount.id,
         transactionType: entryType,
@@ -285,6 +305,19 @@ export async function updateSale(id: number, sale: Partial<InsertSale>, items: S
     if (!existing) return undefined;
     const existingItems = await getSaleItems(id);
 
+    // A sale's ordered quantity may not be reduced below what has already been
+    // dispatched on its non-cancelled OUT gate passes. The guard reads the pass
+    // tables through the shared client, so it runs before the transaction.
+    const nextQuantityByProduct = new Map<number, number>();
+    for (const item of items) {
+      const kg = toSaleQuantityKg(parseAmount(item.quantity), item.unit);
+      nextQuantityByProduct.set(
+        item.productId,
+        (nextQuantityByProduct.get(item.productId) ?? 0) + kg,
+      );
+    }
+    await assertSaleReductionAllowed(db, id, nextQuantityByProduct);
+
     return db.transaction((tx) => {
       const client = tx as unknown as DbClient;
       const postingDate = toValidDate(sale.saleDate ?? existing.saleDate);
@@ -338,8 +371,28 @@ export async function updateSale(id: number, sale: Partial<InsertSale>, items: S
       const weighingCharge = parseAmount(sale.weighingCharges ?? existing.weighingCharges ?? "0");
       const otherCharge = parseAmount(sale.otherCharges ?? existing.otherCharges ?? "0");
       const rentCharge = parseAmount((sale as any).rentCharges ?? (existing as any).rentCharges ?? "0");
+      const freightCharge = parseAmount((sale as any).freightCharges ?? (existing as any).freightCharges ?? "0");
       const discountAmount = parseAmount((sale as any).discountAmount ?? (existing as any).discountAmount ?? "0");
-      const charges = roundMoney(loadingCharge + weighingCharge + otherCharge + rentCharge);
+      const loadingMode = ((sale as any).loadingChargesMode ?? (existing as any).loadingChargesMode ?? "add") as "add" | "less";
+      const weighingMode = ((sale as any).weighingChargesMode ?? (existing as any).weighingChargesMode ?? "add") as "add" | "less";
+      const otherMode = ((sale as any).otherChargesMode ?? (existing as any).otherChargesMode ?? "add") as "add" | "less";
+      const rentMode = ((sale as any).rentChargesMode ?? (existing as any).rentChargesMode ?? "add") as "add" | "less";
+      const freightMode = ((sale as any).freightChargesMode ?? (existing as any).freightChargesMode ?? "add") as "add" | "less";
+      const chargesAdd = roundMoney(
+        (loadingMode === "add" ? loadingCharge : 0) +
+        (weighingMode === "add" ? weighingCharge : 0) +
+        (otherMode === "add" ? otherCharge : 0) +
+        (rentMode === "add" ? rentCharge : 0) +
+        (freightMode === "add" ? freightCharge : 0)
+      );
+      const chargesLess = roundMoney(
+        (loadingMode === "less" ? loadingCharge : 0) +
+        (weighingMode === "less" ? weighingCharge : 0) +
+        (otherMode === "less" ? otherCharge : 0) +
+        (rentMode === "less" ? rentCharge : 0) +
+        (freightMode === "less" ? freightCharge : 0)
+      );
+      const charges = roundMoney(chargesAdd - chargesLess);
       if (discountAmount > subtotal + charges) throw new Error("Discount cannot exceed the invoice value");
       const effectiveTaxTypeId = (sale as any).taxTypeId ?? existing.taxTypeId;
       const taxAmount = roundMoney(calculateTaxAmount(client, effectiveTaxTypeId, roundMoney(subtotal + charges - discountAmount), postingDate, "sales"));
@@ -397,17 +450,18 @@ export async function updateSale(id: number, sale: Partial<InsertSale>, items: S
       }
 
       const chargeLines = [
-        { label: "LOADING", amount: loadingCharge },
-        { label: "WEIGHING", amount: weighingCharge },
-        { label: "OTHER", amount: otherCharge },
-        { label: "RENT", amount: rentCharge },
+        { label: "LOADING" as const, amount: loadingCharge, mode: loadingMode },
+        { label: "WEIGHING" as const, amount: weighingCharge, mode: weighingMode },
+        { label: "OTHER" as const, amount: otherCharge, mode: otherMode },
+        { label: "RENT" as const, amount: rentCharge, mode: rentMode },
+        { label: "FREIGHT" as const, amount: freightCharge, mode: freightMode },
       ];
       for (const line of chargeLines) {
         if (line.amount === 0) continue;
-        const entryType = line.amount > 0 ? "credit" : "debit";
+        const entryType = line.mode === "less" ? "debit" : "credit";
         const amount = Math.abs(line.amount).toString();
         pushLine({
-          accountId: ensureSalesChargeAccount(client, line.label as "LOADING" | "WEIGHING" | "OTHER" | "RENT").id,
+          accountId: ensureSalesChargeAccount(client, line.label).id,
           transactionType: entryType,
           amount,
           description: line.label,
@@ -492,6 +546,9 @@ export async function deleteSale(id: number): Promise<boolean> {
     if (paidAmount > 0) {
       throw new Error("Cannot delete a sale that has recorded payments");
     }
+    // A sale with a live gate pass (issued or completed) cannot be removed
+    // until that pass is cancelled, so the dispatched paper trail stays intact.
+    await assertSourceHasNoActiveGatePass("SALE", id);
     const items = await getSaleItems(id);
 
       return db.transaction((tx) => {
@@ -515,11 +572,6 @@ export async function deleteSale(id: number): Promise<boolean> {
         recomputeAccountBalances(client, affectedAccountIds);
         tx.delete(taxLedgers).where(eq(taxLedgers.saleId, id)).run();
         tx.delete(saleItems).where(eq(saleItems.saleId, id)).run();
-        // The Sales Daybook row is a projection of this invoice and holds an
-        // FK to it — drop it in the same transaction, otherwise the delete
-        // fails on the constraint and the daybook keeps reporting a sale that
-        // no longer exists.
-        deleteDaybookProjection("sales_daybook", "sale_id", id);
       tx.delete(sales).where(eq(sales.id, id)).run();
 
       return true;

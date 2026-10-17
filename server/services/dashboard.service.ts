@@ -495,11 +495,14 @@ export async function getDashboardCharts(params: Partial<DashboardRange>) {
       sales: row.sales,
     }));
 
-  const productStock = stockReport.rows.slice(0, 12).map((r) => ({
-    name: r.itemName,
-    stock: parseAmount(r.closingQty),
-    unit: r.unit,
-  }));
+  const productStock = stockReport.rows
+    .map((r) => ({
+      name: r.itemName,
+      stock: parseAmount(r.closingQty),
+      unit: r.unit,
+    }))
+    .sort((a, b) => b.stock - a.stock)
+    .slice(0, 12);
 
   return { monthlyTotals, productStock };
 }
