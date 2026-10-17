@@ -40,6 +40,7 @@ export type PrintableMeta = z.infer<typeof PrintableMetaSchema>;
 
 export const PrintableCompanySchema = z.object({
   name: z.string(),
+  nameUrdu: z.string().optional(),
   address: z.string().optional(),
   phone: z.string().optional(),
   logoUrl: z.string().optional(),

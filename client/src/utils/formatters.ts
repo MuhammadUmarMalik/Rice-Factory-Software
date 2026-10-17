@@ -14,7 +14,11 @@ export function formatDate(value?: string | number | Date) {
   if (!value) return "";
   try {
     const d = new Date(value);
-    return d.toISOString().slice(0, 10);
+    if (Number.isNaN(d.getTime())) return "";
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
   } catch {
     return "";
   }

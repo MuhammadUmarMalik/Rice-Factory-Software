@@ -2,7 +2,7 @@ export {};
 
 /** Page geometry passed to the Electron print bridge. Must stay in sync with
  *  `resolvePrintGeometry` in electron/main.cjs. */
-type ElectronPageOptions = {
+export type ElectronPageOptions = {
   format: "A4" | "A5" | "Letter" | "Legal" | "Thermal80" | "Custom";
   orientation: "portrait" | "landscape";
   widthMm?: number;
@@ -25,6 +25,11 @@ declare global {
         html: string;
         options: ElectronPageOptions;
       }) => Promise<string | undefined>;
+      savePdf: (payload: {
+        html: string;
+        filename?: string;
+        options?: ElectronPageOptions;
+      }) => Promise<string | null | undefined>;
       printHtml: (payload: {
         html: string;
         silent?: boolean;

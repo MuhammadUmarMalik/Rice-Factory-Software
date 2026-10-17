@@ -16,7 +16,6 @@ import {
   toPrintRequestOptions,
   type PrintSettings,
 } from "@/print/printSettings";
-import { downloadBlob } from "@/lib/export";
 
 type PrintPreviewModalProps = {
   open: boolean;
@@ -53,6 +52,7 @@ function PrintPreviewModalComponent({
   const [scale, setScale] = useState(1);
   const [contentHeightPx, setContentHeightPx] = useState(0);
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [printers, setPrinters] = useState<Array<{ name: string; displayName?: string }>>([]);
   const [printerName, setPrinterName] = useState("");
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -116,9 +116,16 @@ function PrintPreviewModalComponent({
     let active = true;
     setLoading(true);
     setReady(false);
+    setError(null);
     fetchPrintPreview(requestPayload)
       .then((markup) => {
         if (active) setHtml(markup);
+      })
+      .catch((err) => {
+        if (active) {
+          setError(err?.message || "Failed to load preview");
+          console.error("[PrintPreview] Failed:", err);
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -237,10 +244,6 @@ function PrintPreviewModalComponent({
     void handlePrint();
   }, [autoPrint, ready, handlePrint]);
 
-  const handleDownload = useCallback(async () => {
-    const blob = await fetchPrintPdf(requestPayload);
-    downloadBlob(`${docKey}.pdf`, blob);
-  }, [docKey, requestPayload]);
 
   const scaledWidth = Math.ceil(pageWidthPx * scale);
   const scaledHeight = Math.ceil((contentHeightPx || pageHeightPx) * scale);
@@ -276,9 +279,6 @@ function PrintPreviewModalComponent({
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={handlePrint} disabled={!ready || printing} data-autofocus>
                     Print
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={handleDownload}>
-                    Download
                   </Button>
                 </div>
               </div>
@@ -502,7 +502,14 @@ function PrintPreviewModalComponent({
                   </select>
                 </div>
               </div>
-              {loading ? (
+              {error ? (
+                <div className="flex flex-1 items-center justify-center p-6">
+                  <div className="max-w-md rounded-lg border border-red-200 bg-red-50 p-4 text-center">
+                    <div className="text-sm font-semibold text-red-700">Failed to load preview</div>
+                    <div className="mt-1 text-xs text-red-600">{error}</div>
+                  </div>
+                </div>
+              ) : loading ? (
                 <div className="flex flex-1 items-center justify-center">
                   <div
                     className={`print-preview-frame w-full max-w-full rounded-lg bg-white shadow-lg ${pageAspectClass}`}

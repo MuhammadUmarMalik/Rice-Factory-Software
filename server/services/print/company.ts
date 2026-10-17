@@ -21,7 +21,8 @@ export async function readCompanyProfile(): Promise<PrintableCompany> {
     const raw = await fs.readFile(settingsPath, "utf-8");
     const parsed = settingsSchema.parse(JSON.parse(raw));
     return {
-      name: parsed.businessName || "Company",
+      name: parsed.businessName || "Umar Rice ERP",
+      nameUrdu: parsed.businessNameUrdu || undefined,
       address: parsed.address || "",
       phone: parsed.phone || "",
       logoUrl: parsed.logoUrl || undefined,
@@ -30,7 +31,7 @@ export async function readCompanyProfile(): Promise<PrintableCompany> {
     };
   } catch {
     return {
-      name: "Company",
+      name: "Umar Rice ERP",
       address: "",
       phone: "",
     };

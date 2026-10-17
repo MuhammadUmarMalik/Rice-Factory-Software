@@ -1,6 +1,9 @@
 import { format } from "date-fns";
+import { buildInvoiceSummary, buildSaleInvoiceSummary } from "./invoice-summary";
 import * as accountsModel from "../../../models/accounts.model";
 import * as expensesModel from "../../../models/expenses.model";
+import * as gatePassesModel from "../../../models/gate-passes.model";
+import { gToKg } from "../../../models/gate-passes.model";
 import * as jvModel from "../../../models/journal-vouchers.model";
 import * as ledgerModel from "../../../models/ledger.model";
 import * as processingModel from "../../../models/processing.model";
@@ -23,6 +26,15 @@ function fmtDate(value?: string | number | Date) {
   if (!value) return "";
   try {
     return format(new Date(value), "dd MMM yyyy");
+  } catch {
+    return "";
+  }
+}
+
+function fmtDateTime(value?: string | number | Date | null) {
+  if (!value) return "";
+  try {
+    return format(new Date(value), "dd MMM yyyy HH:mm");
   } catch {
     return "";
   }
@@ -118,6 +130,14 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
   const items = await salesModel.getSaleItems(saleId);
   const customer = await accountsModel.getAccount(sale.customerId);
   const narration = displayNarration(sale.notes);
+  // Linked gate passes and their weighbridge details, so the invoice can show
+  // the gate pass information (number, vehicle, driver, net weight) alongside
+  // the sale without a separate lookup.
+  const gatePassRefs = (await gatePassesModel.getGatePassRefsForSources("SALE", [saleId])).get(saleId) ?? [];
+  const linkedGatePasses = (await Promise.all(gatePassRefs.map((ref) => gatePassesModel.getGatePass(ref.id)))).filter(Boolean) as any[];
+  const gatePassDetailText = linkedGatePasses
+    .map((gp) => `${gp.number} (${gp.status})${gp.vehicleNo ? " • vehicle " + gp.vehicleNo : ""}${gp.driverName ? " • driver " + gp.driverName : ""}${gp.netG != null ? " • net " + gToKg(gp.netG) + " kg" : ""}`)
+    .join("; ");
   const products = await productsModel.getProducts();
   const productMap = new Map(products.map((p) => [p.id, p]));
 
@@ -153,51 +173,36 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
           : num(qtyValue);
     return {
       sr: String(index + 1),
-      item: product ? `${product.name}${rawUnit ? ` (${rawUnit})` : ""}` : `#${it.productId}`,
+      item: product ? product.name : `#${it.productId}`,
       qty: qtyLabel,
       rate: money(it.pricePerUnit),
       amount: money(it.totalPrice),
     };
   });
 
+  // weighingCharges is the Bardana charge and otherCharges the Stitching
+  // charge (see client i18n), same order as the sale dialog.
   const charges = [
-    { label: "Loading", value: sale.loadingCharges },
-    { label: "Weighing", value: sale.weighingCharges },
-    { label: "Other", value: sale.otherCharges },
-    { label: "Rent", value: (sale as { rentCharges?: string | null }).rentCharges },
+    { label: "Bardana", value: sale.weighingCharges, mode: ((sale as any).weighingChargesMode || "add") as string },
+    { label: "Loading", value: sale.loadingCharges, mode: ((sale as any).loadingChargesMode || "add") as string },
+    { label: "Stitching", value: sale.otherCharges, mode: ((sale as any).otherChargesMode || "add") as string },
+    { label: "Freight", value: (sale as any).freightCharges, mode: ((sale as any).freightChargesMode || "add") as string },
+    { label: "Rent", value: (sale as { rentCharges?: string | null }).rentCharges, mode: ((sale as any).rentChargesMode || "add") as string },
   ];
   const chargeSummary = charges.filter((c) => Number(c.value || 0) !== 0);
-  const chargesTotal = chargeSummary.reduce((sum, c) => sum + parseFloat(String(c.value || "0")), 0);
   const discountAmount = parseFloat(String((sale as { discountAmount?: string | null }).discountAmount || "0"));
-  const unitSet = new Set(items.map((it) => resolveUnit(it)).filter(Boolean));
-  const totalQtyLabel = (() => {
-    if (unitSet.size === 1) {
-      const [rawUnit] = Array.from(unitSet);
-      const unitLabel = rawUnit;
-      const totalQty = items.reduce((sum, item) => sum + parseFloat(String(item.quantity || "0")), 0);
-      const kgValue = toKg(totalQty, rawUnit);
-      if (unitLabel && kgValue != null && rawUnit !== "kg") {
-        return `${num(totalQty)} ${unitLabel} (${num(kgValue)} kg)`;
-      }
-      return unitLabel ? `${num(totalQty)} ${unitLabel}` : num(totalQty);
-    }
-    const totalKg = items.reduce((sum, item) => {
-      const rawUnit = resolveUnit(item);
-      const qty = parseFloat(String(item.quantity || "0"));
-      const kgValue = toKg(qty, rawUnit);
-      return kgValue == null ? sum : sum + kgValue;
-    }, 0);
-    return totalKg > 0 ? `${num(totalKg)} kg` : "Mixed";
-  })();
   const taxAmount = parseFloat(String(sale.taxAmount || "0"));
   const chargeRows = [
     ...chargeSummary.map((c, idx) => ({
       sr: "",
-      item: `${c.label}${Number(c.value || 0) < 0 ? " (less)" : ""}`,
+      item: `${c.label}${c.mode === "less" ? " (less)" : ""}`,
       qty: "",
       rate: "",
-      amount: money(c.value),
+      amount: money(c.mode === "less" ? -Math.abs(Number(c.value || 0)) : Number(c.value || 0)),
     })),
+    ...(discountAmount !== 0
+      ? [{ sr: "", item: "Discount", qty: "", rate: "", amount: money(-Math.abs(discountAmount)) }]
+      : []),
     ...(taxAmount !== 0
       ? [
           {
@@ -212,20 +217,64 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
   ];
   const tableRowsWithCharges = [...tableRows, ...chargeRows];
 
-  const sections = [
-    summaryCard("Customer", customer?.name || "-"),
-    summaryCard("Invoice Date", fmtDate(sale.saleDate)),
-    summaryCard("Total Qty", totalQtyLabel, true),
-    summaryCard("Subtotal", money(sale.subtotal), true),
-    ...(Number(sale.loadingCharges || 0) !== 0 ? [summaryCard("Loading", money(sale.loadingCharges))] : []),
-    ...(Number(sale.weighingCharges || 0) !== 0 ? [summaryCard("Weighing", money(sale.weighingCharges))] : []),
-    ...(Number(sale.otherCharges || 0) !== 0 ? [summaryCard("Other Charges", money(sale.otherCharges))] : []),
-    ...(Number((sale as { rentCharges?: string | null }).rentCharges || 0) !== 0 ? [summaryCard("Rent", money((sale as { rentCharges?: string | null }).rentCharges))] : []),
-    ...(discountAmount !== 0 ? [summaryCard("Discount", `- ${money(discountAmount)}`)] : []),
-    ...(taxAmount !== 0 ? [summaryCard("Tax", money(taxAmount))] : []),
-    ...(chargesTotal !== 0 ? [summaryCard("Charges Total", money(chargesTotal), true)] : []),
-    summaryCard("Total", money(sale.totalAmount), true),
-  ];
+  /*
+   * Sales never store bags/bardana/less the way purchases do - the weight rows
+   * in the shared invoice sequence have to be derived from the line items.
+   * Net weight comes from the stored kg per line (falling back to the unit
+   * conversion), bag totals only exist if a line was actually keyed in bags,
+   * and the deductions sales do not track at all stay at zero.
+   */
+  const saleNetKg = items.reduce((sum, it) => {
+    const storedKg = parseFloat(String((it as { quantityKg?: string | null }).quantityKg || "0"));
+    if (Number.isFinite(storedKg) && storedKg > 0) return sum + storedKg;
+    const kgValue = toKg(parseFloat(String(it.quantity || "0")), resolveUnit(it));
+    return sum + (kgValue ?? 0);
+  }, 0);
+  // Sale lines carry no bag count; the bags actually loaded are on the linked
+  // gate passes. Lines keyed in bags are the fallback.
+  const gatePassBags = linkedGatePasses
+    .filter((gp) => String(gp.status || "").toLowerCase() !== "cancelled")
+    .reduce((sum, gp) => sum + (Number(gp.totalBags) || 0), 0);
+  const lineBags = items.reduce((sum, it) => {
+    if (resolveUnit(it) !== "bag") return sum;
+    const qty = parseFloat(String(it.quantity || "0"));
+    return sum + (Number.isFinite(qty) ? qty : 0);
+  }, 0);
+  const saleBags = gatePassBags || lineBags;
+  const saleMoundWhole = Math.floor(saleNetKg / 40);
+  const saleMoundRemainder = saleNetKg - saleMoundWhole * 40;
+  const lineKg = (it: (typeof items)[number]) => {
+    const storedKg = parseFloat(String((it as { quantityKg?: string | null }).quantityKg || "0"));
+    if (Number.isFinite(storedKg) && storedKg > 0) return storedKg;
+    return toKg(parseFloat(String(it.quantity || "0")), resolveUnit(it)) ?? 0;
+  };
+  const unique = (values: string[]) => Array.from(new Set(values.filter(Boolean))).join(", ");
+  const chargeValue = (label: string) => {
+    const c = charges.find((x) => x.label === label)!;
+    const val = Math.abs(parseFloat(String(c.value || "0"))) || 0;
+    return c.mode === "less" && val ? `- ${money(val)}` : money(val);
+  };
+
+  const sections = buildSaleInvoiceSummary({
+    Customer: customer?.name || "-",
+    "Invoice Date": fmtDate(sale.saleDate),
+    "Item Name": unique(items.map((it) => productMap.get(it.productId)?.name || `#${it.productId}`)),
+    "Total Bag": saleBags > 0 ? num(saleBags) : "",
+    "Weight for Bag": saleBags > 0 ? `${num(saleNetKg / saleBags)} kg` : "",
+    "Total Weight": `${num(saleNetKg)} kg`,
+    "Maund (kg)": `${saleMoundWhole} + ${num(saleMoundRemainder)} kg`,
+    // Rate per 40 kg from each line's own amount and weight, so kg, mound and
+    // ton lines all compare on the same basis.
+    "Price (40kg)": unique(items.map((it) => {
+      const kg = lineKg(it);
+      return kg > 0 ? money((parseFloat(String(it.totalPrice || "0")) / kg) * 40) : "";
+    })),
+    Subtotal: money(sale.subtotal),
+    "Bardana Charges": chargeValue("Bardana"),
+    "Loading Charges": chargeValue("Loading"),
+    "Stitching Charges": chargeValue("Stitching"),
+    "Grand Total": money(sale.totalAmount),
+  });
 
   return {
     docType: "INVOICE",
@@ -237,6 +286,7 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
       filters: {
         Vehicle: sale.vehicleNumber || "-",
         GatePass: sale.gatePassNumber || "-",
+        ...(gatePassDetailText ? { "Gate Pass Details": gatePassDetailText } : {}),
       },
     }),
     sections,
@@ -253,7 +303,7 @@ export async function mapSalesInvoice(params: Record<string, any>, ctx: PrintCon
     },
     // The template already renders the "Notes:" label - prefixing here produced
     // "Notes: Notes: pending".
-    notes: narration || "-",
+    notes: [narration, gatePassDetailText ? `Gate pass details: ${gatePassDetailText}` : ""].filter(Boolean).join(" | ") || "-",
     signatures: [
       { label: "Prepared By" },
       { label: "Approved By" },
@@ -269,6 +319,11 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
   if (!purchase) throw new Error("Purchase not found");
   const supplier = await accountsModel.getAccount(purchase.supplierId);
   const narration = displayNarration(purchase.notes);
+  const gatePassRefs = (await gatePassesModel.getGatePassRefsForSources("PURCHASE", [purchaseId])).get(purchaseId) ?? [];
+  const linkedGatePasses = (await Promise.all(gatePassRefs.map((ref) => gatePassesModel.getGatePass(ref.id)))).filter(Boolean) as any[];
+  const gatePassDetailText = linkedGatePasses
+    .map((gp) => `${gp.number} (${gp.status})${gp.vehicleNo ? " • vehicle " + gp.vehicleNo : ""}${gp.driverName ? " • driver " + gp.driverName : ""}${gp.netG != null ? " • net " + gToKg(gp.netG) + " kg" : ""}`)
+    .join("; ");
   const products = await productsModel.getProducts();
   const productMap = new Map(products.map((p) => [p.id, p]));
 
@@ -285,7 +340,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
     const product = productMap.get(it.productId);
     return {
       sr: String(index + 1),
-      item: product ? `${product.name} (${product.unit})` : `#${it.productId}`,
+      item: product ? product.name : `#${it.productId}`,
       bags: num(it.bags),
       weight: num(it.netWeightKg),
       rate: money(it.rate),
@@ -300,7 +355,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
       case "freight":
         return "Freight";
       case "loading_filling":
-        return "Loading / Filling";
+        return "Loading / Unloading";
       case "market_fee":
         return "Market Fee";
       case "mitha_sukri":
@@ -327,10 +382,9 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
   const chargeRows = charges.map((charge) => {
     const amount = parseFloat(String(charge.amount || "0"));
     const signed = charge.mode === "less" ? -Math.abs(amount) : amount;
-    const label = `${chargeLabel(charge.type)}${charge.mode === "less" ? " (Less / Watta Kaat (Moisture + Quality))" : ""}`;
     return {
       sr: "",
-      item: label,
+      item: chargeLabel(charge.type),
       bags: "",
       weight: "",
       rate: "",
@@ -364,24 +418,34 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
       return sum + (c.mode === "less" ? -Math.abs(amt) : amt);
     }, 0);
 
-  const sections = [
-    summaryCard("Supplier", supplier?.name || "-"),
-    summaryCard("Invoice Date", fmtDate(purchase.purchaseDate)),
-    summaryCard("Total Bags", num(totalBags)),
-    summaryCard("Total Weight", `${num(totalGross)} kg`),
-    summaryCard("Net Weight", `${num(totalNet)} kg`),
-    summaryCard("Bardana / Kaat", `${num(totalBardana)} kg`),
-    summaryCard("Less / Watta Kaat (Moisture + Quality)", `${num(totalLess)} kg`),
-    summaryCard("Watta Kaat (Moisture + Quality) / Bag", `${num(qualityLessPerBag)} kg`),
-    summaryCard("Weight per Bag", `${num(weightPerBag)} kg`),
-    summaryCard("Maund (40 kg)", `${moundWhole} + ${num(moundRemainder)}kg`),
-    summaryCard("Line Subtotal", money(lineSubtotal), true),
-    summaryCard("Commission", money(commissionAmount)),
-    ...(accountantClerkCharges !== 0 ? [summaryCard("Accountant / Clerk", money(accountantClerkCharges))] : []),
-    ...(chargesAddTotal !== 0 ? [summaryCard("Charges (+)", money(chargesAddTotal), true)] : []),
-    ...(chargesLessTotal !== 0 ? [summaryCard("Charges (-)", money(chargesLessTotal), true)] : []),
-    summaryCard("Grand Amount", money(purchase.totalAmount), true),
-  ];
+  /*
+   * Order comes from INVOICE_SUMMARY_ORDER. `Accountant / Clerk` and
+   * `Charges (+)` are anchored as extras next to the other money rows so they
+   * stay on the printout without disturbing the canonical sequence.
+   */
+  const sections = buildInvoiceSummary({
+    lead: summaryCard("Supplier", supplier?.name || "-"),
+    values: {
+      "Invoice Date": fmtDate(purchase.purchaseDate),
+      "Total Bags": num(totalBags),
+      "Weight per Bags": `${num(weightPerBag)} kg`,
+      "Total Weight": `${num(totalGross)} kg`,
+      "Bardana / Kaat": `${num(totalBardana)} kg`,
+      "Less / Watta Kaat (Moisture + Quality)": `${num(totalLess)} kg`,
+      "Net Weight": `${num(totalNet)} kg`,
+      "Watta Kaat (Moisture + Quality) / Bag": `${num(qualityLessPerBag)} kg`,
+      "Maund (40 kg)": `${moundWhole} + ${num(moundRemainder)}kg`,
+      "Line Subtotal": money(lineSubtotal),
+      Commission: money(commissionAmount),
+      "Charges (-)": money(chargesLessTotal),
+      "Grand Total": money(purchase.totalAmount),
+    },
+    highlight: ["Line Subtotal", "Charges (-)", "Grand Total"],
+    extras: [
+      ...(accountantClerkCharges !== 0 ? [{ after: "Commission" as const, label: "Accountant / Clerk", value: money(accountantClerkCharges) }] : []),
+      ...(chargesAddTotal !== 0 ? [{ after: "Commission" as const, label: "Charges (+)", value: money(chargesAddTotal), highlight: true }] : []),
+    ],
+  });
 
   return {
     docType: "INVOICE",
@@ -394,6 +458,7 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
         Vehicle: purchase.vehicleNumber || "-",
         BillNo: purchase.billNo || "-",
         BookNo: purchase.bookNo || "-",
+        ...(gatePassDetailText ? { "Gate Pass Details": gatePassDetailText } : {}),
       },
     }),
     sections,
@@ -410,15 +475,11 @@ export async function mapPurchaseInvoice(params: Record<string, any>, ctx: Print
       },
     },
     notes: [
-      ...charges.map((c) => {
-        const amount = parseFloat(String(c.amount || "0"));
-        const signed = c.mode === "less" ? -Math.abs(amount) : amount;
-        return `${chargeLabel(c.type)}${c.mode === "less" ? " (Less / Watta Kaat (Moisture + Quality))" : ""}: ${money(signed)}`;
-      }),
       (purchase as { amountInWords?: string }).amountInWords ? `In words: ${(purchase as { amountInWords?: string }).amountInWords}` : "",
       // "Remarks", not "Notes" - the template already prefixes the whole block
       // with "Notes:", so a second "Notes:" here read as "Notes: Notes: ...".
       narration,
+      gatePassDetailText ? `Gate pass details: ${gatePassDetailText}` : "",
     ]
       .filter(Boolean)
       .join(" | "),
@@ -669,46 +730,92 @@ export async function mapProcessingVoucher(params: Record<string, any>, ctx: Pri
   };
 }
 
-export async function mapCashJournalVoucher(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
-  const voucherId = Number(params.voucherId);
-  const result = await cashInHandService.getJournalVoucherById(voucherId);
-  if (!result) throw new Error("Cash journal voucher not found");
-  const { voucher, items } = result;
+
+export async function mapGatePass(params: Record<string, any>, ctx: PrintContext): Promise<PrintableDocumentPayload> {
+  const gatePassId = Number(params.gatePassId ?? params.id);
+  if (!gatePassId) throw new Error("gatePassId is required");
+  const pass = await gatePassesModel.getGatePass(gatePassId);
+  if (!pass) throw new Error("Gate pass not found");
+
+  const language = params.language ? String(params.language) : "en";
+  const useUrduLabel = language.toLowerCase() === "ur";
+
+  const sourceLabel = (type: string) => {
+    switch (type) {
+      case "PURCHASE": return "Purchase";
+      case "SALE": return "Sale";
+      case "JOB_RECEIVE": return "Job Work (Received)";
+      case "JOB_RETURN": return "Job Work (Returned)";
+      default: return type;
+    }
+  };
+
+  const sections: PrintableSection[] = [
+    summaryCard(useUrduLabel ? "سمت" : "Direction", pass.direction === "IN" ? (useUrduLabel ? "آمد" : "IN") : (useUrduLabel ? "روانگی" : "OUT")),
+    summaryCard(useUrduLabel ? "حالت" : "Status", statusLabel(pass.status), pass.status === "CANCELLED"),
+    summaryCard(useUrduLabel ? "گاڑی نمبر" : "Vehicle No", pass.vehicleNo || "-"),
+    summaryCard(useUrduLabel ? "ڈرائیور" : "Driver", pass.driverName || "-"),
+  ];
+  if (pass.driverPhone) sections.push(summaryCard(useUrduLabel ? "فون" : "Phone", pass.driverPhone));
+  if (pass.partyName) sections.push(summaryCard(useUrduLabel ? "پارٹی" : "Party", pass.partyName));
+  if (pass.linkedDocument) {
+    sections.push(
+      summaryCard(
+        sourceLabel(pass.linkedDocument.type),
+        pass.linkedDocument.number,
+      ),
+    );
+  }
+  if (pass.grossG != null) sections.push(summaryCard(useUrduLabel ? "کل وزن" : "Gross", `${gToKg(pass.grossG)} kg`));
+  if (pass.tareG != null) sections.push(summaryCard(useUrduLabel ? "خالی وزن" : "Tare", `${gToKg(pass.tareG)} kg`));
+  if (pass.netG != null) sections.push(summaryCard(useUrduLabel ? "خالص وزن" : "Net", `${gToKg(pass.netG)} kg`, true));
+
+  const rows = pass.items.map((item) => ({
+    product: (useUrduLabel && item.productNameUrdu) ? item.productNameUrdu : item.productName || "-",
+    bags: item.bags,
+    weightKg: item.weightKg,
+  }));
+
+  const totalBags = pass.totalBags;
+  const totalWeightKg = pass.totalWeightKg;
 
   return {
     docType: "VOUCHER",
-    docKey: "voucher.cashJournal",
-    title: "Cash Journal Voucher",
-    docNo: voucher.voucherNo,
+    docKey: "voucher.gatePass",
+    title: useUrduLabel ? "گیٹ پاس" : "Gate Pass",
+    docNo: pass.number,
     company: ctx.company,
-    meta: baseMeta(ctx, { filters: { Date: fmtDate(voucher.voucherDate) } }),
-    sections: [
-      summaryCard("Total Debit", money(voucher.totalDebit), true),
-      summaryCard("Total Credit", money(voucher.totalCredit), true),
-    ],
+    meta: baseMeta(ctx, {
+      filters: {
+        [useUrduLabel ? "تاریخ" : "Issued"]: fmtDateTime(pass.issuedAt),
+        ...(pass.completedAt ? { [useUrduLabel ? "مکمل" : "Completed"]: fmtDateTime(pass.completedAt) } : {}),
+      },
+    }),
+    sections,
     table: {
       columns: buildColumns([
-        { key: "sr", label: "Sr", width: "6%" },
-        { key: "account", label: "Account" },
-        { key: "narration", label: "Narration" },
-        { key: "debit", label: "Debit", align: "right" },
-        { key: "credit", label: "Credit", align: "right" },
+        { key: "product", label: useUrduLabel ? "پروڈکٹ" : "Product" },
+        { key: "bags", label: useUrduLabel ? "بوریاں" : "Bags", align: "right", width: "15%" },
+        { key: "weightKg", label: useUrduLabel ? "وزن (کلو)" : "Weight (kg)", align: "right", width: "20%" },
       ]),
-      rows: items.map((item, index) => ({
-        sr: String(index + 1),
-        account: item.accountHead || "-",
-        narration: displayNarration(item.narration),
-        debit: money(item.debitAmount),
-        credit: money(item.creditAmount),
-      })),
+      rows,
+      totalsRow: {
+        product: useUrduLabel ? "کل" : "Total",
+        bags: totalBags,
+        weightKg: totalWeightKg,
+      },
     },
-    notes: displayNarration(voucher.narration),
+    notes: pass.remarks || undefined,
     signatures: [
-      { label: "Prepared By" },
-      { label: "Approved By" },
-      { label: "Received By" },
+      { label: useUrduLabel ? "منشی" : "Munshi" },
+      { label: useUrduLabel ? "ڈرائیور" : "Driver" },
+      { label: useUrduLabel ? "گیٹ گارڈ" : "Gate Guard" },
     ],
-    settings: { currency: "PKR" },
+    settings: {
+      currency: "PKR",
+      showWatermark: pass.status === "CANCELLED",
+      watermarkText: pass.status === "CANCELLED" ? (useUrduLabel ? "منسوخ" : "CANCELLED") : undefined,
+    },
   };
 }
 
@@ -956,35 +1063,42 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
   });
 
   const columns = buildColumns([
-    { key: "itemCode", label: "Item Code", width: "6%" },
-    { key: "itemName", label: "Item Name", width: "20%" },
-    { key: "category", label: "Category", width: "9%" },
-    { key: "unit", label: "Unit", align: "center", width: "5%" },
-    { key: "openingQty", label: "Opening Qty", align: "right", width: "6%" },
-    { key: "openingValue", label: "Opening Value", align: "right", width: "9%" },
-    { key: "inQty", label: "In Qty", align: "right", width: "6%" },
-    { key: "inValue", label: "In Value", align: "right", width: "9%" },
-    { key: "outQty", label: "Out Qty", align: "right", width: "6%" },
-    { key: "outValue", label: "Out Value", align: "right", width: "9%" },
-    { key: "closingQty", label: "Closing Qty", align: "right", width: "6%" },
-    { key: "avgCost", label: "Avg Cost", align: "right", width: "8%" },
-    { key: "closingValue", label: "Closing Value", align: "right", width: "9%" },
+    { key: "itemCode", label: "Code" },
+    { key: "itemName", label: "Item Name" },
+    { key: "category", label: "Category" },
+    { key: "unit", label: "Unit", align: "center" },
+    { key: "openingQty", label: "Opening Qty", align: "right" },
+    { key: "openingValue", label: "Opening Value (Rs.)", align: "right" },
+    { key: "inQty", label: "In Qty", align: "right" },
+    { key: "inValue", label: "In Value (Rs.)", align: "right" },
+    { key: "outQty", label: "Out Qty", align: "right" },
+    { key: "outValue", label: "Out Value (Rs.)", align: "right" },
+    { key: "closingQty", label: "Closing Qty", align: "right" },
+    { key: "avgCost", label: "Avg Cost (Rs.)", align: "right" },
+    { key: "closingValue", label: "Closing Value (Rs.)", align: "right" },
   ]);
+
+  /*
+   * 13 figure columns: a zero-width space after each thousands comma lets a
+   * figure wrap at a group boundary on narrow paper ("4,981," / "745.64")
+   * instead of mid-digit or past the page edge. Wide paper never needs it.
+   */
+  const fig = (value: Parameters<typeof num>[0]) => num(value).replace(/,/g, ",\u200B");
 
   const rows = report.rows.map((r) => ({
     itemCode: r.itemCode,
     itemName: r.itemName,
     category: r.category || "-",
     unit: r.unit,
-    openingQty: num(r.openingQty),
-    openingValue: money(r.openingValue),
-    inQty: num(r.inQty),
-    inValue: money(r.inValue),
-    outQty: num(r.outQty),
-    outValue: money(r.outValue),
-    closingQty: num(r.closingQty),
-    avgCost: money(r.avgCost),
-    closingValue: money(r.closingValue),
+    openingQty: fig(r.openingQty),
+    openingValue: fig(r.openingValue),
+    inQty: fig(r.inQty),
+    inValue: fig(r.inValue),
+    outQty: fig(r.outQty),
+    outValue: fig(r.outValue),
+    closingQty: fig(r.closingQty),
+    avgCost: fig(r.avgCost),
+    closingValue: fig(r.closingValue),
   }));
 
   return {
@@ -1021,7 +1135,7 @@ export async function mapStockReport(params: Record<string, any>, ctx: PrintCont
         outQty: num(report.totals.outQty),
         outValue: "",
         closingQty: num(report.totals.closingQty),
-        closingValue: money(report.totals.closingValue),
+        closingValue: num(report.totals.closingValue),
       },
     },
     settings: { currency: "PKR" },
@@ -1463,8 +1577,6 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
     const cash = daybooksService.listCashBook(filters as any) as any[];
     const salesReturns = daybooksService.listSalesReturnsDaybook(filters as any) as any[];
     const purchaseReturns = daybooksService.listPurchaseReturnsDaybook(filters as any) as any[];
-    const journals = daybooksService.listGeneralJournal(filters as any) as any[];
-
     const sectionHeader = (name: string) => ({
       book: `${name}`,
       date: "",
@@ -1532,16 +1644,6 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       amount: money(r.total_debit_amount),
       status: r.status || "-",
     }));
-    const journalRows = journals.map((r) => ({
-      book: "General Journal",
-      date: fmtDate(r.transaction_date),
-      reference: r.journal_entry_number || "-",
-      party: "-",
-      details: r.description || "-",
-      amount: money(r.total_debits || r.total_credits || 0),
-      status: r.status || "-",
-    }));
-
     rows = [
       sectionHeader("Sales Daybook"),
       ...salesRows,
@@ -1557,9 +1659,6 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       spacer(),
       sectionHeader("Purchase Returns Daybook"),
       ...purchaseReturnRows,
-      spacer(),
-      sectionHeader("General Journal"),
-      ...journalRows,
     ];
 
     sections = [
@@ -1568,7 +1667,6 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
       summaryCard("Cash Entries", String(cash.length), true),
       summaryCard("Sales Returns", String(salesReturns.length), true),
       summaryCard("Purchase Returns", String(purchaseReturns.length), true),
-      summaryCard("Journal Entries", String(journals.length), true),
     ];
 
     return {
@@ -1703,21 +1801,6 @@ export async function mapDayBook(params: Record<string, any>, ctx: PrintContext)
     }));
     const total = data.reduce((s, r) => s + parseFloat(String(r.total_debit_amount || "0")), 0);
     sections = [summaryCard("Total Returns", money(total), true), summaryCard("Entries", String(data.length))];
-  } else {
-    title = "General Journal";
-    const data = daybooksService.listGeneralJournal(filters as any) as any[];
-    columns = buildColumns([
-      { key: "date", label: "Date" },
-      { key: "entryNo", label: "Entry No" },
-      { key: "narration", label: "Narration" },
-      { key: "debit", label: "Debit", align: "right" },
-      { key: "credit", label: "Credit", align: "right" },
-      { key: "status", label: "Status" },
-    ]);
-    rows = data.map((r) => ({ date: fmtDate(r.transaction_date), entryNo: r.journal_entry_number, narration: r.description || "-", debit: money(r.total_debits), credit: money(r.total_credits), status: r.status }));
-    const debit = data.reduce((s, r) => s + parseFloat(String(r.total_debits || "0")), 0);
-    const credit = data.reduce((s, r) => s + parseFloat(String(r.total_credits || "0")), 0);
-    sections = [summaryCard("Total Debits", money(debit), true), summaryCard("Total Credits", money(credit), true), summaryCard("Entries", String(data.length))];
   }
 
   return {

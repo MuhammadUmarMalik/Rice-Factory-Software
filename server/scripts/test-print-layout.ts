@@ -85,32 +85,35 @@ const stockPayload: PrintableDocumentPayload = {
   },
   table: {
     columns: [
-      { key: "itemCode", label: "Item Code" },
+      { key: "itemCode", label: "Code" },
       { key: "itemName", label: "Item Name" },
       { key: "category", label: "Category" },
       { key: "unit", label: "Unit", align: "center" },
       { key: "openingQty", label: "Opening Qty", align: "right" },
-      { key: "openingValue", label: "Opening Value", align: "right" },
+      { key: "openingValue", label: "Opening Value (Rs.)", align: "right" },
       { key: "inQty", label: "In Qty", align: "right" },
-      { key: "inValue", label: "In Value", align: "right" },
+      { key: "inValue", label: "In Value (Rs.)", align: "right" },
       { key: "outQty", label: "Out Qty", align: "right" },
-      { key: "outValue", label: "Out Value", align: "right" },
+      { key: "outValue", label: "Out Value (Rs.)", align: "right" },
       { key: "closingQty", label: "Closing Qty", align: "right" },
-      { key: "closingValue", label: "Closing Value", align: "right" },
+      { key: "avgCost", label: "Avg Cost (Rs.)", align: "right" },
+      { key: "closingValue", label: "Closing Value (Rs.)", align: "right" },
     ],
+    // Same shape as mapStockReport: plain figures, a break point after each comma.
     rows: Array.from({ length: 12 }, (_, i) => ({
       itemCode: `PRD-${1000 + i}`,
       itemName: `Super Kernel Basmati Rice Grade A Extra Long Sella ${i + 1}`,
       category: "Finished Goods",
       unit: "kg",
-      openingQty: "123,456.00",
-      openingValue: "Rs. 12,345,678.00",
-      inQty: "98,765.00",
-      inValue: "Rs. 9,876,543.00",
-      outQty: "87,654.00",
-      outValue: "Rs. 8,765,432.00",
-      closingQty: "134,567.00",
-      closingValue: "Rs. 13,456,789.00",
+      openingQty: "123,​456.00",
+      openingValue: "12,​345,​678.00",
+      inQty: "98,​765.00",
+      inValue: "9,​876,​543.00",
+      outQty: "87,​654.00",
+      outValue: "8,​765,​432.00",
+      closingQty: "134,​567.00",
+      avgCost: "1,​234.56",
+      closingValue: "13,​456,​789.00",
     })),
   },
   settings: { currency: "PKR" },
@@ -249,7 +252,7 @@ async function main() {
             marginLeftMm: margin,
             appearance,
           };
-          const html = renderDocumentHtml(doc.payload, options);
+          const html = await renderDocumentHtml(doc.payload, options);
           const size = resolvePageSizeMm(options);
 
           await assertNoOverflow(
@@ -279,7 +282,7 @@ async function main() {
         marginLeftMm: 0,
         appearance: APPEARANCES[0],
       };
-      const html = renderDocumentHtml({ ...invoicePayload, docKey }, options);
+      const html = await renderDocumentHtml({ ...invoicePayload, docKey }, options);
       const size = resolvePageSizeMm(options);
       await assertNoOverflow(`${docKey} ${format}/portrait margin=0mm`, html, size.width, 0);
     }
@@ -306,7 +309,7 @@ async function main() {
             marginBottomMm: margin,
             marginLeftMm: margin,
           };
-          const html = renderDocumentHtml(doc.payload, {
+          const html = await renderDocumentHtml(doc.payload, {
             ...options,
             appearance: APPEARANCES[0],
           });
