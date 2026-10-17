@@ -10,7 +10,7 @@
  * recomputeAccountBalances, which updateAccount cannot work without.
  */
 import { db } from "./db";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { accounts, cashAccounts, ledgerEntries, type Account, type InsertAccount } from "../db/schema";
 import { parseAmount } from "../utils/parse";
 
@@ -36,17 +36,22 @@ export function ledgerSumByNormal(normal: NormalSide) {
  */
 export function recomputeAccountBalances(client: DbClient, accountIds: number[]) {
   const uniqueIds = Array.from(new Set(accountIds)).filter((id) => Number.isFinite(id));
-  for (const accountId of uniqueIds) {
-    const [account] = client.select().from(accounts).where(eq(accounts.id, accountId)).all();
-    if (!account) continue;
-    const normal = normalSideForAccountType(account.type);
-    const [row] = client
-      .select({ total: ledgerSumByNormal(normal) })
+  if (uniqueIds.length === 0) return;
+  const rows = client.select().from(accounts).where(inArray(accounts.id, uniqueIds)).all();
+  const debitMovement = new Map(
+    client
+      .select({ accountId: ledgerEntries.accountId, total: ledgerSumByNormal("DEBIT") })
       .from(ledgerEntries)
-      .where(eq(ledgerEntries.accountId, accountId))
-      .all();
+      .where(inArray(ledgerEntries.accountId, uniqueIds))
+      .groupBy(ledgerEntries.accountId)
+      .all()
+      .map((row) => [row.accountId, parseAmount(row.total || "0")]),
+  );
+  for (const account of rows) {
+    const accountId = account.id;
+    const debitTotal = debitMovement.get(accountId) ?? 0;
     const opening = parseAmount(account.openingBalance || "0");
-    const delta = parseAmount(row?.total || "0");
+    const delta = normalSideForAccountType(account.type) === "DEBIT" ? debitTotal : -debitTotal;
     client
       .update(accounts)
       .set({ currentBalance: (opening + delta).toString() })

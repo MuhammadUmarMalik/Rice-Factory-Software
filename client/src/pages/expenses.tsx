@@ -8,6 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useLanguage } from "@/contexts/language-context";
 import { useToast } from "@/hooks/use-toast";
+import { todayLocal, toLocalDateString } from "@/utils/dateRanges";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataTable, type Column } from "@/components/data-table";
@@ -38,22 +39,18 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { Account, ExpenseEntry } from "@/types/schema";
+import { confirmAction } from "@/components/confirm-dialog";
 
 const expenseFormSchema = z.object({
   expenseAccountId: z.string().min(1, "Select expense category"),
-  newExpenseName: z.string().trim().optional(),
   payFromAccountId: z.string().min(1, "Select paying account"),
-  amount: z.string().min(1, "Amount is required"),
+  direction: z.enum(["debit", "credit"]).default("debit"),
+  amount: z.string().min(1, "Amount is required").refine((val) => {
+    const num = parseFloat(val);
+    return !Number.isNaN(num) && num > 0;
+  }, "Amount must be greater than zero"),
   expenseDate: z.string().optional(),
   description: z.string().optional(),
-}).superRefine((value, ctx) => {
-  if (value.expenseAccountId === "__new__" && !value.newExpenseName?.trim()) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["newExpenseName"],
-      message: "Expense category name is required",
-    });
-  }
 });
 
 type ExpenseFormData = z.infer<typeof expenseFormSchema>;
@@ -66,15 +63,18 @@ export default function ExpensesPage() {
   const [viewingExpense, setViewingExpense] = useState<ExpenseEntry | null>(null);
   const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryOpeningBalance, setNewCategoryOpeningBalance] = useState("");
+  const [newCategoryOpeningType, setNewCategoryOpeningType] = useState<"debit" | "credit">("debit");
   const [bulkCategoryInput, setBulkCategoryInput] = useState("");
-  const getTodayInput = () => new Date().toISOString().slice(0, 10);
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const getTodayInput = todayLocal;
 
   const form = useForm<ExpenseFormData>({
     resolver: zodResolver(expenseFormSchema),
     defaultValues: {
-      expenseAccountId: "",
-      newExpenseName: "",
-      payFromAccountId: "",
+      expenseAccountId: undefined,
+      payFromAccountId: undefined,
+      direction: "debit",
       amount: "",
       expenseDate: getTodayInput(),
       description: "",
@@ -108,39 +108,47 @@ export default function ExpensesPage() {
   };
   const toDateInputValue = (value: unknown) => {
     const date = value ? new Date(value as any) : null;
-    return date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : getTodayInput();
-  };
-
-  const ensureExpenseCategoryId = async (selection: string, customName?: string) => {
-    if (selection !== "__new__") return parseInt(selection, 10);
-    const normalized = (customName || "").trim();
-    const existing = expenseAccounts.find((acc) => acc.name.trim().toLowerCase() === normalized.toLowerCase());
-    if (existing) return existing.id;
-    const accountRes = await apiRequest("POST", "/api/accounts", { name: normalized, type: "expense" });
-    const account = await accountRes.json();
-    return account.id as number;
+    return date && !Number.isNaN(date.getTime()) ? toLocalDateString(date) : getTodayInput();
   };
 
   const resetForm = () => {
     form.reset({
       expenseAccountId: "",
-      newExpenseName: "",
       payFromAccountId: "",
+      direction: "debit",
       amount: "",
       expenseDate: getTodayInput(),
       description: "",
     });
   };
 
+  const handleAddNew = () => {
+    setEditingExpense(null);
+    resetForm();
+    setIsDialogOpen(true);
+  };
+
+  const handleEdit = (expense: ExpenseEntry) => {
+    setEditingExpense(expense);
+    form.reset({
+      expenseAccountId: expense.expenseAccountId ? String(expense.expenseAccountId) : "",
+      payFromAccountId: expense.payFromAccountId ? String(expense.payFromAccountId) : "",
+      direction: (expense as any).direction || "debit",
+      amount: expense.amount || "",
+      expenseDate: toDateInputValue(expense.expenseDate),
+      description: expense.description || "",
+    });
+    setIsDialogOpen(true);
+  };
+
   const createMutation = useMutation({
     mutationKey: ["/api/expenses", "create"],
     meta: scopedInvalidation,
     mutationFn: async (data: ExpenseFormData) => {
-      const expenseAccountId = await ensureExpenseCategoryId(data.expenseAccountId, data.newExpenseName);
-
       return apiRequest("POST", "/api/expenses", {
-        expenseAccountId,
+        expenseAccountId: parseInt(data.expenseAccountId, 10),
         payFromAccountId: parseInt(data.payFromAccountId, 10),
+        direction: data.direction,
         amount: data.amount,
         expenseDate: data.expenseDate,
         description: data.description,
@@ -172,10 +180,10 @@ export default function ExpensesPage() {
     mutationKey: ["/api/expenses", "update"],
     meta: scopedInvalidation,
     mutationFn: async (data: ExpenseFormData & { id: number }) => {
-      const expenseAccountId = await ensureExpenseCategoryId(data.expenseAccountId, data.newExpenseName);
       return apiRequest("PATCH", `/api/expenses/${data.id}`, {
-        expenseAccountId,
+        expenseAccountId: parseInt(data.expenseAccountId, 10),
         payFromAccountId: parseInt(data.payFromAccountId, 10),
+        direction: data.direction,
         amount: data.amount,
         expenseDate: data.expenseDate,
         description: data.description,
@@ -328,25 +336,6 @@ export default function ExpensesPage() {
     },
   ];
 
-  const handleAddNew = () => {
-    setEditingExpense(null);
-    resetForm();
-    setIsDialogOpen(true);
-  };
-
-  const handleEdit = (expense: ExpenseEntry) => {
-    setEditingExpense(expense);
-    form.reset({
-      expenseAccountId: expense.expenseAccountId ? String(expense.expenseAccountId) : "",
-      newExpenseName: "",
-      payFromAccountId: expense.payFromAccountId ? String(expense.payFromAccountId) : "",
-      amount: expense.amount || "",
-      expenseDate: toDateInputValue(expense.expenseDate),
-      description: expense.description || "",
-    });
-    setIsDialogOpen(true);
-  };
-
   const handleSubmit = (data: ExpenseFormData) => {
     if (editingExpense) {
       updateMutation.mutate({ ...data, id: editingExpense.id });
@@ -361,28 +350,61 @@ export default function ExpensesPage() {
     [expenseAccounts],
   );
 
-  const createExpenseCategory = async (name: string) => {
+  const createExpenseCategory = async (name: string, openingBalance?: string, openingType?: "debit" | "credit") => {
     const normalized = name.trim();
     if (!normalized) return null;
     const existing = expenseAccounts.find((acc) => acc.name.trim().toLowerCase() === normalized.toLowerCase());
     if (existing) return existing;
-    const res = await apiRequest("POST", "/api/accounts", { name: normalized, type: "expense" });
+    const res = await apiRequest("POST", "/api/expenses/categories", {
+      name: normalized,
+      openingBalance: openingBalance || "0",
+      openingBalanceType: openingType || "debit",
+    });
     return (await res.json()) as Account;
   };
 
+  const deleteCategoryMutation = useMutation({
+    mutationKey: ["/api/accounts", "delete"],
+    meta: scopedInvalidation,
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/expenses/categories/${id}`),
+    onSuccess: () => {
+      invalidateApi(invalidationGroups.accounts);
+      toast({ title: "Category deleted" });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast({ title: "Failed to delete category", description: msg, variant: "destructive" });
+    },
+  });
+
   const handleCreateSingleCategory = async () => {
     try {
-      const created = await createExpenseCategory(newCategoryName);
-      if (!created) {
-        toast({ title: "Category name is required", variant: "destructive" });
-        return;
+      if (editingCategoryId) {
+        const res = await apiRequest("PATCH", `/api/expenses/categories/${editingCategoryId}`, {
+          name: newCategoryName.trim(),
+        });
+        if (res.ok) {
+          toast({ title: "Category updated" });
+        } else {
+          const data = await res.json().catch(() => ({}));
+          toast({ title: "Failed to update category", description: data?.error || "Unknown error", variant: "destructive" });
+          return;
+        }
+        setEditingCategoryId(null);
+      } else {
+        const created = await createExpenseCategory(newCategoryName, newCategoryOpeningBalance, newCategoryOpeningType);
+        if (!created) {
+          toast({ title: "Category name is required", variant: "destructive" });
+          return;
+        }
+        toast({ title: "Expense category created" });
       }
       setNewCategoryName("");
+      setNewCategoryOpeningBalance("");
+      setNewCategoryOpeningType("debit");
       invalidateApi(invalidationGroups.accounts);
-      form.setValue("expenseAccountId", String(created.id), { shouldValidate: true });
-      toast({ title: "Expense category created" });
     } catch (error: any) {
-      toast({ title: "Failed to create category", description: String(error?.message || error), variant: "destructive" });
+      toast({ title: "Failed to save category", description: String(error?.message || error), variant: "destructive" });
     }
   };
 
@@ -396,12 +418,21 @@ export default function ExpensesPage() {
         toast({ title: "Enter one or more category names", variant: "destructive" });
         return;
       }
+      let created = 0;
+      let skipped = 0;
       for (const name of names) {
-        await createExpenseCategory(name);
+        try {
+          const result = await createExpenseCategory(name);
+          if (result) created += 1;
+        } catch {
+          skipped += 1;
+        }
       }
       setBulkCategoryInput("");
       invalidateApi(invalidationGroups.accounts);
-      toast({ title: `${names.length} category(s) processed` });
+      toast({
+        title: `${created} category(s) created${skipped ? `, ${skipped} skipped` : ""}`,
+      });
     } catch (error: any) {
       toast({ title: "Failed to create categories", description: String(error?.message || error), variant: "destructive" });
     }
@@ -416,10 +447,15 @@ export default function ExpensesPage() {
             {language === "ur" ? "اخراجات کو ریکارڈ اور ٹریک کریں" : "Record and track expense payments"}
           </p>
         </div>
-        <Button onClick={handleAddNew}>
-          <Plus className="h-4 w-4" />
-          {language === "ur" ? "نیا خرچ" : "Add Expense"}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsCategoryDialogOpen(true)}>
+            {language === "ur" ? "اخراجات کی اقسام" : "Manage Categories"}
+          </Button>
+          <Button onClick={handleAddNew}>
+            <Plus className="h-4 w-4" />
+            {language === "ur" ? "نیا خرچ" : "Add Expense"}
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -428,7 +464,7 @@ export default function ExpensesPage() {
         </CardContent>
       </Card>
 
-      <Dialog
+<Dialog
         open={isDialogOpen}
         onOpenChange={(open) => {
           setIsDialogOpen(open);
@@ -446,7 +482,7 @@ export default function ExpensesPage() {
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
               {editingExpense
                 ? "Edit Expense"
-                : (language === "ur" ? "U+UOO OrOñU+" : "New Expense")}
+                : (language === "ur" ? "نیا خرچ" : "New Expense")}
             </DialogTitle>
           </DialogHeader>
           <Form {...form}>
@@ -470,16 +506,11 @@ export default function ExpensesPage() {
                 name="expenseAccountId"
                 render={({ field }) => (
                   <FormItem>
-                    <div className="flex items-center justify-between gap-2">
-                      <FormLabel>Expense Category</FormLabel>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setIsCategoryDialogOpen(true)}>
-                        Manage Categories
-                      </Button>
-                    </div>
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    <FormLabel>{language === "ur" ? "اِخراجات کا سرخی" : "Expense Head"}</FormLabel>
+                    <Select value={field.value || undefined} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select expense category" />
+                          <SelectValue placeholder={language === "ur" ? "سرخی کا انتخاب کریں" : "Select expense head"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -488,7 +519,6 @@ export default function ExpensesPage() {
                             {acc.name}
                           </SelectItem>
                         ))}
-                        <SelectItem value="__new__">+ Create new category</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -496,21 +526,27 @@ export default function ExpensesPage() {
                 )}
               />
 
-              {form.watch("expenseAccountId") === "__new__" && (
-                <FormField
-                  control={form.control}
-                  name="newExpenseName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>New Category Name</FormLabel>
+              <FormField
+                control={form.control}
+                name="direction"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{language === "ur" ? "سمت" : "Direction"}</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
                       <FormControl>
-                        <Input {...field} placeholder="e.g. Office Supplies" />
+                        <SelectTrigger>
+                          <SelectValue placeholder={language === "ur" ? "سنت کریں" : "Select direction"} />
+                        </SelectTrigger>
                       </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
+                      <SelectContent>
+                        <SelectItem value="debit">{language === "ur" ? "بے ڈیٹ" : "Debit"}</SelectItem>
+                        <SelectItem value="credit">{language === "ur" ? "کریڈٹ" : "Credit"}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <FormField
                 control={form.control}
@@ -518,7 +554,7 @@ export default function ExpensesPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{language === "ur" ? "ادائیگی کا اکاؤنٹ" : "Pay From"}</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    <Select value={field.value || undefined} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder={language === "ur" ? "منتخب کریں" : "Select account"} />
@@ -544,7 +580,7 @@ export default function ExpensesPage() {
                   <FormItem>
                     <FormLabel>{language === "ur" ? "رقم" : "Amount"}</FormLabel>
                     <FormControl>
-                      <Input type="number" step="0.01" min="0" {...field} />
+                      <Input type="number" step="0.01" min="0.01" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -600,6 +636,10 @@ export default function ExpensesPage() {
                 <span className="text-right">{getExpenseAccountName(viewingExpense.expenseAccountId)}</span>
               </div>
               <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Direction</span>
+                <span className="text-right">{(viewingExpense as any).direction || "-"}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">Paid From</span>
                 <span className="text-right">{getPayAccountName(viewingExpense.payFromAccountId)}</span>
               </div>
@@ -629,14 +669,39 @@ export default function ExpensesPage() {
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Create single category</Label>
+              <Label>{editingCategoryId ? "Edit category" : "Create single category"}</Label>
               <div className="flex gap-2">
                 <Input
                   value={newCategoryName}
                   onChange={(e) => setNewCategoryName(e.target.value)}
                   placeholder="Enter category name"
                 />
-                <Button type="button" onClick={handleCreateSingleCategory}>Create</Button>
+                <Button type="button" onClick={handleCreateSingleCategory}>
+                  {editingCategoryId ? "Save" : "Create"}
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Label className="text-xs text-muted-foreground">Opening Balance</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={newCategoryOpeningBalance}
+                    onChange={(e) => setNewCategoryOpeningBalance(e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="w-28">
+                  <Label className="text-xs text-muted-foreground">Type</Label>
+                  <Select value={newCategoryOpeningType} onValueChange={(v) => setNewCategoryOpeningType(v as "debit" | "credit")}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="debit">Debit</SelectItem>
+                      <SelectItem value="credit">Credit</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
 
@@ -660,7 +725,34 @@ export default function ExpensesPage() {
                   <div className="text-muted-foreground">No categories yet.</div>
                 ) : (
                   categoryOptions.map((acc) => (
-                    <div key={acc.id} className="py-1">{acc.name}</div>
+                    <div key={acc.id} className="flex items-center justify-between py-1">
+                      <span>{acc.name}</span>
+                      <div className="flex gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6"
+                          onClick={() => {
+                            setEditingCategoryId(acc.id);
+                            setNewCategoryName(acc.name);
+                          }}
+                        >
+                          <Edit className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 text-destructive"
+                          onClick={async () => {
+                            if (await confirmAction("Delete this category?")) {
+                              deleteCategoryMutation.mutate(acc.id);
+                            }
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
                   ))
                 )}
               </div>

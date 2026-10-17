@@ -38,6 +38,7 @@ const supplierFormSchema = z.object({
   address: z.string().optional(),
   addressUrdu: z.string().optional(),
   openingBalance: z.string().default("0"),
+  balanceType: z.enum(["DR", "CR"]).default("CR"),
 });
 
 type SupplierFormData = z.infer<typeof supplierFormSchema>;
@@ -58,6 +59,7 @@ export default function SuppliersPage() {
       address: "",
       addressUrdu: "",
       openingBalance: "0",
+      balanceType: "CR",
     },
   });
 
@@ -68,7 +70,7 @@ export default function SuppliersPage() {
   const createMutation = useMutation({
     mutationKey: ["/api/accounts", "supplier", "create"],
     meta: scopedInvalidation,
-    mutationFn: (data: SupplierFormData) =>
+    mutationFn: (data: Omit<SupplierFormData, "balanceType">) =>
       apiRequest("POST", "/api/accounts", { ...data, type: "supplier" }),
     onSuccess: () => {
       invalidateApi(invalidationGroups.accounts);
@@ -81,7 +83,7 @@ export default function SuppliersPage() {
   const updateMutation = useMutation({
     mutationKey: ["/api/accounts", "supplier", "update"],
     meta: scopedInvalidation,
-    mutationFn: (data: SupplierFormData & { id: number }) =>
+    mutationFn: (data: Omit<SupplierFormData, "balanceType"> & { id: number }) =>
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       invalidateApi(invalidationGroups.accounts);
@@ -108,11 +110,14 @@ export default function SuppliersPage() {
     },
   });
 
-  const handleSubmit = (data: SupplierFormData) => {
+  const handleSubmit = ({ balanceType, ...data }: SupplierFormData) => {
+    const abs = Math.abs(parseFloat(data.openingBalance || "0"));
+    const signed = balanceType === "CR" ? -abs : abs;
+    const payload = { ...data, openingBalance: String(signed) };
     if (editingSupplier) {
-      updateMutation.mutate({ ...data, id: editingSupplier.id });
+      updateMutation.mutate({ ...payload, id: editingSupplier.id });
     } else {
-      createMutation.mutate(data);
+      createMutation.mutate(payload);
     }
   };
 
@@ -124,14 +129,23 @@ export default function SuppliersPage() {
       phone: supplier.phone || "",
       address: supplier.address || "",
       addressUrdu: supplier.addressUrdu || "",
-      openingBalance: supplier.openingBalance || "0",
+      openingBalance: String(Math.abs(parseFloat(supplier.openingBalance || "0"))),
+      balanceType: parseFloat(supplier.openingBalance || "0") < 0 ? "CR" : "DR",
     });
     setIsDialogOpen(true);
   };
 
   const handleAddNew = () => {
     setEditingSupplier(null);
-    form.reset();
+    form.reset({
+      name: "",
+      nameUrdu: "",
+      phone: "",
+      address: "",
+      addressUrdu: "",
+      openingBalance: "0",
+      balanceType: "CR",
+    });
     setIsDialogOpen(true);
   };
 
@@ -377,19 +391,37 @@ export default function SuppliersPage() {
                   )}
                 />
               </div>
-              <FormField
-                control={form.control}
-                name="openingBalance"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("openingBalance")}</FormLabel>
-                    <FormControl>
-                      <Input {...field} type="number" step="0.01" data-testid="input-opening-balance" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              <div className="space-y-2">
+                <FormField
+                  control={form.control}
+                  name="openingBalance"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("openingBalance")}</FormLabel>
+                      <div className="flex gap-2">
+                        <FormControl>
+                          <Input {...field} type="number" step="0.01" min="0" className="flex-1" data-testid="input-opening-balance" />
+                        </FormControl>
+                        <FormField
+                          control={form.control}
+                          name="balanceType"
+                          render={({ field: typeField }) => (
+                            <div className="flex rounded-md border">
+                              <Button type="button" size="sm" variant={typeField.value === "DR" ? "default" : "ghost"} className="rounded-r-none px-3" onClick={() => typeField.onChange("DR")}>
+                                {t("debit")}
+                              </Button>
+                              <Button type="button" size="sm" variant={typeField.value === "CR" ? "default" : "ghost"} className="rounded-l-none px-3" onClick={() => typeField.onChange("CR")}>
+                                {t("credit")}
+                              </Button>
+                            </div>
+                          )}
+                        />
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
               <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   {t("cancel")}
@@ -440,7 +472,14 @@ export default function SuppliersPage() {
               )}
               <div className="flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">Opening Balance</span>
-                <span className="font-mono">Rs. {Number(viewingSupplier.openingBalance || 0).toLocaleString()}</span>
+                <div className="flex items-center gap-1">
+                  <span className="font-mono">Rs. {Math.abs(Number(viewingSupplier.openingBalance || 0)).toLocaleString()}</span>
+                  {Number(viewingSupplier.openingBalance || 0) !== 0 && (
+                    <Badge variant={Number(viewingSupplier.openingBalance || 0) >= 0 ? "default" : "destructive"} className="text-xs">
+                      {Number(viewingSupplier.openingBalance || 0) >= 0 ? "DR" : "CR"}
+                    </Badge>
+                  )}
+                </div>
               </div>
               <div className="flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">Current Balance</span>

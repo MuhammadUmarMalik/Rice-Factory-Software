@@ -9,13 +9,12 @@
  * See the cycle note in journal-vouchers.model.
  */
 import { db } from "./db";
-import { eq, and, or, desc, lte } from "drizzle-orm";
+import { eq, and, desc, lte } from "drizzle-orm";
 import {
   accounts,
   employees,
   employeeSalaryStructures,
   payrolls,
-  payrollAuditLogs,
   journalVouchers,
   journalVoucherEntries,
   cashAccounts,
@@ -27,11 +26,13 @@ import {
   type InsertEmployeeSalaryStructure,
   type Payroll,
   type JournalVoucher,
-  type PayrollAuditLog,
+  type AuditLog,
 } from "../db/schema";
 import { parseAmount } from "../utils/parse";
+import { formatMoney } from "../utils/money";
 import { endOfMonth, parsePayrollMonth, startOfPayrollMonth } from "../utils/dates";
 import { assertPostingAllowed } from "../services/posting-guard.service";
+import { recomputeAccountBalances } from "./accounts.model";
 import * as ledgerModel from "./ledger.model";
 import * as jvModel from "./journal-vouchers.model";
 import type { JournalEntryInput } from "./journal-vouchers.model";
@@ -91,19 +92,21 @@ export function autoMarkPayrollApprovedForEmployee(
     .run();
 
   client
-    .insert(payrollAuditLogs)
+    .insert(auditLogs)
     .values({
-      payrollId: target.id,
+      entity: "payroll",
+      entityId: target.id,
       action: "approved",
       performedBy: opts.actorUserId,
       performedByRole: opts.actorRole,
-      detailsJson: JSON.stringify({
+      afterJson: JSON.stringify({
         autoMatched: true,
         source: opts.source,
         amount: amount.toString(),
         postingDate: opts.postingDate.toISOString(),
         journalVoucherId: opts.journalVoucherId ?? null,
       }),
+      source: "payroll",
     } as any)
     .run();
 }
@@ -161,13 +164,14 @@ export function autoMarkPayrollPaidForEmployee(
     .run();
 
   client
-    .insert(payrollAuditLogs)
+    .insert(auditLogs)
     .values({
-      payrollId: target.id,
+      entity: "payroll",
+      entityId: target.id,
       action: "paid",
       performedBy: opts.actorUserId,
       performedByRole: opts.actorRole,
-      detailsJson: JSON.stringify({
+      afterJson: JSON.stringify({
         autoMatched: true,
         source: opts.source,
         amount: amount.toString(),
@@ -175,6 +179,7 @@ export function autoMarkPayrollPaidForEmployee(
         paymentDate: opts.paymentDate.toISOString(),
         paymentJournalVoucherId: opts.paymentJournalVoucherId ?? null,
       }),
+      source: "payroll",
     } as any)
     .run();
 }
@@ -237,12 +242,22 @@ export async function createEmployee(employee: InsertEmployee): Promise<Employee
   return db.transaction((tx) => {
     const client = tx as unknown as DbClient;
     const employeeCode = generateEmployeeCodeInternal(client);
+    const openingBalance = formatMoney(employee.openingBalance ?? 0);
+    // The employee payable account stores a *signed* opening balance: a debit
+    // type (employee owes the business, e.g. an advance) is positive on the
+    // account's normal side, a credit type (business owes the employee, e.g.
+    // salary paid in advance) is negative. Every balance calculation —
+    // recomputeAccountBalances, the ledger report, the trial balance — reads
+    // this one column, so the type flows through automatically without each
+    // consumer having to know about it.
+    const openingBalanceType = employee.openingBalanceType === "credit" ? "credit" : "debit";
+    const signedOpeningBalance = openingBalanceType === "credit" ? formatMoney(-parseAmount(openingBalance)) : openingBalance;
 
     const employeeAccount = tx.insert(accounts).values({
       name: `Employee Payable: ${employee.name} (${employeeCode})`,
       type: "employee" as any,
-      openingBalance: "0",
-      currentBalance: "0",
+      openingBalance: signedOpeningBalance,
+      currentBalance: signedOpeningBalance,
       isActive: true as any,
       isSystemAccount: false as any,
     }).returning().get();
@@ -251,6 +266,7 @@ export async function createEmployee(employee: InsertEmployee): Promise<Employee
       ...employee,
       employeeCode,
       accountId: employeeAccount.id,
+      openingBalanceType,
       createdAt: new Date(),
       updatedAt: new Date(),
     } as any).returning().get();
@@ -261,6 +277,7 @@ export async function createEmployee(employee: InsertEmployee): Promise<Employee
 
 export async function updateEmployee(id: number, employee: Partial<InsertEmployee>): Promise<Employee | undefined> {
   return db.transaction((tx) => {
+    const client = tx as unknown as DbClient;
     const [existing] = tx.select().from(employees).where(eq(employees.id, id)).all();
     if (!existing) return undefined;
 
@@ -273,6 +290,21 @@ export async function updateEmployee(id: number, employee: Partial<InsertEmploye
       tx.update(accounts).set({
         name: `Employee Payable: ${employee.name} (${existing.employeeCode})`,
       } as any).where(eq(accounts.id, existing.accountId)).run();
+    }
+
+    // Either the amount or the type changed: re-derive the signed opening
+    // balance on the linked payable account and recompute from the ledger.
+    const balanceChanged =
+      employee.openingBalance !== undefined || employee.openingBalanceType !== undefined;
+    if (balanceChanged && existing.accountId) {
+      const amount = formatMoney(employee.openingBalance !== undefined ? employee.openingBalance : existing.openingBalance ?? 0);
+      const type = employee.openingBalanceType === "credit" ? "credit" : "debit";
+      const signed = type === "credit" ? formatMoney(-parseAmount(amount)) : amount;
+      tx.update(accounts)
+        .set({ openingBalance: signed })
+        .where(eq(accounts.id, existing.accountId))
+        .run();
+      recomputeAccountBalances(client, [existing.accountId]);
     }
 
     return updated as any;
@@ -476,12 +508,13 @@ export async function updatePayroll(
       .returning()
       .get();
 
-    tx.insert(payrollAuditLogs).values({
-      payrollId,
+    tx.insert(auditLogs).values({
+      entity: "payroll",
+      entityId: payrollId,
       action: "updated",
       performedBy: performedBy?.userId,
       performedByRole: performedBy?.role,
-      detailsJson: JSON.stringify({
+      afterJson: JSON.stringify({
         source: "payroll:manual_edit",
         before: {
           basicSalary: current.basicSalary,
@@ -496,6 +529,7 @@ export async function updatePayroll(
           netSalary: netSalary.toString(),
         },
       }),
+      source: "payroll",
     } as any).run();
 
     return updated as any;
@@ -589,12 +623,14 @@ export async function generateMonthlyPayroll(month: string, performedBy?: { user
           updatedAt: new Date(),
         } as any).where(eq(payrolls.id, existing.id)).run();
 
-        tx.insert(payrollAuditLogs).values({
-          payrollId: existing.id,
+        tx.insert(auditLogs).values({
+          entity: "payroll",
+          entityId: existing.id,
           action: "updated",
           performedBy: performedBy?.userId,
           performedByRole: performedBy?.role,
-          detailsJson: JSON.stringify({ month, employeeId: emp.id, reason: "regenerated" }),
+          afterJson: JSON.stringify({ month, employeeId: emp.id, reason: "regenerated" }),
+          source: "payroll",
         } as any).run();
         updated += 1;
         continue;
@@ -622,12 +658,14 @@ export async function generateMonthlyPayroll(month: string, performedBy?: { user
         updatedAt: new Date(),
       } as any).returning().get();
 
-      tx.insert(payrollAuditLogs).values({
-        payrollId: payroll.id,
+      tx.insert(auditLogs).values({
+        entity: "payroll",
+        entityId: payroll.id,
         action: "generated",
         performedBy: performedBy?.userId,
         performedByRole: performedBy?.role,
-        detailsJson: JSON.stringify({ month, employeeId: emp.id }),
+        afterJson: JSON.stringify({ month, employeeId: emp.id }),
+        source: "payroll",
       } as any).run();
 
       created += 1;
@@ -661,8 +699,8 @@ export async function approvePayroll(payrollId: number, performedBy?: { userId?:
 
     const createdVoucher = (() => {
       const entries: JournalEntryInput[] = [
-        { accountId: salaryExpense.id, entryType: "DEBIT", amount },
-        { accountId: emp.accountId!, entryType: "CREDIT", amount },
+        { accountId: salaryExpense.id, entryType: "debit", amount },
+        { accountId: emp.accountId!, entryType: "credit", amount },
       ];
       const { normalized, total } = jvModel.normalizeJournalEntries(entries);
 
@@ -703,12 +741,14 @@ export async function approvePayroll(payrollId: number, performedBy?: { userId?:
       updatedAt: new Date(),
     } as any).where(eq(payrolls.id, payrollId)).returning().get();
 
-    tx.insert(payrollAuditLogs).values({
-      payrollId,
+    tx.insert(auditLogs).values({
+      entity: "payroll",
+      entityId: payrollId,
       action: "approved",
       performedBy: performedBy?.userId,
       performedByRole: performedBy?.role,
-      detailsJson: JSON.stringify({ journalVoucherId: createdVoucher.id, postingDate: voucherDate.toISOString() }),
+      afterJson: JSON.stringify({ journalVoucherId: createdVoucher.id, postingDate: voucherDate.toISOString() }),
+      source: "payroll",
     } as any).run();
 
     return updated as any;
@@ -752,8 +792,8 @@ export async function paySalary(
     const narration = `Salary Payment ${payroll.payrollMonth} - ${emp.employeeCode} ${emp.name}`;
 
     const entries: JournalEntryInput[] = [
-      { accountId: emp.accountId, entryType: "DEBIT", amount },
-      { accountId: creditAccountId, entryType: "CREDIT", amount },
+      { accountId: emp.accountId, entryType: "debit", amount },
+      { accountId: creditAccountId, entryType: "credit", amount },
     ];
     const { normalized, total } = jvModel.normalizeJournalEntries(entries);
 
@@ -823,24 +863,26 @@ export async function paySalary(
       updatedAt: new Date(),
     } as any).where(eq(payrolls.id, payrollId)).returning().get();
 
-    tx.insert(payrollAuditLogs).values({
-      payrollId,
+    tx.insert(auditLogs).values({
+      entity: "payroll",
+      entityId: payrollId,
       action: "paid",
       performedBy: performedBy?.userId,
       performedByRole: performedBy?.role,
-      detailsJson: JSON.stringify({
+      afterJson: JSON.stringify({
         paymentJournalVoucherId: v.id,
         method: payment.method,
         paymentDate: paymentDate.toISOString(),
         cashPaymentId: cashPaymentInfo?.id ?? null,
         cashPaymentVoucherNo: cashPaymentInfo?.voucherNo ?? null,
       }),
+      source: "payroll",
     } as any).run();
 
     return updated as any;
   });
 }
 
-export async function getPayrollAudit(payrollId: number): Promise<PayrollAuditLog[]> {
-  return db.select().from(payrollAuditLogs).where(eq(payrollAuditLogs.payrollId, payrollId)).orderBy(desc(payrollAuditLogs.performedAt)).all();
+export async function getPayrollAudit(payrollId: number): Promise<AuditLog[]> {
+  return db.select().from(auditLogs).where(and(eq(auditLogs.entity, "payroll"), eq(auditLogs.entityId, payrollId))).orderBy(desc(auditLogs.performedAt)).all();
 }
