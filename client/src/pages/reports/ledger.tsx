@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { Account } from "@/types/schema";
 import { format } from "date-fns";
 import clsx from "clsx";
@@ -328,23 +329,21 @@ export default function LedgerPage() {
             </div>
             <div className="md:col-span-2">
               <Label>{productChoices.length > 0 ? "Select Account / Product" : "Select Account"}</Label>
-              <Select value={selectedAccountId} onValueChange={setSelectedAccountId}>
-                <SelectTrigger>
-                  <SelectValue placeholder={productChoices.length > 0 ? "Choose an account or product" : "Choose an account"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {accountChoices.map((account) => (
-                    <SelectItem key={account.id} value={account.id.toString()}>
-                      {account.name}
-                    </SelectItem>
-                  ))}
-                  {productChoices.map((product) => (
-                    <SelectItem key={`product-${product.id}`} value={`product-${product.id}`}>
-                      {product.name} ({product.productType})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Searchable, products first: in a plain Select they sat below every account and were never found. */}
+              <SearchableSelect
+                options={[
+                  ...productChoices.map((product) => ({
+                    value: `product-${product.id}`,
+                    label: product.name,
+                    sublabel: `${product.productType === "bio" ? "Bio" : "Raw"} product`,
+                  })),
+                  ...accountChoices.map((account) => ({ value: account.id.toString(), label: account.name, sublabel: account.type })),
+                ]}
+                value={selectedAccountId || undefined}
+                onValueChange={setSelectedAccountId}
+                placeholder={productChoices.length > 0 ? "Choose an account or product" : "Choose an account"}
+                searchPlaceholder={productChoices.length > 0 ? "Search account or product..." : "Search account..."}
+              />
             </div>
             <div>
               <Label>Voucher Type</Label>
@@ -407,7 +406,7 @@ export default function LedgerPage() {
             )}
           </CardHeader>
           <CardContent className="overflow-auto">
-            <div className="min-w-[780px] border rounded-lg bg-white">
+            <div className="min-w-[780px] border rounded-lg bg-card">
               {isProductView ? (
                 <div className="grid grid-cols-[90px,100px,100px,1fr,80px,90px,90px,90px,90px,100px] bg-muted/60 text-[11px] font-semibold uppercase tracking-wide border-b">
                   <div className="px-2 py-2 border-r">{isRTL ? "تاریخ" : "Date"}</div>
@@ -464,7 +463,7 @@ export default function LedgerPage() {
                           key={`${entry.voucherType}-${entry.id}-${idx}`}
                           className={clsx(
                             "grid grid-cols-[90px,100px,100px,1fr,80px,90px,90px,90px,90px,100px] text-sm border-b last:border-b-0",
-                            idx % 2 === 0 ? "bg-white" : "bg-muted/20",
+                            idx % 2 === 0 ? "bg-card" : "bg-muted/20",
                           )}
                         >
                           <div className="px-2 py-2 border-r text-xs text-muted-foreground font-mono">
@@ -518,7 +517,7 @@ export default function LedgerPage() {
                             key={entry.id}
                             className={clsx(
                               "grid grid-cols-[90px,1fr,120px,120px,120px] text-sm border-b last:border-b-0",
-                              idx % 2 === 0 ? "bg-white" : "bg-muted/20",
+                              idx % 2 === 0 ? "bg-card" : "bg-muted/20",
                             )}
                           >
                             <div className="px-3 py-2 border-r text-xs text-muted-foreground font-mono">

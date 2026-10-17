@@ -103,3 +103,12 @@ export function formatPricePerUnit(pricePerKg: string | number | null | undefine
   const value = pricePerUnit(pricePerKg, unit);
   return `Rs. ${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}/${displayUnit(unit)}`;
 }
+
+/** Sums quantities per unit for a summary line, e.g. "12.5 mound + 300 kg". */
+export function formatQtyByUnit(lines: { qty: number; unit: string | null | undefined }[]): string {
+  const totals = new Map<string, number>();
+  for (const { qty, unit } of lines) {
+    if (unit && qty) totals.set(unit, (totals.get(unit) ?? 0) + qty);
+  }
+  return totals.size ? Array.from(totals, ([u, q]) => `${formatQty(q)} ${u}`).join(" + ") : "0";
+}

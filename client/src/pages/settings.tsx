@@ -39,6 +39,7 @@ import { useAuthStore } from "@/stores/auth.store";
 import { useLocation } from "wouter";
 import { defaultShortcutConfig, type ShortcutConfig } from "@/lib/shortcuts";
 import { FormPageSkeleton } from "@/components/loading/page-skeletons";
+import { PeriodLocksCard } from "@/components/settings/PeriodLocksCard";
 
 type SettingsPayload = {
   businessName: string;
@@ -150,6 +151,8 @@ const shortcutFields: Array<{ key: keyof ShortcutConfig; label: string; hint: st
   { key: "newDialog", label: "New dialog", hint: "Ctrl+N" },
   { key: "saveDialog", label: "Save dialog", hint: "Ctrl+Enter" },
   { key: "addLine", label: "Add line item", hint: "Ctrl+Shift+N" },
+  { key: "commandPalette", label: "Go to page (quick jump)", hint: "Ctrl+K" },
+  { key: "focusSearch", label: "Focus search box", hint: "/" },
 ];
 
 const defaultSettings: SettingsPayload = {
@@ -762,6 +765,8 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {canManageSettings && <PeriodLocksCard />}
 
         <Card>
           <CardHeader className={isRTL ? "text-right" : ""}>

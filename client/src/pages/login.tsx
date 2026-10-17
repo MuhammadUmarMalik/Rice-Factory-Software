@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth.store";
 import { apiRequest } from "@/lib/apiRequest";
 import { useLanguage } from "@/contexts/language-context";
 import { useLocation } from "wouter";
+import Wheat from "lucide-react/dist/esm/icons/wheat";
 
 const EyeIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg
@@ -58,6 +59,16 @@ export default function LoginPage() {
     if (user) setLocation("/");
   }, [user, setLocation]);
 
+  // A fresh install has no users yet: send the first visitor to onboarding.
+  useEffect(() => {
+    fetch("/api/auth/setup-status", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.needsSetup) setLocation("/setup");
+      })
+      .catch(() => {});
+  }, [setLocation]);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (isSubmitting) return;
@@ -86,8 +97,16 @@ export default function LoginPage() {
   };
 
   return (
-    <div className={`min-h-screen flex items-center justify-center bg-muted/30 px-4 ${isRTL ? "font-urdu" : ""}`}>
-      <Card className="w-full max-w-md min-h-[330px] shadow-sm">
+    <div
+      className={`min-h-screen flex flex-col items-center justify-center gap-6 bg-background bg-[radial-gradient(ellipse_at_top,hsl(var(--primary)/0.10),transparent_60%)] px-4 ${isRTL ? "font-urdu" : ""}`}
+    >
+      <div className="flex flex-col items-center gap-2 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-md">
+          <Wheat className="h-6 w-6" aria-hidden="true" />
+        </div>
+        <p className="text-lg font-semibold tracking-tight">{t("appTitle")}</p>
+      </div>
+      <Card className="w-full max-w-md min-h-[330px] shadow-lg">
         <CardHeader className="min-h-[84px]">
           <CardTitle className={`text-2xl leading-tight ${isRTL ? "text-right" : ""}`}>{t("signIn")}</CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -96,9 +115,11 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="space-y-4">
-            <div>
-              <label className="text-sm font-medium">{t("username")}</label>
+            <div className="space-y-1.5">
+              <label htmlFor="login-username" className="text-sm font-medium">{t("username")}</label>
               <Input
+                id="login-username"
+                autoFocus
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 autoComplete="username"
@@ -106,22 +127,23 @@ export default function LoginPage() {
                 data-testid="login-username"
               />
             </div>
-            <div>
-              <label className="text-sm font-medium">{t("password")}</label>
+            <div className="space-y-1.5">
+              <label htmlFor="login-password" className="text-sm font-medium">{t("password")}</label>
               <div className="relative">
                 <Input
+                  id="login-password"
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete="current-password"
                   required
                   data-testid="login-password"
-                  className="pr-10"
+                  className={isRTL ? "pl-10" : "pr-10"}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((prev) => !prev)}
-                  className={`absolute inset-y-0 ${isRTL ? "left-2" : "right-2"} inline-flex items-center justify-center text-muted-foreground hover:text-foreground`}
+                  className={`absolute inset-y-0 ${isRTL ? "left-2" : "right-2"} inline-flex items-center justify-center rounded px-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
                   aria-label={showPassword ? t("hidePassword") : t("showPassword")}
                 >
                   {showPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}

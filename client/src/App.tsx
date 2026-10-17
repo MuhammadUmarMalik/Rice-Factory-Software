@@ -9,7 +9,7 @@ const AuthenticatedApp = lazy(() => import("@/app/AuthenticatedApp"));
 
 export default function App() {
   const [location] = useLocation();
-  const fallback = location.startsWith("/login") ? <LoginSkeleton /> : <RouteSkeleton />;
+  const fallback = location.startsWith("/login") || location.startsWith("/setup") ? <LoginSkeleton /> : <RouteSkeleton />;
 
 
   return (
@@ -17,6 +17,7 @@ export default function App() {
       {/* Split login vs authenticated shells so /login only fetches minimal code. */}
       <Switch>
         <Route path="/login" component={LoginApp} />
+        <Route path="/setup" component={LoginApp} />
         <Route component={AuthenticatedApp} />
       </Switch>
     </Suspense>

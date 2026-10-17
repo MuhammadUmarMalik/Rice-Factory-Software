@@ -738,7 +738,7 @@ export default function ProcessingPage() {
                         </FormItem>
                       )}
                     />
-                    <Button
+                    <Button aria-label={t("delete")}
                       type="button"
                       variant="ghost"
                       size="icon"

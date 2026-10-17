@@ -178,7 +178,7 @@ export default function ExpensesPage() {
       align: "center",
       render: (item) => (
         <div className="flex items-center justify-center gap-2">
-          <Button
+          <Button aria-label={t("edit")}
             size="icon"
             variant="ghost"
             onClick={(e) => {
@@ -191,7 +191,7 @@ export default function ExpensesPage() {
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button
+              <Button aria-label={t("delete")}
                 size="icon"
                 variant="ghost"
                 onClick={(e) => e.stopPropagation()}

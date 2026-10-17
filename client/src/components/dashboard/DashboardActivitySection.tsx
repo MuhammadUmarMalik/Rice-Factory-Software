@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { SkeletonBox } from "@/components/ui/skeletons";
 import { Link } from "wouter";
 import Factory from "lucide-react/dist/esm/icons/factory";
+import { format } from "date-fns";
+import { useLanguage } from "@/contexts/language-context";
 
 type DayBookRow = {
   id: string;
@@ -20,6 +22,7 @@ type DayBookRow = {
 
 type DashboardActivitySectionProps = {
   dayBookRows: DayBookRow[];
+  dayBookDate?: string;
   dayBookLoading: boolean;
   isRTL: boolean;
   money: (value?: number) => string;
@@ -31,6 +34,7 @@ type DashboardActivitySectionProps = {
 
 export function DashboardActivitySection({
   dayBookRows,
+  dayBookDate,
   dayBookLoading,
   isRTL,
   money,
@@ -39,6 +43,7 @@ export function DashboardActivitySection({
   completedLabel,
   onOpenDetail,
 }: DashboardActivitySectionProps) {
+  const { t } = useLanguage();
   const { data: processingBatches = [], isLoading: processingLoading } = useQuery<any[]>({
     queryKey: ["/api/processing"],
     staleTime: 0,
@@ -66,7 +71,7 @@ export function DashboardActivitySection({
     <div className="grid gap-6 lg:grid-cols-2">
       <Card>
         <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <CardTitle className="text-base font-semibold">Today's Day Book</CardTitle>
+          <CardTitle className="text-base font-semibold">{t("dayBook")}{dayBookDate ? ` · ${format(new Date(dayBookDate), "dd MMM yyyy")}` : ""}</CardTitle>
         </CardHeader>
         <CardContent>
           {dayBookLoading ? (
@@ -76,7 +81,7 @@ export function DashboardActivitySection({
               ))}
             </div>
           ) : dayBookRows.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-6">No vouchers posted.</p>
+            <p className="text-sm text-muted-foreground text-center py-6">{t("noVouchersPosted")}</p>
           ) : (
             <div className="space-y-3">
               {dayBookRows.map((row, index) => (
@@ -98,11 +103,11 @@ export function DashboardActivitySection({
                       </p>
                     </div>
                     <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                      <p className="text-xs text-muted-foreground">Debit</p>
+                      <p className="text-xs text-muted-foreground">{t("receipt")}</p>
                       <p className="font-mono text-sm">{money(parseFloat(row.receipt || "0"))}</p>
                     </div>
                     <div className={`${isRTL ? "text-left" : "text-right"}`}>
-                      <p className="text-xs text-muted-foreground">Credit</p>
+                      <p className="text-xs text-muted-foreground">{t("payment")}</p>
                       <p className="font-mono text-sm">{money(parseFloat(row.payment || "0"))}</p>
                     </div>
                   </div>
@@ -115,9 +120,9 @@ export function DashboardActivitySection({
 
       <Card>
         <CardHeader className={`flex flex-row items-center justify-between gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <CardTitle className="text-base font-semibold">Pending Items</CardTitle>
+          <CardTitle className="text-base font-semibold">{t("pendingItems")}</CardTitle>
           <Link href="/processing">
-            <Button variant="ghost" size="sm">View all</Button>
+            <Button variant="ghost" size="sm">{t("viewAll")}</Button>
           </Link>
         </CardHeader>
         <CardContent>
@@ -131,7 +136,7 @@ export function DashboardActivitySection({
             <div className="space-y-4">
               {isFallbackList && visibleBatches.length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  No pending processing. Showing recent completed batches.
+                  {t("showingRecentCompleted")}
                 </p>
               )}
               {visibleBatches.map((item: any, index: number) => (
@@ -172,7 +177,7 @@ export function DashboardActivitySection({
               ))}
               {visibleBatches.length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-4">
-                  No pending processing.
+                  {t("noPendingProcessing")}
                 </p>
               )}
             </div>

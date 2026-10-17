@@ -224,7 +224,7 @@ export default function CustomersPage() {
       align: "center",
       render: (item) => (
         <div className="flex items-center justify-center gap-2">
-          <Button
+          <Button aria-label={t("view")}
             size="icon"
             variant="ghost"
             onClick={(e) => {
@@ -235,7 +235,7 @@ export default function CustomersPage() {
           >
             <Eye className="h-4 w-4" />
           </Button>
-          <Button
+          <Button aria-label={t("edit")}
             size="icon"
             variant="ghost"
             onClick={(e) => {
@@ -248,7 +248,7 @@ export default function CustomersPage() {
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button
+              <Button aria-label={t("delete")}
                 size="icon"
                 variant="ghost"
                 onClick={(e) => e.stopPropagation()}

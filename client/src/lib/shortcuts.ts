@@ -5,6 +5,8 @@ export type ShortcutConfig = {
   newDialog: string;
   saveDialog: string;
   addLine: string;
+  commandPalette: string;
+  focusSearch: string;
 };
 
 export const defaultShortcutConfig: ShortcutConfig = {
@@ -14,6 +16,8 @@ export const defaultShortcutConfig: ShortcutConfig = {
   newDialog: "Ctrl+N",
   saveDialog: "Ctrl+Enter",
   addLine: "Ctrl+Shift+N",
+  commandPalette: "Ctrl+K",
+  focusSearch: "/",
 };
 
 let currentConfig: ShortcutConfig = { ...defaultShortcutConfig };

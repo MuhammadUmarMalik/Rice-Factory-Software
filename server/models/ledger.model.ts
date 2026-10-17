@@ -47,6 +47,7 @@ import {
   buildPurchaseNarration as buildPurchaseNarrationText,
   buildReceiptVoucherNarration as buildReceiptVoucherNarrationText,
   buildSaleNarration as buildSaleNarrationText,
+  withVehicle,
   cleanNarrationSegment,
   firstMeaningfulNarration,
   joinNarration,
@@ -409,7 +410,8 @@ export async function getLedgerReport(params: {
   const entries = (() => {
     const accountType = account?.type;
     const expandPurchase = accountType === "supplier";
-    const expandSale = accountType === "customer";
+    // Suppliers and employees can also buy (sale party), so their ledgers get the same sale detail.
+    const expandSale = accountType === "customer" || accountType === "supplier" || accountType === "employee";
     if (!expandPurchase && !expandSale) return entriesBase;
 
     const chargeLabel = (type: string) => {
@@ -814,6 +816,7 @@ export async function getLedgerReport(params: {
       partyName?: string | null;
       notes?: string | null;
       supplierId?: number | null;
+      vehicleNumber?: string | null;
     }
   >(
     purchaseIds.length
@@ -828,6 +831,7 @@ export async function getLedgerReport(params: {
             partyName: accounts.name,
             notes: purchases.notes,
             supplierId: purchases.supplierId,
+            vehicleNumber: purchases.vehicleNumber,
           })
           .from(purchases)
           .leftJoin(accounts, eq(purchases.supplierId, accounts.id))
@@ -908,6 +912,7 @@ export async function getLedgerReport(params: {
     totalAmount?: string | null;
     partyName?: string | null;
     notes?: string | null;
+    vehicleNumber?: string | null;
   }>(
     saleIds.length
       ? db
@@ -918,6 +923,7 @@ export async function getLedgerReport(params: {
             totalAmount: sales.totalAmount,
             partyName: accounts.name,
             notes: sales.notes,
+            vehicleNumber: sales.vehicleNumber,
           })
           .from(sales)
           .leftJoin(accounts, eq(sales.customerId, accounts.id))
@@ -1195,12 +1201,13 @@ export async function getLedgerReport(params: {
     const rawDescription = (entry.description || "").trim();
     const lowerDescription = rawDescription.toLowerCase();
     const meta = refId ? purchaseMetaById.get(refId) : undefined;
-    if (refId && meta && !cleanNarrationSegment(meta.notes)) return "-";
+    if (refId && meta && !cleanNarrationSegment(meta.notes)) return withVehicle("", meta.vehicleNumber) || "-";
     const invoice = meta?.invoiceNumber || (refId ? purchaseNoById.get(refId) : "") || (refId ? `PUR-${refId}` : "");
     const base = buildPurchaseNarrationText({
       notes: meta?.notes,
       supplierName: meta?.partyName,
       invoiceNumber: invoice,
+      vehicleNumber: meta?.vehicleNumber,
     });
     const itemLabel = refId ? purchaseItemNameById.get(refId) : "";
     const itemTotals = refId ? purchaseItemTotals.get(refId) : undefined;
@@ -1240,12 +1247,13 @@ export async function getLedgerReport(params: {
     const rawDescription = (entry.description || "").trim();
     const lowerDescription = rawDescription.toLowerCase();
     const meta = refId ? saleMetaById.get(refId) : undefined;
-    if (refId && meta && !cleanNarrationSegment(meta.notes)) return "-";
+    if (refId && meta && !cleanNarrationSegment(meta.notes)) return withVehicle("", meta.vehicleNumber) || "-";
     const invoice = meta?.invoiceNumber || (refId ? saleNoById.get(refId) : "") || (refId ? `SAL-${refId}` : "");
     const base = buildSaleNarrationText({
       notes: meta?.notes,
       customerName: meta?.partyName,
       invoiceNumber: invoice,
+      vehicleNumber: meta?.vehicleNumber,
     });
     const itemLabel = refId ? saleItemNameById.get(refId) : "";
     const qtyMeta = refId ? saleQtyById.get(refId) : undefined;

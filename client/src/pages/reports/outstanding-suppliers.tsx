@@ -18,6 +18,7 @@ import { docKeys } from "@/print/docRegistry";
 import { fetchWithAuth } from "@/lib/authFetch";
 import { DateRangeFilter } from "@/components/filters/DateRangeFilter";
 import { useReportDateRange } from "@/hooks/useReportDateRange";
+import { PartyAgingTable } from "@/components/reports/PartyAgingTable";
 
 const ReportDetailDialog = lazy(() =>
   import("@/components/report-detail-dialog").then((mod) => ({
@@ -154,6 +155,17 @@ export default function OutstandingSuppliersPage() {
         <SummaryCard label="Outstanding" value={totals.outstandingAmount} highlight />
         <SummaryCard label="91+ Days" value={totals.bucket91Plus} highlight />
       </div>
+
+      {supplierId === "all" && (
+        <PartyAgingTable
+          title="By supplier"
+          rows={rows}
+          isLoading={isLoading}
+          partyId={(r) => r.supplierId}
+          partyName={(r) => r.supplierName}
+          onSelect={(id) => setSupplierId(String(id))}
+        />
+      )}
 
       <Card>
         <CardHeader>

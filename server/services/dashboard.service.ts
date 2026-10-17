@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { sqlite } from "../models/db";
 import * as accountsModel from "../models/accounts.model";
 import * as expensesModel from "../models/expenses.model";
 import * as jvModel from "../models/journal-vouchers.model";
@@ -563,6 +564,18 @@ export async function getDashboardAlerts(params: Partial<DashboardRange>) {
       severity: "warning",
       message: `${overdueSuppliers.length} supplier invoice(s) are overdue.`,
     });
+  }
+
+  try {
+    // Pending cheques dated within the next 3 days (or already past their date).
+    const { n } = sqlite
+      .prepare("SELECT COUNT(*) AS n FROM cheques WHERE status = 'pending' AND cheque_date <= unixepoch('now', '+3 days')")
+      .get() as { n: number };
+    if (n > 0) {
+      alerts.push({ key: "cheques_due", severity: "warning", message: `${n} pending cheque(s) are due within 3 days or overdue.` });
+    }
+  } catch {
+    // cheques table not created yet
   }
 
   let duplicateCount = 0;

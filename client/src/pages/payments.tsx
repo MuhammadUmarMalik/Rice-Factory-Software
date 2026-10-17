@@ -404,9 +404,9 @@ export default function PaymentsPage() {
     } },
     { key: "actions", title: t("actions"), render: (p) => (
       <div className="flex gap-2">
-        <Button size="icon" variant="ghost" onClick={() => handleView(p.id)}><Eye className="h-4 w-4" /></Button>
-        <Button size="icon" variant="ghost" onClick={() => handleEdit(p.id)}><Pencil className="h-4 w-4" /></Button>
-        <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate(p.id)}><Trash2 className="h-4 w-4" /></Button>
+        <Button aria-label={t("view")} size="icon" variant="ghost" onClick={() => handleView(p.id)}><Eye className="h-4 w-4" /></Button>
+        <Button aria-label={t("edit")} size="icon" variant="ghost" onClick={() => handleEdit(p.id)}><Pencil className="h-4 w-4" /></Button>
+        <Button aria-label={t("delete")} size="icon" variant="ghost" onClick={() => deleteMutation.mutate(p.id)}><Trash2 className="h-4 w-4" /></Button>
       </div>
     ) },
   ];

@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuthStore } from "@/stores/auth.store";
@@ -10,6 +11,11 @@ import {
   setShortcutConfig,
   type ShortcutConfig,
 } from "@/lib/shortcuts";
+import { can } from "@/lib/roles";
+import { useLanguage } from "@/contexts/language-context";
+import { allNavItems } from "@/components/app-sidebar";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 
 type SettingsPayload = {
   shortcuts?: Partial<ShortcutConfig>;
@@ -74,12 +80,37 @@ function openNewDialog() {
   ]);
 }
 
+function focusSearch() {
+  const el = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="search"]')).find(isVisible);
+  el?.focus();
+  return !!el;
+}
+
 function triggerPrintPreview() {
   return clickFirst(['[data-shortcut="print-preview"]']);
 }
 
 export function ShortcutManager() {
   const user = useAuthStore((state) => state.user);
+  const [, setLocation] = useLocation();
+  const { t } = useLanguage();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+
+  const pages = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return allNavItems
+      .filter((item) => can(user?.role, item.roles))
+      .map((item) => ({ url: item.url, label: t(item.title as any) }))
+      .filter((item) => !q || item.label.toLowerCase().includes(q) || item.url.includes(q));
+  }, [query, t, user?.role]);
+
+  const go = (url?: string) => {
+    if (!url) return;
+    setPaletteOpen(false);
+    setLocation(url);
+  };
 
   const settingsQuery = useQuery<SettingsPayload>({
     queryKey: ["/api/settings/shortcuts"],
@@ -106,6 +137,17 @@ export function ShortcutManager() {
       if (isEditableTarget(event.target) && !(event.ctrlKey || event.metaKey)) return;
       if (event.defaultPrevented) return;
 
+      if (matchesShortcut(event, config.commandPalette)) {
+        event.preventDefault();
+        setQuery("");
+        setActive(0);
+        setPaletteOpen(true);
+        return;
+      }
+      if (matchesShortcut(event, config.focusSearch)) {
+        if (focusSearch()) event.preventDefault();
+        return;
+      }
       if (matchesShortcut(event, config.printPreview)) {
         event.preventDefault();
         triggerPrintPreview();
@@ -131,5 +173,42 @@ export function ShortcutManager() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  return null;
+  return (
+    <Dialog modal open={paletteOpen} onOpenChange={setPaletteOpen}>
+      <DialogContent variant="modal" className="max-w-md gap-2 p-3">
+        <DialogTitle className="sr-only">Go to page</DialogTitle>
+        <Input
+          autoFocus
+          placeholder={t("search")}
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setActive(0);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") setActive((i) => Math.min(i + 1, pages.length - 1));
+            else if (e.key === "ArrowUp") setActive((i) => Math.max(i - 1, 0));
+            else if (e.key === "Enter") go(pages[active]?.url);
+            else return;
+            e.preventDefault();
+          }}
+        />
+        <ul role="listbox" className="max-h-80 overflow-y-auto">
+          {pages.map((page, i) => (
+            <li
+              key={page.url}
+              role="option"
+              aria-selected={i === active}
+              ref={i === active ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => go(page.url)}
+              className={`cursor-pointer rounded px-3 py-2 text-sm ${i === active ? "bg-accent text-accent-foreground" : ""}`}
+            >
+              {page.label}
+            </li>
+          ))}
+        </ul>
+      </DialogContent>
+    </Dialog>
+  );
 }

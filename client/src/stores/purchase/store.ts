@@ -90,7 +90,6 @@ export const usePurchaseStore = create<PurchaseState & PurchaseActions>((set, ge
           notes: (source as any).notes ?? "",
           items: ((source as any).items || []).map((item: any) => ({
             productId: String(item.productId ?? ""),
-            marka: item.marka || "",
             bags: item.bags || "0",
             fillingPerBagKg: item.fillingPerBagKg || "0",
             looseKgs: item.looseKgs || "0",

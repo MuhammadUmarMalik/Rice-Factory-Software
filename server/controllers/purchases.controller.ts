@@ -7,6 +7,7 @@ import {
 } from "../schemas/purchases.schema";
 import * as purchasesService from "../services/purchases.service";
 import { getUserId } from "../utils/auth";
+import { insertVoucherAuditLog } from "../services/voucher-audit.service";
 import { notifyUsers } from "../utils/notifications";
 import { parseRequiredInt } from "../utils/parse";
 import { isBusinessRuleError } from "../utils/errors";
@@ -40,7 +41,7 @@ const normalizeChargeType = (value: unknown) => {
   if (normalized.includes("phone") && normalized.includes("anal")) return "phone_analysis";
   if (normalized.startsWith("comm") || normalized.includes("commi")) return "commission";
   if (normalized.startsWith("mitha")) return "mitha_sukri";
-  if (normalized.startsWith("load")) return "loading_unloading";
+  if (normalized.startsWith("load")) return "loading_filling";
   if (normalized.startsWith("market")) return "market_fee";
   if (normalized.startsWith("broker")) return "brokerage";
   if (normalized.startsWith("broken")) return "broken_allowance";
@@ -119,6 +120,7 @@ export async function createPurchase(req: Request, res: Response) {
       moundBaseKg,
       { gatePassId: gatePassId ?? null, performedBy: getUserId(req) },
     );
+    insertVoucherAuditLog("purchase", purchase.id, "create", null, purchase, getUserId(req), "api");
     await notifyUsers({
       title: "New stock added",
       message: `Purchase ${purchase.invoiceNumber} received.`,
@@ -170,6 +172,7 @@ export async function updatePurchase(req: Request, res: Response) {
     if (!purchase) {
       return res.status(404).json({ error: "Purchase not found" });
     }
+    insertVoucherAuditLog("purchase", id, "update", existing, purchase, getUserId(req), "api");
     res.json(purchase);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -191,8 +194,10 @@ export async function deletePurchase(req: Request, res: Response) {
     const force = Array.isArray(forceRaw)
       ? forceRaw.some((value) => ["1", "true", "yes", "on"].includes(String(value).toLowerCase()))
       : ["1", "true", "yes", "on"].includes(String(forceRaw ?? "").toLowerCase());
+    const before = await purchasesService.getPurchase(id);
     const ok = await purchasesService.deletePurchase(id, getUserId(req), { force });
     if (!ok) return res.status(404).json({ error: "Purchase not found" });
+    insertVoucherAuditLog("purchase", id, "delete", before, null, getUserId(req), "api");
     res.json({ success: true, message: "Purchase deleted successfully" });
   } catch (error) {
     if (isBusinessRuleError(error)) {

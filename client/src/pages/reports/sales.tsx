@@ -34,6 +34,7 @@ type SalesReportRow = {
   saleDate: string | number | Date;
   customerId: number;
   customerName: string;
+  partyType?: "customer" | "supplier" | "employee";
   subtotal: string;
   discount: string;
   tax: string;
@@ -75,18 +76,23 @@ export default function SalesReportPage() {
   const [customerId, setCustomerId] = useState<string>("all");
   const [productId, setProductId] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");
+  const [partyType, setPartyType] = useState<string>("all");
   const { reference, detail, isLoading: isDetailLoading, openDetail, closeDetail } = useReportDetail();
 
-  const { data: customers = [] } = useQuery<Account[]>({
-    queryKey: ["/api/accounts?type=customer"],
+  // Sales parties can be customers, suppliers or employees.
+  const { data: accounts = [] } = useQuery<Account[]>({
+    queryKey: ["/api/accounts"],
   });
+  const customers = accounts.filter((a) =>
+    partyType === "all" ? ["customer", "supplier", "employee"].includes(a.type) : a.type === partyType,
+  );
 
   const { data: products = [] } = useQuery<Product[]>({
     queryKey: ["/api/products"],
   });
 
   const { data, isLoading, error } = useQuery<SalesReport>({
-    queryKey: ["/api/reports/sales", fromDate, toDate, customerId, productId, status],
+    queryKey: ["/api/reports/sales", fromDate, toDate, customerId, productId, status, partyType],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (fromDate) params.set("fromDate", fromDate);
@@ -94,6 +100,7 @@ export default function SalesReportPage() {
       if (customerId !== "all") params.set("customerId", customerId);
       if (productId !== "all") params.set("productId", productId);
       if (status !== "all") params.set("paymentStatus", status);
+      if (partyType !== "all") params.set("partyType", partyType);
       const res = await apiRequest("GET", `/api/reports/sales?${params.toString()}`);
       return res.json();
     },
@@ -143,7 +150,13 @@ export default function SalesReportPage() {
     },
     {
       key: "customerName",
-      title: "Customer",
+      title: "Party",
+      render: (item) => (
+        <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+          <span>{item.customerName}</span>
+          <Badge variant="outline" className="text-xs capitalize">{item.partyType || "customer"}</Badge>
+        </div>
+      ),
     },
     {
       key: "subtotal",
@@ -250,6 +263,7 @@ export default function SalesReportPage() {
               customerId: customerId !== "all" ? customerId : undefined,
               productId: productId !== "all" ? productId : undefined,
               paymentStatus: status !== "all" ? status : undefined,
+              partyType: partyType !== "all" ? partyType : undefined,
             }}
             title="Sales Report"
           />
@@ -264,10 +278,30 @@ export default function SalesReportPage() {
               <DateRangeFilter value={range} onChange={setRange} />
             </div>
             <div>
-              <Label>Customer</Label>
+              <Label>Party Type</Label>
+              <Select
+                value={partyType}
+                onValueChange={(value) => {
+                  setPartyType(value);
+                  setCustomerId("all");
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="customer">Customer</SelectItem>
+                  <SelectItem value="supplier">Supplier</SelectItem>
+                  <SelectItem value="employee">Employee</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Party</Label>
               <Select value={customerId} onValueChange={setCustomerId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="All customers" />
+                  <SelectValue placeholder="All parties" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All</SelectItem>

@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { hashPassword } from "../server/utils/auth";
-import { FALLBACK_ADMIN_PASSWORD, usesFallbackAdminPassword } from "../server/utils/bootstrap";
 
 const sourcePath = path.resolve(".local", "data.db");
 const legacySeedPath = path.resolve(".local", "seed.db");
@@ -25,11 +23,9 @@ if (fs.existsSync(legacySeedPath)) {
 fs.mkdirSync(targetDir, { recursive: true });
 fs.copyFileSync(sourcePath, targetPath);
 
+// The shipped database is empty, users included: the first launch opens the
+// onboarding wizard (/setup), which creates the admin through /api/auth/bootstrap.
 const sqlite = new Database(targetPath);
-const username = process.env.DEFAULT_ADMIN_USERNAME || "admin";
-const password = process.env.DEFAULT_ADMIN_PASSWORD || FALLBACK_ADMIN_PASSWORD;
-const fullName = process.env.DEFAULT_ADMIN_NAME || "System Admin";
-const hashed = hashPassword(password);
 
 try {
   sqlite.pragma("foreign_keys = OFF");
@@ -43,26 +39,6 @@ try {
       sqlite.prepare(`DELETE FROM "${table}"`).run();
     }
   })();
-
-  const hasUsersTable = sqlite
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'")
-    .get();
-  if (hasUsersTable) {
-    // The source database may predate the column; the shipped seed must have it
-    // so the app can flag the fallback password on first launch.
-    const userColumns = sqlite.prepare("PRAGMA table_info(users)").all() as { name: string }[];
-    if (!userColumns.some((c) => c.name === "must_change_password")) {
-      sqlite.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
-    }
-
-    sqlite
-      .prepare(
-        "INSERT INTO users (username, password, full_name, role, is_active, must_change_password, created_at) VALUES (?, ?, ?, 'admin', 1, ?, ?)",
-      )
-      .run(username, hashed, fullName, usesFallbackAdminPassword(password) ? 1 : 0, Date.now());
-  } else {
-    console.warn("Users table not found; admin user not created.");
-  }
 } finally {
   sqlite.close();
 }

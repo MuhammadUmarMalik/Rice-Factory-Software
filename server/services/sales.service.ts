@@ -13,10 +13,14 @@ export async function listSales() {
   // One query for every row's dispatch progress so the list can show the
   // dispatched/pending badges without a query per sale.
   const progressMap = await gatePassesModel.getSaleDispatchProgress(sales.map((s) => s.id));
+  // The party may be a customer, supplier or employee account; resolve names in one query.
+  const partyNames = new Map((await accountsModel.getAccounts()).map((a) => [a.id, a.name]));
   return sales.map((s) => {
     const id = (s as any).cashReceiptId;
     return {
       ...s,
+      partyId: s.customerId,
+      partyName: partyNames.get(s.customerId) ?? null,
       cashReceiptVoucherNo: id ? voucherNos.get(id) ?? null : null,
       dispatch: progressMap.get(s.id) ?? null,
     };
@@ -32,8 +36,11 @@ export async function getSale(id: number) {
   // Attach any linked gate passes so the invoice/detail screens can show the
   // gate pass details alongside the sale without an extra lookup per pass.
   const passMap = await gatePassesModel.getGatePassRefsForSources("SALE", [id]);
+  const party = await accountsModel.getAccount(sale.customerId);
   return {
     ...sale,
+    partyId: sale.customerId,
+    partyName: party?.name ?? null,
     items,
     cashReceiptVoucherNo: cashReceiptVoucherNo ?? undefined,
     gatePasses: passMap.get(id) ?? [],

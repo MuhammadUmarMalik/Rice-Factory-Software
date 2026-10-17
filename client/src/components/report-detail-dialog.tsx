@@ -110,7 +110,7 @@ function saleChargeLines(d: SaleDetail) {
   const sale = (d.sale || {}) as Record<string, any>;
   return [
     ["Bardana", "weighingCharges"],
-    ["Loading", "loadingCharges"],
+    ["Loading Charges", "loadingCharges"],
     ["Stitching", "otherCharges"],
     ["Freight", "freightCharges"],
     ["Rent", "rentCharges"],
@@ -136,8 +136,15 @@ function renderDetailContent(detail: ReportDetail) {
               </p>
             )}
             {d.customer?.name && (
-              <p className="text-sm text-muted-foreground">Customer: {d.customer.name}</p>
+              <p className="text-sm text-muted-foreground">
+                Party: {d.customer.name}{" "}
+                <Badge variant="outline" className="ml-1 text-xs capitalize">{d.sale?.partyType || "customer"}</Badge>
+              </p>
             )}
+            {d.sale?.vehicleNumber && (
+              <p className="text-sm text-muted-foreground">Vehicle: <span className="font-mono">{d.sale.vehicleNumber}</span></p>
+            )}
+            {d.sale?.marka && <p className="text-sm text-muted-foreground">Marka: {d.sale.marka}</p>}
             {(d as any)?.gatePasses?.length > 0 && (
               <p className="text-sm">
                 Gate passes:{" "}

@@ -15,6 +15,7 @@ import {
   stockReport,
   trialBalance,
 } from "../controllers/reports.controller";
+import { recoveryReport } from "../controllers/recovery-report.controller";
 import { requireRoles } from "../utils/auth";
 import { Roles } from "../utils/roles";
 import { cacheResponse } from "../utils/response-cache";
@@ -29,6 +30,7 @@ router.get("/api/reports/purchases", requireRoles(Roles.purchasing), reportsCach
 router.get("/api/reports/sales", requireRoles(Roles.sales), reportsCache, salesReport);
 router.get("/api/reports/bardana", requireRoles(Roles.purchasing), reportsCache, bardanaReport);
 router.get("/api/reports/less", requireRoles(Roles.purchasing), reportsCache, lessReport);
+router.get("/api/reports/recovery", requireRoles(Roles.purchasing), reportsCache, recoveryReport);
 router.get(
   "/api/reports/period-purchases",
   requireRoles(Roles.finance),

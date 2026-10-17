@@ -275,7 +275,7 @@ export default function ExpensesPage() {
       align: "center",
       render: (row) => (
         <div className="flex items-center justify-center gap-2">
-          <Button
+          <Button aria-label={t("view")}
             size="icon"
             variant="ghost"
             onClick={(e) => {
@@ -286,7 +286,7 @@ export default function ExpensesPage() {
           >
             <Eye className="h-4 w-4" />
           </Button>
-          <Button
+          <Button aria-label={t("edit")}
             size="icon"
             variant="ghost"
             onClick={(e) => {
@@ -299,7 +299,7 @@ export default function ExpensesPage() {
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button
+              <Button aria-label={t("delete")}
                 size="icon"
                 variant="ghost"
                 onClick={(e) => e.stopPropagation()}
@@ -728,7 +728,7 @@ export default function ExpensesPage() {
                     <div key={acc.id} className="flex items-center justify-between py-1">
                       <span>{acc.name}</span>
                       <div className="flex gap-1">
-                        <Button
+                        <Button aria-label={t("edit")}
                           size="icon"
                           variant="ghost"
                           className="h-6 w-6"
@@ -739,7 +739,7 @@ export default function ExpensesPage() {
                         >
                           <Edit className="h-3 w-3" />
                         </Button>
-                        <Button
+                        <Button aria-label={t("delete")}
                           size="icon"
                           variant="ghost"
                           className="h-6 w-6 text-destructive"

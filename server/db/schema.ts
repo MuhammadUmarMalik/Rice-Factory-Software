@@ -476,8 +476,12 @@ export type ProcessingOutput = typeof processingOutputs.$inferSelect;
 export const sales = sqliteTable("sales", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   invoiceNumber: text("invoice_number").notNull().unique(),
+  // The party's account id. Kept as customer_id for existing data; party_type
+  // says which kind of account it is (sales go straight to its ledger).
   customerId: integer("customer_id").notNull().references(() => accounts.id),
+  partyType: text("party_type", { enum: ["customer", "supplier", "employee"] }).notNull().default("customer"),
   vehicleNumber: text("vehicle_number"),
+  marka: text("marka"),
   loadingCharges: text("loading_charges").default("0"),
   loadingChargesMode: text("loading_charges_mode", { enum: ["add", "less"] }),
   weighingCharges: text("weighing_charges").default("0"),
@@ -1751,3 +1755,24 @@ export const gatePassItemsRelations = relations(gatePassItems, ({ one }) => ({
   }),
 }));
 
+
+// Post-dated cheque register. A tracker only: clearing a cheque does not post
+// to the ledger; the receipt/payment voucher is still entered as usual.
+export const cheques = sqliteTable("cheques", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  direction: text("direction", { enum: ["received", "issued"] }).notNull(),
+  partyId: integer("party_id").references(() => accounts.id),
+  chequeNo: text("cheque_no").notNull(),
+  bankName: text("bank_name"),
+  amount: text("amount").notNull(),
+  chequeDate: integer("cheque_date", { mode: "timestamp" }).notNull(),
+  status: text("status", { enum: ["pending", "deposited", "cleared", "bounced", "cancelled"] })
+    .notNull()
+    .default("pending"),
+  notes: text("notes"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  statusChangedAt: integer("status_changed_at", { mode: "timestamp" }),
+}, (table) => ({
+  idxChequesStatusDate: index("idx_cheques_status_date").on(table.status, table.chequeDate),
+}));
