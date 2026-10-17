@@ -1,4 +1,3 @@
-import "./config/sentry";
 import { captureException, isSentryEnabled } from "./config/sentry";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@/components/ErrorBoundary";

@@ -37,6 +37,14 @@ export const apiKeys = {
   processing: ["/api/processing"] as const,
   processingBatch: (id: number) => [`/api/processing/${id}`] as const,
 
+  // Gate passes
+  // Query keys are single strings because the shared query client fetches
+  // `queryKey.join("/")`; pass a pre-built query string (or "" for all).
+  gatePasses: (queryString = "") => [`/api/gate-passes${queryString}`] as const,
+  gatePass: (id: number) => [`/api/gate-passes/${id}`] as const,
+  gatePassesDashboard: ["/api/gate-passes/dashboard"] as const,
+  saleDispatchSummary: (id: number) => [`/api/sales/${id}/dispatch-summary`] as const,
+
   // Receipts & Payments
   receipts: ["/api/receipts"] as const,
   receipt: (id: number) => [`/api/receipts/${id}`] as const,

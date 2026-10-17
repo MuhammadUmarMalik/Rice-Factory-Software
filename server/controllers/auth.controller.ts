@@ -67,7 +67,7 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
     fullName: user.fullName,
     role: user.role,
   });
-
+  console.log(token)
   return res.json({ token, user: sanitizeUser(user) });
 });
 
@@ -81,7 +81,10 @@ export const logout = asyncHandler(async (req: Request, res: Response) => {
 
 export const me = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-  return res.json({ user: sanitizeUser(req.user) });
+  // Re-issue a short-lived access token on /me so every window (and the
+  // real-time socket, which authenticates from this token) can bootstrap its
+  // own session from the persistent session cookie without re-logging in.
+  return res.json({ user: sanitizeUser(req.user), token: signAccessToken(req.user) });
 });
 
 export const bootstrapAdmin = asyncHandler(async (req: Request, res: Response) => {

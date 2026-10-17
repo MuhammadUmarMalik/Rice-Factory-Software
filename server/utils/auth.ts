@@ -125,6 +125,28 @@ export const requireAuth: RequestHandler = (req, res, next) => {
   return next();
 };
 
+/**
+ * Synchronous Bearer-token verification for long-lived transports such as
+ * Server-Sent Events, where `authenticate` (async, session lookup) is too heavy
+ * and `requireAuth` cannot run before the response headers are written.
+ *
+ * Returns the resolved user, or null when the token is missing/expired/invalid.
+ */
+export function verifyBearerToken(authHeader: string | undefined): AuthUser | null {
+  if (!authHeader?.startsWith("Bearer ")) return null;
+  const token = authHeader.slice(7).trim();
+  let payload: jwt.JwtPayload;
+  try {
+    payload = jwt.verify(token, JWT_SECRET, { issuer: JWT_ISSUER, audience: JWT_AUDIENCE }) as jwt.JwtPayload;
+  } catch {
+    return null;
+  }
+  if (typeof payload !== "object" || !payload?.sub) return null;
+  const userId = Number(payload.sub);
+  if (!Number.isFinite(userId)) return null;
+  return { id: userId, username: "", fullName: "", role: String(payload.role || "operator") };
+}
+
 export function getUserRole(req: Request): string {
   return req.user?.role?.toLowerCase() || "operator";
 }

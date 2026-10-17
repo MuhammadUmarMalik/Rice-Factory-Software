@@ -78,10 +78,6 @@ function triggerPrintPreview() {
   return clickFirst(['[data-shortcut="print-preview"]']);
 }
 
-function triggerDownloadPdf() {
-  return clickFirst(['[data-shortcut="download-pdf"]']);
-}
-
 export function ShortcutManager() {
   const user = useAuthStore((state) => state.user);
 
@@ -113,11 +109,6 @@ export function ShortcutManager() {
       if (matchesShortcut(event, config.printPreview)) {
         event.preventDefault();
         triggerPrintPreview();
-        return;
-      }
-      if (matchesShortcut(event, config.downloadPdf)) {
-        event.preventDefault();
-        triggerDownloadPdf();
         return;
       }
       if (matchesShortcut(event, config.newDialog)) {
