@@ -10,6 +10,7 @@ export function insertVoucherAuditLog(
   beforeJson: unknown,
   afterJson: unknown,
   userId?: number,
+  source: "voucher" | "api" = "voucher",
 ) {
   try {
     db.insert(auditLogs)
@@ -20,7 +21,7 @@ export function insertVoucherAuditLog(
         beforeJson: beforeJson ? JSON.stringify(beforeJson) : null,
         afterJson: afterJson ? JSON.stringify(afterJson) : null,
         performedBy: userId ?? null,
-        source: "voucher",
+        source,
       })
       .run();
   } catch (error) {

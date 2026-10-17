@@ -3,9 +3,12 @@ import { z } from "zod";
 import { insertSaleSchema } from "../db/schema";
 import { saleItemsSchema } from "../schemas/sales.schema";
 import * as salesService from "../services/sales.service";
+import * as accountsModel from "../models/accounts.model";
 import { notifyLowStock, notifyUsers } from "../utils/notifications";
 import { isBusinessRuleError } from "../utils/errors";
 import { parseRequiredInt } from "../utils/parse";
+import { getUserId } from "../utils/auth";
+import { insertVoucherAuditLog } from "../services/voucher-audit.service";
 
 const isFutureDate = (value: Date) => {
   const today = new Date();
@@ -28,6 +31,19 @@ const dueDateIsBeforeTransaction = (dueDate: Date | undefined | null, transactio
     transactionDate.getDate(),
   ).getTime();
   return dueDay < transactionDay;
+};
+
+/** `partyId` is accepted as an alias of `customerId`: both are the party's account id. */
+const splitSaleBody = (body: Record<string, any>) => {
+  const { items, partyId, ...saleData } = body || {};
+  if (saleData.customerId == null && partyId != null) saleData.customerId = partyId;
+  return { items, saleData };
+};
+
+/** The party must be an existing account of the chosen type, so the sale posts to that party's own ledger. */
+const partyError = async (partyType: string, accountId: number) => {
+  const account = await accountsModel.getAccount(accountId);
+  return account && account.type === partyType ? null : `Selected ${partyType} was not found`;
 };
 
 export async function listSales(req: Request, res: Response) {
@@ -57,12 +73,14 @@ export async function getSale(req: Request, res: Response) {
 
 export async function createSale(req: Request, res: Response) {
   try {
-    const { items, ...saleData } = req.body;
+    const { items, saleData } = splitSaleBody(req.body);
     const data = insertSaleSchema.parse({
       ...saleData,
       saleDate: normalizeDate((saleData as any).saleDate),
       dueDate: normalizeDate((saleData as any).dueDate),
     });
+    const invalidParty = await partyError(data.partyType ?? "customer", data.customerId);
+    if (invalidParty) return res.status(400).json({ error: invalidParty });
     if (data.saleDate && isFutureDate(data.saleDate)) {
       return res.status(400).json({ error: "Sale date cannot be in the future" });
     }
@@ -71,6 +89,7 @@ export async function createSale(req: Request, res: Response) {
     }
     const parsedItems = saleItemsSchema.parse(items || []);
     const sale = await salesService.createSale(data, parsedItems);
+    insertVoucherAuditLog("sale", sale.id, "create", null, sale, getUserId(req), "api");
     await notifyUsers({
       title: "Sale completed",
       message: `Sale ${sale.invoiceNumber} posted.`,
@@ -104,12 +123,19 @@ export async function updateSale(req: Request, res: Response) {
     if (!existing) {
       return res.status(404).json({ error: "Sale not found" });
     }
-    const { items, ...saleData } = req.body;
+    const { items, saleData } = splitSaleBody(req.body);
     const data = insertSaleSchema.partial().parse({
       ...saleData,
       saleDate: normalizeDate((saleData as any).saleDate),
       dueDate: normalizeDate((saleData as any).dueDate),
     });
+    if (data.partyType !== undefined || data.customerId !== undefined) {
+      const invalidParty = await partyError(
+        data.partyType ?? (existing as any).partyType ?? "customer",
+        data.customerId ?? existing.customerId,
+      );
+      if (invalidParty) return res.status(400).json({ error: invalidParty });
+    }
     if (data.saleDate && isFutureDate(data.saleDate)) {
       return res.status(400).json({ error: "Sale date cannot be in the future" });
     }
@@ -119,6 +145,7 @@ export async function updateSale(req: Request, res: Response) {
     const parsedItems = saleItemsSchema.parse(items || []);
     const sale = await salesService.updateSale(id, data, parsedItems);
     if (!sale) return res.status(404).json({ error: "Sale not found" });
+    insertVoucherAuditLog("sale", id, "update", existing, sale, getUserId(req), "api");
     res.json(sale);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -136,8 +163,10 @@ export async function deleteSale(req: Request, res: Response) {
   try {
     const id = parseRequiredInt(req.params.id, "id");
     if (id === undefined) return res.status(400).json({ error: "Invalid sale id" });
+    const before = await salesService.getSale(id);
     const ok = await salesService.deleteSale(id);
     if (!ok) return res.status(404).json({ error: "Sale not found" });
+    insertVoucherAuditLog("sale", id, "delete", before, null, getUserId(req), "api");
     res.status(204).send();
   } catch (error) {
     if (isBusinessRuleError(error)) {

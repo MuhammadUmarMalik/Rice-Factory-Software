@@ -46,7 +46,7 @@ export const SALE_INVOICE_SUMMARY_ORDER = [
   "Price (40kg)",
   "Subtotal",
   "Bardana Charges",
-  "Loading Charges",
+  "Loading",
   "Stitching Charges",
   "Grand Total",
 ] as const;

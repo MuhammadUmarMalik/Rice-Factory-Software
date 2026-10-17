@@ -12,6 +12,8 @@ import ledgerRoutes from "./ledger.routes";
 import paymentsRoutes from "./payments.routes";
 import payrollRoutes from "./payroll.routes";
 import periodLocksRoutes from "./period-locks.routes";
+import auditLogsRoutes from "./audit-logs.routes";
+import chequesRoutes from "./cheques.routes";
 import fiscalYearRoutes from "./fiscal-years.routes";
 import gatePassesRoutes from "./gate-passes.routes";
 import processingRoutes from "./processing.routes";
@@ -91,6 +93,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.use(productLedgerRoutes);
   app.use(financialRoutes);
   app.use(periodLocksRoutes);
+  app.use(auditLogsRoutes);
+  app.use(chequesRoutes);
   app.use(fiscalYearRoutes);
   app.use(printRoutes);
 
