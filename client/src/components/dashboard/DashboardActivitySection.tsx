@@ -42,8 +42,7 @@ export function DashboardActivitySection({
   const { data: processingBatches = [], isLoading: processingLoading } = useQuery<any[]>({
     queryKey: ["/api/processing"],
     staleTime: 0,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 60000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

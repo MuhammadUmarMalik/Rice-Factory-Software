@@ -1,7 +1,7 @@
 
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { invalidateApi, invalidationGroups } from "@/api/invalidation";
 import { Plus, Calculator, ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import {
   useUpdatePurchase,
   useDeletePurchase,
 } from "@/hooks/use-purchases";
-import { useAccounts, useProducts } from "@/hooks";
+import { useAccounts, useProducts, useOpenInPasses, useGatePass } from "@/hooks";
 import { productsApi } from "@/api/products.api";
 import { purchasesApi } from "@/api/purchases.api";
 import { PurchasesList } from "@/pages/purchases/PurchasesList";
@@ -45,10 +45,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import type { Purchase, Account, Product } from "@/types/schema";
+import type { Purchase } from "@/types/schema";
 import { format } from "date-fns";
 import { useUIStore } from "@/stores/ui.store";
 import { usePurchaseStore } from "@/stores/purchase/store";
@@ -126,8 +127,8 @@ const purchaseFormSchema = z.object({
   })).min(1, "At least one item is required"),
   charges: z.array(z.object({
     type: z.enum([
-      "weight",
       "freight",
+      "weight",
       "loading_filling",
       "market_fee",
       "mitha_sukri",
@@ -139,7 +140,7 @@ const purchaseFormSchema = z.object({
       "broken_allowance",
       "accountant_clerk",
     ]),
-    mode: z.enum(["add", "less"]).default("add"),
+    mode: z.enum(["add", "less"]).default("less"),
     amount: z.string().default("0"),
     accountId: z.string().optional(),
   })).default([]),
@@ -166,6 +167,7 @@ export default function PurchasesPage() {
   const activePurchaseId = usePurchaseStore((state) => state.currentId);
   const [customProductDrafts, setCustomProductDrafts] = useState<Record<number, { name: string; unit: string }>>({});
   const [creatingProductIndex, setCreatingProductIndex] = useState<number | null>(null);
+  const [linkedGatePassId, setLinkedGatePassId] = useState<number | null>(null);
   const consumedEditId = useRef<number | null>(null);
   const setMode = (mode: PurchaseMode) => {
     setViewMode("purchase", mode);
@@ -173,8 +175,8 @@ export default function PurchasesPage() {
   };
 
   const defaultCharges = useMemo(() => ([
-    "weight",
     "freight",
+    "weight",
     "loading_filling",
     "market_fee",
     "mitha_sukri",
@@ -185,7 +187,7 @@ export default function PurchasesPage() {
     "bardana",
     "broken_allowance",
     "accountant_clerk",
-  ] as const).map((type) => ({ type, mode: "add" as const, amount: "0", accountId: "none" })), []);
+  ] as const).map((type) => ({ type, mode: "less" as const, amount: "0", accountId: "none" })), []);
 
   const form = useForm<PurchaseFormData>({
     resolver: zodResolver(purchaseFormSchema),
@@ -225,11 +227,38 @@ export default function PurchasesPage() {
 
   const { data: nextBill, refetch: refetchBillNo } = useNextBillNumber(isDialogOpen);
 
+  const { data: openInPasses = [] } = useOpenInPasses(isDialogOpen && purchaseMode === "create");
+  const { data: linkedGatePass } = useGatePass(linkedGatePassId);
+
   useEffect(() => {
     if (isDialogOpen && nextBill?.billNo) {
       form.setValue("billNo", nextBill.billNo, { shouldDirty: false, shouldValidate: true });
     }
   }, [form, isDialogOpen, nextBill]);
+
+  useEffect(() => {
+    if (!linkedGatePass) return;
+    form.setValue("supplierId", linkedGatePass.partyId ? String(linkedGatePass.partyId) : "", { shouldValidate: true });
+    form.setValue("vehicleNumber", linkedGatePass.vehicleNo || "", { shouldValidate: true });
+    const items = (linkedGatePass.items || []).map((item) => {
+      const bags = item.bags || 0;
+      const weightKg = item.weightG / 1000;
+      return {
+        productId: String(item.productId),
+        marka: "",
+        bags: String(bags),
+        fillingPerBagKg: bags > 0 ? String(Number((weightKg / bags).toFixed(3))) : "0",
+        looseKgs: bags > 0 ? "0" : String(Number(weightKg.toFixed(3))),
+        lessKg: "0",
+        bardanaKatKg: "0",
+        rate: "0",
+        rateUnit: "kg" as const,
+      };
+    });
+    if (items.length > 0) {
+      form.setValue("items", items, { shouldValidate: true });
+    }
+  }, [linkedGatePass, form]);
 
   const purchasesWithSupplier = useMemo(() => {
     const supplierMap = new Map(suppliers.map((s) => [s.id, s]));
@@ -317,11 +346,15 @@ export default function PurchasesPage() {
 
   const handleSubmit = (data: PurchaseFormData) => {
     const payload = buildPurchasePayload(data);
+    if (purchaseMode === "create" && linkedGatePassId) {
+      (payload as Record<string, unknown>).gate_pass_id = linkedGatePassId;
+    }
     const onSuccess = () => {
       closeDialog("purchaseForm");
       setMode(null);
       resetPurchaseState();
       form.reset();
+      setLinkedGatePassId(null);
       toast({ title: t("savedSuccessfully") });
     };
     const onError = (error: Error) => {
@@ -372,6 +405,7 @@ export default function PurchasesPage() {
     refetchBillNo();
     setCustomProductDrafts({});
     setCreatingProductIndex(null);
+    setLinkedGatePassId(null);
   };
 
   const populateFormFromPurchase = (purchase: Purchase & { items?: any[]; charges?: any[] }) => {
@@ -502,6 +536,7 @@ export default function PurchasesPage() {
     form.reset();
     setCustomProductDrafts({});
     setCreatingProductIndex(null);
+    setLinkedGatePassId(null);
   };
   const numberToWords = (num: number) => {
     const belowTwenty = ["zero","one","two","three","four","five","six","seven","eight","nine","ten","eleven","twelve","thirteen","fourteen","fifteen","sixteen","seventeen","eighteen","nineteen"];
@@ -563,7 +598,7 @@ export default function PurchasesPage() {
     if (item.rateUnit === "bag") billingQty = bags;
     if (item.rateUnit === "quintal") billingQty = netWeight / 100;
     if (item.rateUnit === "ton") billingQty = netWeight / 1000;
-    const amount = rate * billingQty;
+    const amount = Math.round((rate * billingQty + Number.EPSILON) * 100) / 100;
     return {
       grossWeight,
       netWeight,
@@ -603,7 +638,7 @@ export default function PurchasesPage() {
   const chargeLabelMap: Record<string, string> = {
     weight: "Weight Charges",
     freight: "Freight",
-    loading_filling: "Loading / Filling",
+    loading_filling: "Loading / Unloading",
     market_fee: "Market Fee",
     mitha_sukri: "Mitha Sukri",
     other: "Other Charges",
@@ -683,6 +718,37 @@ export default function PurchasesPage() {
             <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
               {purchaseMode !== "view" && (
                 <fieldset>
+                {purchaseMode === "create" && (
+                  <div className="mb-4 space-y-2">
+                    <label htmlFor="linked-gate-pass" className="text-sm font-medium">{t("startFromGatePass")}</label>
+                    <div className={`flex gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
+                      <Select
+                        value={linkedGatePassId ? String(linkedGatePassId) : "none"}
+                        onValueChange={(value) => setLinkedGatePassId(value === "none" ? null : Number(value))}
+                      >
+                        <SelectTrigger id="linked-gate-pass" data-testid="select-linked-gate-pass" className="flex-1">
+                          <SelectValue placeholder={t("selectGatePass")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {openInPasses.map((pass) => (
+                            <SelectItem key={pass.id} value={String(pass.id)}>
+                              {pass.number} · {pass.vehicleNo || "-"} · {pass.partyName || "-"} · {pass.totalBags} {t("bags")}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {linkedGatePassId != null && (
+                        <Button type="button" variant="outline" onClick={() => setLinkedGatePassId(null)}>
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                    {openInPasses.length === 0 && (
+                      <p className="text-xs text-muted-foreground">{t("noOpenPasses")}</p>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-1 gap-4">
                 <FormField
                   control={form.control}
@@ -690,20 +756,19 @@ export default function PurchasesPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("supplier")}</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || undefined}>
-                        <FormControl>
-                          <SelectTrigger data-testid="select-supplier">
-                            <SelectValue placeholder="Select supplier" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {suppliers.map((s) => (
-                            <SelectItem key={s.id} value={s.id.toString()}>
-                              {s.name} {s.nameUrdu && `(${s.nameUrdu})`}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <SearchableSelect
+                        options={suppliers.map((s) => ({
+                          value: s.id.toString(),
+                          label: s.name,
+                          sublabel: s.nameUrdu || undefined,
+                        }))}
+                        value={field.value || undefined}
+                        onValueChange={field.onChange}
+                        placeholder="Select supplier"
+                        searchPlaceholder="Search supplier..."
+                        emptyMessage="No suppliers found."
+                        autoFocus
+                      />
                       <FormMessage />
                     </FormItem>
                   )}
@@ -731,7 +796,7 @@ export default function PurchasesPage() {
                     <FormItem>
                       <FormLabel>{t("vehicleNumber")}</FormLabel>
                       <FormControl>
-                        <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" />
+                        <Input {...field} placeholder="ABC-1234" data-testid="input-vehicle" readOnly={linkedGatePassId != null} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -743,21 +808,21 @@ export default function PurchasesPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("broker")} (optional)</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value || undefined}>
-                        <FormControl>
-                          <SelectTrigger data-testid="select-broker">
-                            <SelectValue placeholder="Select broker" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="none">None</SelectItem>
-                          {suppliers.map((s) => (
-                            <SelectItem key={s.id} value={s.id.toString()}>
-                              {s.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <SearchableSelect
+                        options={[
+                          { value: "none", label: "None" },
+                          ...suppliers.map((s) => ({
+                            value: s.id.toString(),
+                            label: s.name,
+                            sublabel: s.nameUrdu || undefined,
+                          })),
+                        ]}
+                        value={field.value || undefined}
+                        onValueChange={field.onChange}
+                        placeholder="Select broker"
+                        searchPlaceholder="Search broker..."
+                        emptyMessage="No brokers found."
+                      />
                       <FormMessage />
                     </FormItem>
                   )}
@@ -897,7 +962,7 @@ export default function PurchasesPage() {
                                   <SelectContent>
                                     {products.map((p) => (
                                       <SelectItem key={p.id} value={p.id.toString()}>
-                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""} - {p.unit}
+                                        {p.name}{p.nameUrdu ? ` (${p.nameUrdu})` : ""}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
@@ -1074,7 +1139,7 @@ export default function PurchasesPage() {
                         const labelMap: Record<string, string> = {
                           weight: "Weight Charges",
                           freight: "Freight",
-                          loading_filling: "Loading / Unloading / Filling",
+                          loading_filling: "Loading / Unloading",
                           market_fee: "Market Fee",
                           mitha_sukri: "Mitha Sukri",
                           other: "Other Charges",
@@ -1212,6 +1277,24 @@ export default function PurchasesPage() {
                         <p className="font-mono">{currentPurchase.vehicleNumber || "-"}</p>
                       </div>
                     </div>
+                    {currentPurchase.gatePasses && currentPurchase.gatePasses.length > 0 && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground">{t("gatePassNumber")}</p>
+                          <div className="flex flex-wrap gap-2">
+                            {currentPurchase.gatePasses.map((pass) => (
+                              <Link
+                                key={pass.id}
+                                href={`/gate-passes/${pass.id}`}
+                                className="font-mono text-sm text-primary hover:underline"
+                              >
+                                {pass.number}
+                              </Link>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="grid grid-cols-3 gap-3 text-sm">
                       <div>
                         <p className="text-xs text-muted-foreground">Total Bags</p>
@@ -1227,7 +1310,7 @@ export default function PurchasesPage() {
                       </div>
                     </div>
                     {currentPurchase.items && currentPurchase.items.length > 0 && (
-                      <div className="border rounded-md p-3 bg-white">
+                      <div className="border rounded-md p-3 bg-card">
                         <p className="text-xs uppercase text-muted-foreground mb-2">Item details</p>
                         <div className="grid grid-cols-3 gap-3 text-sm">
                           <div>

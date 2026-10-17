@@ -1,5 +1,6 @@
 import { container } from "../container";
 import * as accountsModel from "../models/accounts.model";
+import * as gatePassesModel from "../models/gate-passes.model";
 import * as salesModel from "../models/sales.model";
 import * as cashService from "./cash-in-hand.service";
 
@@ -9,9 +10,16 @@ export async function listSales() {
   const sales = await repo.getSales();
   const receiptIds = sales.map((s) => (s as any).cashReceiptId).filter(Boolean) as number[];
   const voucherNos = cashService.getCashReceiptVoucherNos(receiptIds);
+  // One query for every row's dispatch progress so the list can show the
+  // dispatched/pending badges without a query per sale.
+  const progressMap = await gatePassesModel.getSaleDispatchProgress(sales.map((s) => s.id));
   return sales.map((s) => {
     const id = (s as any).cashReceiptId;
-    return { ...s, cashReceiptVoucherNo: id ? voucherNos.get(id) ?? null : null };
+    return {
+      ...s,
+      cashReceiptVoucherNo: id ? voucherNos.get(id) ?? null : null,
+      dispatch: progressMap.get(s.id) ?? null,
+    };
   });
 }
 
@@ -21,7 +29,15 @@ export async function getSale(id: number) {
   const items = await salesModel.getSaleItems(id);
   const cashReceiptId = (sale as any).cashReceiptId;
   const cashReceiptVoucherNo = cashReceiptId ? await cashService.getCashReceiptVoucherNo(cashReceiptId) : null;
-  return { ...sale, items, cashReceiptVoucherNo: cashReceiptVoucherNo ?? undefined };
+  // Attach any linked gate passes so the invoice/detail screens can show the
+  // gate pass details alongside the sale without an extra lookup per pass.
+  const passMap = await gatePassesModel.getGatePassRefsForSources("SALE", [id]);
+  return {
+    ...sale,
+    items,
+    cashReceiptVoucherNo: cashReceiptVoucherNo ?? undefined,
+    gatePasses: passMap.get(id) ?? [],
+  };
 }
 
 export async function createSale(

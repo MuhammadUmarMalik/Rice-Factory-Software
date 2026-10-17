@@ -40,7 +40,7 @@ const normalizeChargeType = (value: unknown) => {
   if (normalized.includes("phone") && normalized.includes("anal")) return "phone_analysis";
   if (normalized.startsWith("comm") || normalized.includes("commi")) return "commission";
   if (normalized.startsWith("mitha")) return "mitha_sukri";
-  if (normalized.startsWith("load")) return "loading_filling";
+  if (normalized.startsWith("load")) return "loading_unloading";
   if (normalized.startsWith("market")) return "market_fee";
   if (normalized.startsWith("broker")) return "brokerage";
   if (normalized.startsWith("broken")) return "broken_allowance";
@@ -97,7 +97,7 @@ export async function getPurchase(req: Request, res: Response) {
 
 export async function createPurchase(req: Request, res: Response) {
   try {
-    const { items, charges, ...purchaseBody } = req.body;
+    const { items, charges, gate_pass_id: gatePassIdRaw, gatePassId: gatePassIdAlt, ...purchaseBody } = req.body;
     const data = purchaseInputSchema.parse(purchaseBody);
     if (data.purchaseDate && isFutureDate(data.purchaseDate)) {
       return res.status(400).json({ error: "Purchase date cannot be in the future" });
@@ -109,11 +109,15 @@ export async function createPurchase(req: Request, res: Response) {
     const parsedCharges = purchaseChargesSchema.parse(normalizeCharges(charges || []));
     const moundBaseKg = (data as any).moundBaseKg == 60 ? 60 : 40;
     const { moundBaseKg: _mb, ...purchaseData } = data as any;
+    // A purchase created from an IN gate pass carries that pass's id so the two
+    // records are linked atomically (the model does this inside its tx).
+    const gatePassId = parseRequiredInt(gatePassIdRaw ?? gatePassIdAlt, "gate_pass_id");
     const purchase = await purchasesService.createPurchase(
       purchaseData,
       parsedItems,
       parsedCharges,
       moundBaseKg,
+      { gatePassId: gatePassId ?? null, performedBy: getUserId(req) },
     );
     await notifyUsers({
       title: "New stock added",

@@ -5,7 +5,6 @@ import { fetchWithAuth } from "@/lib/authFetch";
 type DashboardChartsSectionProps = {
   fromDate: string;
   toDate: string;
-  godown: string;
   isRTL: boolean;
   purchasesLabel: string;
   salesLabel: string;
@@ -14,7 +13,6 @@ type DashboardChartsSectionProps = {
 export function DashboardChartsSection({
   fromDate,
   toDate,
-  godown,
   isRTL,
   purchasesLabel,
   salesLabel,
@@ -23,7 +21,7 @@ export function DashboardChartsSection({
     monthlyTotals: { name: string; purchases: number; sales: number }[];
     productStock: { name: string; stock: number; unit: string }[];
   }>({
-    queryKey: ["/api/dashboard/charts", fromDate, toDate, godown],
+    queryKey: ["/api/dashboard/charts", fromDate, toDate],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (fromDate) params.set("fromDate", fromDate);
@@ -33,8 +31,7 @@ export function DashboardChartsSection({
       return res.json();
     },
     staleTime: 0,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 60000,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

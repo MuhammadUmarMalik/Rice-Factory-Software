@@ -33,13 +33,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Link, useLocation } from "wouter";
-import type { Sale, Account, Product } from "@/types/schema";
+import type { Sale, Account, Product, SaleDispatchProgress } from "@/types/schema";
 import { formatStock, unitToKg } from "@/lib/units";
+import { useSaleDispatchSummary } from "@/hooks/use-gate-passes";
 import { format } from "date-fns";
+import { confirmAction } from "@/components/confirm-dialog";
 
 const formatDateInput = (date: Date) => {
   const y = date.getFullYear();
@@ -90,6 +93,36 @@ const ReportDetailDialog = lazy(() =>
   })),
 );
 
+/**
+ * Dispatched vs pending badge for a sale. Uses the roll-up the list endpoint
+ * attaches (`dispatch`), so the table needs no extra request per row.
+ */
+function DispatchBadge({ dispatch }: { dispatch?: SaleDispatchProgress | null }) {
+  const { t } = useLanguage();
+  if (!dispatch) return <span className="text-sm text-muted-foreground">-</span>;
+  const label =
+    dispatch.status === "fully_dispatched"
+      ? t("fullyDispatched")
+      : dispatch.status === "partly_dispatched"
+        ? t("partlyDispatched")
+        : t("notDispatched");
+  const variant =
+    dispatch.status === "fully_dispatched"
+      ? ("default" as const)
+      : dispatch.status === "partly_dispatched"
+        ? ("secondary" as const)
+        : ("outline" as const);
+  return (
+    <div className="flex flex-col gap-1">
+      <Badge variant={variant}>{label}</Badge>
+      <span className="text-xs text-muted-foreground font-mono">
+        {dispatch.dispatchedBags}
+        {dispatch.orderedBags != null ? ` / ${dispatch.orderedBags}` : ""}
+      </span>
+    </div>
+  );
+}
+
 const saleFormSchema = z.object({
   saleDate: z.string().optional().refine((val) => !val || !isFutureDateString(val), {
     message: "Date cannot be in the future",
@@ -98,9 +131,15 @@ const saleFormSchema = z.object({
   customerId: z.string().min(1, "Customer is required"),
   vehicleNumber: z.string().optional(),
   loadingCharges: z.string().default("0"),
+  loadingChargesMode: z.enum(["add", "less"]).default("add"),
   weighingCharges: z.string().default("0"),
+  weighingChargesMode: z.enum(["add", "less"]).default("add"),
   otherCharges: z.string().default("0"),
+  otherChargesMode: z.enum(["add", "less"]).default("add"),
   rentCharges: z.string().default("0"),
+  rentChargesMode: z.enum(["add", "less"]).default("add"),
+  freightCharges: z.string().default("0"),
+  freightChargesMode: z.enum(["add", "less"]).default("add"),
   discountAmount: z.string().default("0"),
   paidAmount: z.string().default("0"),
   paymentMode: z.enum(["cash", "credit", "bank"]).default("cash"),
@@ -118,9 +157,23 @@ const saleFormSchema = z.object({
 
 type SaleFormData = z.infer<typeof saleFormSchema>;
 
+function mergeRentIntoFreight(sale: any) {
+  const signed = (amount: unknown, mode: unknown) =>
+    (mode === "less" ? -1 : 1) * (parseFloat(String(amount ?? "0")) || 0);
+  const net = signed(sale.freightCharges, sale.freightChargesMode) + signed(sale.rentCharges, sale.rentChargesMode);
+  const freightMode: "add" | "less" = net < 0 || (net === 0 && sale.freightChargesMode === "less") ? "less" : "add";
+  return {
+    freightCharges: String(Math.round(Math.abs(net) * 100) / 100),
+    freightChargesMode: freightMode,
+    rentCharges: "0",
+    rentChargesMode: "add" as const,
+  };
+}
+
 export default function SalesPage() {
   const { t, isRTL, language } = useLanguage();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const todayString = formatDateInput(new Date());
@@ -153,9 +206,15 @@ export default function SalesPage() {
       customerId: "",
       vehicleNumber: "",
       loadingCharges: "0",
+      loadingChargesMode: "add",
       weighingCharges: "0",
+      weighingChargesMode: "add",
       otherCharges: "0",
+      otherChargesMode: "add",
       rentCharges: "0",
+      rentChargesMode: "add",
+      freightCharges: "0",
+      freightChargesMode: "add",
       discountAmount: "0",
       paidAmount: "0",
       paymentMode: "cash",
@@ -172,6 +231,8 @@ export default function SalesPage() {
   const { data: sales = [], isLoading } = useQuery<(Sale & { customer?: Account })[]>({
     queryKey: ["/api/sales"],
   });
+
+  const dispatchSummary = useSaleDispatchSummary(editingId);
 
   const { data: customers = [] } = useQuery<Account[]>({
     queryKey: ["/api/accounts?type=customer"],
@@ -307,9 +368,15 @@ export default function SalesPage() {
       customerId: "",
       vehicleNumber: "",
       loadingCharges: "0",
+      loadingChargesMode: "add",
       weighingCharges: "0",
+      weighingChargesMode: "add",
       otherCharges: "0",
+      otherChargesMode: "add",
       rentCharges: "0",
+      rentChargesMode: "add",
+      freightCharges: "0",
+      freightChargesMode: "add",
       discountAmount: "0",
       paidAmount: "0",
       paymentMode: "cash",
@@ -330,9 +397,14 @@ export default function SalesPage() {
         customerId: sale.customerId?.toString() || "",
         vehicleNumber: sale.vehicleNumber || "",
         loadingCharges: sale.loadingCharges || "0",
+        loadingChargesMode: (sale as any).loadingChargesMode || "add",
         weighingCharges: sale.weighingCharges || "0",
+        weighingChargesMode: (sale as any).weighingChargesMode || "add",
         otherCharges: sale.otherCharges || "0",
-        rentCharges: sale.rentCharges || "0",
+        otherChargesMode: (sale as any).otherChargesMode || "add",
+        // Rent and freight are the same charge; an old sale's rent is folded
+        // into freight here (same net amount) and saved back as rent 0.
+        ...mergeRentIntoFreight(sale),
         discountAmount: sale.discountAmount || "0",
         paidAmount: sale.paidAmount || "0",
         paymentMode: (sale.paymentMode as "cash" | "credit" | "bank") || "cash",
@@ -354,16 +426,20 @@ export default function SalesPage() {
     }
   };
 
-  const handleDelete = (id: number) => {
-    if (!confirm("Delete this sale? This will reverse stock and ledger impact.")) return;
+  const handleDelete = async (id: number) => {
+    if (!(await confirmAction("Delete this sale? This will reverse stock and ledger impact."))) return;
     deleteMutation.mutate(id);
   };
 
   const watchItems = form.watch("items");
   const watchLoading = form.watch("loadingCharges");
+  const watchLoadingMode = form.watch("loadingChargesMode");
   const watchWeighing = form.watch("weighingCharges");
+  const watchWeighingMode = form.watch("weighingChargesMode");
   const watchOther = form.watch("otherCharges");
-  const watchRent = form.watch("rentCharges");
+  const watchOtherMode = form.watch("otherChargesMode");
+  const watchFreight = form.watch("freightCharges");
+  const watchFreightMode = form.watch("freightChargesMode");
   const watchDiscount = form.watch("discountAmount");
 
   const subtotal = watchItems.reduce((sum, item) => {
@@ -372,7 +448,23 @@ export default function SalesPage() {
     return sum + (qty * price);
   }, 0);
 
-  const totalCharges = (parseFloat(watchLoading) || 0) + (parseFloat(watchWeighing) || 0) + (parseFloat(watchOther) || 0) + (parseFloat(watchRent) || 0);
+  const chargesAdd = (
+    (watchLoadingMode === "add" ? parseFloat(watchLoading) || 0 : 0) +
+    (watchWeighingMode === "add" ? parseFloat(watchWeighing) || 0 : 0) +
+    (watchOtherMode === "add" ? parseFloat(watchOther) || 0 : 0) +
+    (watchFreightMode === "add" ? parseFloat(watchFreight) || 0 : 0)
+  );
+  const chargesLess = (
+    (watchLoadingMode === "less" ? parseFloat(watchLoading) || 0 : 0) +
+    (watchWeighingMode === "less" ? parseFloat(watchWeighing) || 0 : 0) +
+    (watchOtherMode === "less" ? parseFloat(watchOther) || 0 : 0) +
+    (watchFreightMode === "less" ? parseFloat(watchFreight) || 0 : 0)
+  );
+  const totalCharges = chargesAdd - chargesLess;
+  const signed = (value: string, mode: string) => (mode === "less" ? -1 : 1) * (parseFloat(value) || 0);
+  // Bardana + Loading + Stitching, listed one by one in the summary card.
+  const chargesAddLessNamed =
+    signed(watchWeighing, watchWeighingMode) + signed(watchLoading, watchLoadingMode) + signed(watchOther, watchOtherMode);
   const discount = parseFloat(watchDiscount) || 0;
   const totalAmount = Math.max(0, subtotal + totalCharges - discount);
 
@@ -386,15 +478,10 @@ export default function SalesPage() {
       ),
     },
     {
-      key: "gatePassNumber",
-      title: "Gate Pass",
-      titleUrdu: "گیٹ پاس",
-      render: (item) => (
-        <div className={`flex items-center gap-2 ${isRTL ? "flex-row-reverse" : ""}`}>
-          <FileText className="h-3 w-3 text-muted-foreground" />
-          <span className="font-mono text-sm">{item.gatePassNumber || "-"}</span>
-        </div>
-      ),
+      key: "dispatch",
+      title: "Dispatch",
+      titleUrdu: "روانگی",
+      render: (item) => <DispatchBadge dispatch={item.dispatch} />,
     },
     {
       key: "customer",
@@ -482,6 +569,15 @@ export default function SalesPage() {
           <Button
             size="icon"
             variant="ghost"
+            title={t("createGatePass")}
+            data-testid={`button-gate-pass-${item.id}`}
+            onClick={() => setLocation(`/gate-passes/new?saleId=${item.id}&direction=OUT`)}
+          >
+            <Truck className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
             data-testid={`button-view-${item.id}`}
             onClick={() => openDetail({ type: "sale", id: item.id })}
           >
@@ -535,35 +631,36 @@ export default function SalesPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-4xl max-h-[92vh]">
           <DialogHeader>
             <DialogTitle className={isRTL ? "text-right font-urdu" : ""}>
-              {language === "ur" ? "نئی فروخت" : "New Sale"}
+              {editingId
+                ? (language === "ur" ? "فروخت میں ترمیم" : "Edit Sale")
+                : (language === "ur" ? "نئی فروخت" : "New Sale")}
             </DialogTitle>
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <FormField
                   control={form.control}
                   name="customerId"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("customer")}</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger data-testid="select-customer">
-                            <SelectValue placeholder={language === "ur" ? "گاہک منتخب کریں" : "Select customer"} />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {customers.map((c) => (
-                            <SelectItem key={c.id} value={c.id.toString()}>
-                              {c.name} {c.nameUrdu && `(${c.nameUrdu})`}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <SearchableSelect
+                        options={customers.map((c) => ({
+                          value: c.id.toString(),
+                          label: c.name,
+                          sublabel: c.nameUrdu || undefined,
+                        }))}
+                        value={field.value || undefined}
+                        onValueChange={field.onChange}
+                        placeholder={language === "ur" ? "گاہک منتخب کریں" : "Select customer"}
+                        searchPlaceholder={language === "ur" ? "گاہک تلاش کریں..." : "Search customer..."}
+                        emptyMessage={language === "ur" ? "کوئی گاہک نہیں ملا" : "No customers found."}
+                        autoFocus
+                      />
                       <FormMessage />
                     </FormItem>
                   )}
@@ -609,6 +706,54 @@ export default function SalesPage() {
                 />
               </div>
 
+              {editingId != null && (
+                <Card className="border-muted">
+                  <CardHeader className="py-3">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Truck className="h-4 w-4 text-muted-foreground" />
+                      {t("dispatched")}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className={`flex flex-wrap items-center justify-between gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
+                    {dispatchSummary.data ? (
+                      <div className="space-y-1 text-sm">
+                        <DispatchBadge
+                          dispatch={{
+                            saleId: editingId,
+                            status: dispatchSummary.data.status,
+                            orderedKg: dispatchSummary.data.orderedKg,
+                            dispatchedKg: dispatchSummary.data.dispatchedKg,
+                            pendingKg: dispatchSummary.data.pendingKg,
+                            orderedBags: null,
+                            dispatchedBags: dispatchSummary.data.passes.reduce(
+                              (sum, pass) => sum + pass.totalBags,
+                              0,
+                            ),
+                          }}
+                        />
+                        <div className="text-muted-foreground">
+                          {t("ordered")}: {dispatchSummary.data.orderedKg.toFixed(2)} kg ·{" "}
+                          {t("dispatched")}: {dispatchSummary.data.dispatchedKg.toFixed(2)} kg ·{" "}
+                          {t("remaining")}: {dispatchSummary.data.pendingKg.toFixed(2)} kg
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">{t("loading")}</span>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setLocation(`/gate-passes/new?saleId=${editingId}&direction=OUT`)}
+                      data-testid="button-create-gate-pass"
+                    >
+                      <Truck className="h-4 w-4" />
+                      {t("createGatePass")}
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
               <div className="space-y-4">
                 <div className={`flex items-center justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
                   <h3 className="font-medium">{language === "ur" ? "آئٹمز" : "Items"}</h3>
@@ -626,20 +771,20 @@ export default function SalesPage() {
                 
                 <div className="space-y-3">
                   {fields.map((field, index) => (
-                    <div key={field.id} className="grid grid-cols-12 gap-2 items-end">
+                    <div key={field.id} className="grid grid-cols-12 gap-x-2 gap-y-3 items-end rounded-md border p-3 sm:border-0 sm:p-0">
                       {(() => {
                         const selectedProductId = form.watch(`items.${index}.productId`);
                         const selectedUnit = form.watch(`items.${index}.unit`);
                         const unit = selectedUnit || getUnitForProduct(selectedProductId) || "unit";
                         return (
                           <>
-                          <div className="col-span-4">
+                          <div className="col-span-12 sm:col-span-4">
                             <FormField
                               control={form.control}
                               name={`items.${index}.productId`}
                               render={({ field }) => (
                             <FormItem>
-                              {index === 0 && <FormLabel>{language === "ur" ? "مصنوعات" : "Product"}</FormLabel>}
+                              <FormLabel className={index > 0 ? "sm:sr-only" : ""}>{language === "ur" ? "مصنوعات" : "Product"}</FormLabel>
                               <Select
                                 onValueChange={(value) => {
                                   field.onChange(value);
@@ -659,7 +804,7 @@ export default function SalesPage() {
                                 <SelectContent>
                                   {products.map((p) => (
                                     <SelectItem key={p.id} value={p.id.toString()}>
-                                      {p.name} ({p.unit}) — {formatStock(p.currentStock, p.unit)} in stock
+                                      {p.name} — {formatStock(p.currentStock, p.unit)} in stock
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
@@ -669,13 +814,13 @@ export default function SalesPage() {
                           )}
                         />
                           </div>
-                          <div className="col-span-2">
+                          <div className="col-span-6 sm:col-span-2">
                             <FormField
                               control={form.control}
                               name={`items.${index}.quantity`}
                               render={({ field }) => (
                                 <FormItem>
-                                  {index === 0 && <FormLabel>{`${t("quantity")} (${unit})`}</FormLabel>}
+                                  <FormLabel className={index > 0 ? "sm:sr-only" : ""}>{`${t("quantity")} (${unit})`}</FormLabel>
                                   <FormControl>
                                     <Input {...field} type="number" step="0.01" data-testid={`input-quantity-${index}`} />
                                   </FormControl>
@@ -684,13 +829,13 @@ export default function SalesPage() {
                           )}
                         />
                       </div>
-                          <div className="col-span-2">
+                          <div className="col-span-6 sm:col-span-2">
                             <FormField
                               control={form.control}
                               name={`items.${index}.unit`}
                               render={({ field }) => (
                                 <FormItem>
-                                  {index === 0 && <FormLabel>Unit</FormLabel>}
+                                  <FormLabel className={index > 0 ? "sm:sr-only" : ""}>Unit</FormLabel>
                                   <Select onValueChange={field.onChange} value={field.value}>
                                     <FormControl>
                                       <SelectTrigger data-testid={`select-unit-${index}`}>
@@ -710,13 +855,13 @@ export default function SalesPage() {
                               )}
                             />
                           </div>
-                          <div className="col-span-3">
+                          <div className="col-span-10 sm:col-span-3">
                             <FormField
                               control={form.control}
                               name={`items.${index}.pricePerUnit`}
                               render={({ field }) => (
                                 <FormItem>
-                                  {index === 0 && <FormLabel>{`${t("pricePerUnit")} (${unit})`}</FormLabel>}
+                                  <FormLabel className={index > 0 ? "sm:sr-only" : ""}>{`${t("pricePerUnit")} (${unit})`}</FormLabel>
                                   <FormControl>
                                     <Input {...field} type="number" step="0.01" data-testid={`input-price-${index}`} />
                                   </FormControl>
@@ -725,7 +870,7 @@ export default function SalesPage() {
                           )}
                         />
                       </div>
-                          <div className="col-span-1">
+                          <div className="col-span-2 sm:col-span-1 flex justify-end">
                             {fields.length > 1 && (
                               <Button
                                 type="button"
@@ -746,29 +891,57 @@ export default function SalesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <FormField
-                  control={form.control}
-                  name="loadingCharges"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("loadingCharges")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-loading" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+              <div className="space-y-3">
+              <h3 className="font-medium">{language === "ur" ? "چارجز" : "Charges"}</h3>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <FormField
                   control={form.control}
                   name="weighingCharges"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("weighingCharges")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-weighing" />
-                      </FormControl>
+                      <div className="flex gap-2">
+                        <FormControl>
+                          <Input {...field} type="number" step="0.01" data-testid="input-weighing" />
+                        </FormControl>
+                        <FormControl>
+                          <Select value={form.watch("weighingChargesMode")} onValueChange={(v) => form.setValue("weighingChargesMode", v as "add" | "less")}>
+                            <SelectTrigger className="w-24 shrink-0">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="less">Less</SelectItem>
+                              <SelectItem value="add">Add</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FormControl>
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="loadingCharges"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("loadingCharges")}</FormLabel>
+                      <div className="flex gap-2">
+                        <FormControl>
+                          <Input {...field} type="number" step="0.01" data-testid="input-loading" />
+                        </FormControl>
+                        <FormControl>
+                          <Select value={form.watch("loadingChargesMode")} onValueChange={(v) => form.setValue("loadingChargesMode", v as "add" | "less")}>
+                            <SelectTrigger className="w-24 shrink-0">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="less">Less</SelectItem>
+                              <SelectItem value="add">Add</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FormControl>
+                      </div>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -779,26 +952,53 @@ export default function SalesPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t("otherCharges")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-other" />
-                      </FormControl>
+                      <div className="flex gap-2">
+                        <FormControl>
+                          <Input {...field} type="number" step="0.01" data-testid="input-other" />
+                        </FormControl>
+                        <FormControl>
+                          <Select value={form.watch("otherChargesMode")} onValueChange={(v) => form.setValue("otherChargesMode", v as "add" | "less")}>
+                            <SelectTrigger className="w-24 shrink-0">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="less">Less</SelectItem>
+                              <SelectItem value="add">Add</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FormControl>
+                      </div>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
                 <FormField
                   control={form.control}
-                  name="rentCharges"
+                  name="freightCharges"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t("rentCharges")}</FormLabel>
-                      <FormControl>
-                        <Input {...field} type="number" step="0.01" data-testid="input-rent" />
-                      </FormControl>
+                      <FormLabel>Freight</FormLabel>
+                      <div className="flex gap-2">
+                        <FormControl>
+                          <Input {...field} type="number" step="0.01" placeholder="0" />
+                        </FormControl>
+                        <FormControl>
+                          <Select value={form.watch("freightChargesMode")} onValueChange={(v) => form.setValue("freightChargesMode", v as "add" | "less")}>
+                            <SelectTrigger className="w-24 shrink-0">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="less">Less</SelectItem>
+                              <SelectItem value="add">Add</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FormControl>
+                      </div>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
+              </div>
               </div>
 
               <FormField
@@ -822,10 +1022,22 @@ export default function SalesPage() {
                       <span className="text-muted-foreground">{t("subtotal")}</span>
                       <span className="font-mono">Rs. {subtotal.toLocaleString()}</span>
                     </div>
-                    <div className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
-                      <span className="text-muted-foreground">{language === "ur" ? "اضافی چارجز" : "Additional Charges"}</span>
-                      <span className="font-mono">Rs. {totalCharges.toLocaleString()}</span>
-                    </div>
+                    {([
+                      [t("weighingCharges"), watchWeighing, watchWeighingMode],
+                      [t("loadingCharges"), watchLoading, watchLoadingMode],
+                      [t("otherCharges"), watchOther, watchOtherMode],
+                    ] as const).map(([label, value, mode]) => (
+                      <div key={label} className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className="font-mono">{mode === "less" ? "- " : ""}Rs. {(parseFloat(value) || 0).toLocaleString()}</span>
+                      </div>
+                    ))}
+                    {totalCharges !== chargesAddLessNamed && (
+                      <div className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
+                        <span className="text-muted-foreground">{language === "ur" ? "کرایہ (فریٹ)" : "Freight"}</span>
+                        <span className="font-mono">Rs. {(totalCharges - chargesAddLessNamed).toLocaleString()}</span>
+                      </div>
+                    )}
                     {discount > 0 && (
                       <div className={`flex justify-between ${isRTL ? "flex-row-reverse" : ""}`}>
                         <span className="text-muted-foreground">{t("discountAmount")}</span>
@@ -840,7 +1052,7 @@ export default function SalesPage() {
                 </CardContent>
               </Card>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
                   name="paidAmount"
@@ -877,7 +1089,7 @@ export default function SalesPage() {
                   )}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div>
                 <FormField
                   control={form.control}
                   name="notes"
@@ -885,7 +1097,7 @@ export default function SalesPage() {
                     <FormItem>
                       <FormLabel>{language === "ur" ? "نوٹس" : "Notes"}</FormLabel>
                       <FormControl>
-                        <Textarea {...field} rows={1} data-testid="input-notes" />
+                        <Textarea {...field} rows={2} data-testid="input-notes" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -893,7 +1105,11 @@ export default function SalesPage() {
                 />
               </div>
 
-              <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
+              <div className={`sticky -bottom-4 sm:-bottom-6 -mx-4 -mb-4 sm:-mx-6 sm:-mb-6 flex flex-wrap items-center gap-2 border-t bg-background px-4 py-3 sm:px-6 ${isRTL ? "flex-row-reverse" : ""}`}>
+                <div className={`flex-1 text-sm ${isRTL ? "text-right" : ""}`}>
+                  <span className="text-muted-foreground">{t("total")}: </span>
+                  <span className="font-mono font-semibold text-primary">Rs. {totalAmount.toLocaleString()}</span>
+                </div>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   {t("cancel")}
                 </Button>
