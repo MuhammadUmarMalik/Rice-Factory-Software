@@ -147,7 +147,6 @@ const safeJsonParse = (value: string) => {
 const shortcutFields: Array<{ key: keyof ShortcutConfig; label: string; hint: string }> = [
   { key: "toggleSidebar", label: "Toggle sidebar", hint: "Ctrl+B" },
   { key: "printPreview", label: "Print preview", hint: "Ctrl+P" },
-  { key: "downloadPdf", label: "Download PDF", hint: "Ctrl+Shift+P" },
   { key: "newDialog", label: "New dialog", hint: "Ctrl+N" },
   { key: "saveDialog", label: "Save dialog", hint: "Ctrl+Enter" },
   { key: "addLine", label: "Add line item", hint: "Ctrl+Shift+N" },
@@ -450,9 +449,13 @@ export default function SettingsPage() {
         data: parsedBackup,
       });
       const result = await res.json();
+      const importedRows = result.totalRows ?? 0;
       toast({
         title: "Import complete",
-        description: `Imported ${result.totalRows ?? 0} rows using ${importMode} mode.`,
+        description:
+          importedRows === 0 && importMode === "merge"
+            ? "Imported 0 rows using Merge mode. Existing records were skipped; switch to Replace mode to fully restore this backup."
+            : `Imported ${importedRows} rows using ${importMode} mode.`,
       });
       invalidateApi(invalidationGroups.settings);
       setSelectedFile(null);
@@ -463,8 +466,7 @@ export default function SettingsPage() {
       logClientError("import failed", error);
       toast({
         title: "Import failed",
-        description:
-          "No changes were applied. Verify the backup file or try Replace mode if the data is inconsistent.",
+        description: error instanceof Error ? error.message : "No changes were applied. Verify the backup file or try Replace mode if the data is inconsistent.",
         variant: "destructive",
       });
     } finally {

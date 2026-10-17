@@ -1,7 +1,7 @@
 /* Global print defaults for app-level printing (non-iframe). */
 @media print {
   @page {
-    size: A4 portrait;
+    /* No `size`: any value locks Chrome's portrait/landscape picker. */
     margin: 15mm;
   }
 

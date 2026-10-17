@@ -52,8 +52,11 @@ function hashParams(
   docKey: string,
   params: Record<string, unknown>,
   page: ReturnType<typeof resolvePageOptions>,
+  userLabel?: string,
 ) {
-  const payload = JSON.stringify({ docKey, params, page });
+  // The printed "Prepared By" name is part of the rendered bytes, so a cached
+  // PDF generated for one user must never be handed to another.
+  const payload = JSON.stringify({ docKey, params, page, userLabel: userLabel || "" });
   return createHash("sha256").update(payload).digest("hex");
 }
 
@@ -73,7 +76,7 @@ export async function renderPrintPreview(input: PrintRequest, user?: UserContext
     createdAt: now,
   });
 
-  const html = renderDocumentHtml(payload, resolvePageOptions(parsed));
+  const html = await renderDocumentHtml(payload, resolvePageOptions(parsed));
   return { payload, html };
 }
 
@@ -87,7 +90,7 @@ export async function renderPrintPdf(input: PrintRequest, user?: UserContext): P
 
   const params = parsed.params || {};
   const page = resolvePageOptions(parsed);
-  const cacheKey = hashParams(parsed.docKey, params, page);
+  const cacheKey = hashParams(parsed.docKey, params, page, user?.userLabel);
   if (config.cache) {
     const cached = getCached(cacheKey);
     if (cached?.pdf) return cached.pdf;
@@ -103,6 +106,9 @@ export async function renderPrintPdf(input: PrintRequest, user?: UserContext): P
     marginRightMm: page.marginRightMm,
     marginBottomMm: page.marginBottomMm,
     marginLeftMm: page.marginLeftMm,
+    headerLabel: result.payload.title,
+    companyName: result.payload.company.name,
+    logoUrl: result.payload.company.logoUrl,
   });
 
   if (config.cache) {

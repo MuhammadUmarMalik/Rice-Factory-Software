@@ -294,6 +294,24 @@ function createWindow() {
   win.setMenu(null);
   win.setMenuBarVisibility(false);
 
+  // With the menu gone Electron's built-in reload accelerators go with it.
+  // F5 / Ctrl+R reload; Ctrl+F5 / Ctrl+Shift+R also bypass the cache. From the
+  // load-error page, go back to the app URL instead of reloading the error.
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const key = input.key.toLowerCase();
+    const ctrl = input.control || input.meta;
+    if (key !== "f5" && !(ctrl && key === "r")) return;
+    event.preventDefault();
+    if (appUrl && !win.webContents.getURL().startsWith(appUrl)) {
+      win.loadURL(appUrl);
+    } else if (input.shift || (ctrl && key === "f5")) {
+      win.webContents.reloadIgnoringCache();
+    } else {
+      win.webContents.reload();
+    }
+  });
+
   win.once("ready-to-show", () => win.show());
   setTimeout(() => {
     if (!win.isVisible()) {
@@ -308,7 +326,7 @@ function createWindow() {
           <h2>App failed to load</h2>
           <p>URL: ${escapeHtml(url)}</p>
           <p>Error ${code}: ${escapeHtml(description)}</p>
-          <p>Please close and reopen the app. If the issue persists, check if port ${port} is in use.</p>
+          <p>Press F5 to try again, or close and reopen the app. If the issue persists, check if port ${port} is in use.</p>
         </body>
       </html>
     `;
@@ -409,9 +427,12 @@ function resolvePrintGeometry(opts) {
   const rotate = opts?.orientation === "landscape" && format !== "Thermal80";
   const uniform = Number.isFinite(opts?.marginMm) ? Number(opts.marginMm) : 10;
   const pick = (value) => (Number.isFinite(Number(value)) ? Number(value) : uniform);
+  // Paper stays portrait-sized; rotation goes through the `landscape` flag, which
+  // printer drivers honour (a pre-rotated pageSize is often printed portrait).
   return {
-    widthMm: rotate ? base.height : base.width,
-    heightMm: rotate ? base.width : base.height,
+    landscape: rotate,
+    widthMm: base.width,
+    heightMm: base.height,
     marginTopMm: pick(opts?.marginTopMm),
     marginRightMm: pick(opts?.marginRightMm),
     marginBottomMm: pick(opts?.marginBottomMm),
@@ -422,24 +443,30 @@ function resolvePrintGeometry(opts) {
 const MM_PER_INCH = 25.4;
 const MICRONS_PER_MM = 1000;
 
-ipcMain.handle("print-preview:render-pdf", async (_event, payload) => {
-  const html = payload?.html || "";
-  const geometry = resolvePrintGeometry(payload?.options || {});
+/*
+ * One renderer for every Electron PDF path. The server's /api/print/pdf needs
+ * Playwright + a Chromium download, neither of which ships inside the packaged
+ * asar, so in the desktop app the PDF MUST come from Electron's own
+ * printToPDF - otherwise Download fails with a silent 500.
+ */
+async function renderPdfBase64(html, options) {
+  const geometry = resolvePrintGeometry(options || {});
   const win = await createHiddenPrintWindow(html);
   try {
     const pdf = await win.webContents.printToPDF({
-      // Size is always explicit; `landscape` stays false because the rotation is
-      // already baked into width/height.
-      landscape: false,
       printBackground: true,
+      // The server writes the chosen paper + orientation into the document's
+      // @page rule; let that win. printToPDF ignores `landscape` when a size is
+      // given, so the fallback size below is pre-rotated instead.
+      preferCSSPageSize: true,
+      // printToPDF takes pageSize AND margins in INCHES (print() uses microns).
+      // Passing microns here made a ~5 km page: the document shrank to a dot
+      // and every downloaded PDF looked like a blank white page.
       pageSize: {
-        width: Math.round(geometry.widthMm * MICRONS_PER_MM),
-        height: Math.round(geometry.heightMm * MICRONS_PER_MM),
+        width: (geometry.landscape ? geometry.heightMm : geometry.widthMm) / MM_PER_INCH,
+        height: (geometry.landscape ? geometry.widthMm : geometry.heightMm) / MM_PER_INCH,
       },
-      // printToPDF margins are in inches. `marginsType: 1` used to force zero
-      // margins here, so Electron downloads ignored the user's margin settings.
       margins: {
-        marginType: "custom",
         top: geometry.marginTopMm / MM_PER_INCH,
         right: geometry.marginRightMm / MM_PER_INCH,
         bottom: geometry.marginBottomMm / MM_PER_INCH,
@@ -450,6 +477,34 @@ ipcMain.handle("print-preview:render-pdf", async (_event, payload) => {
   } finally {
     win.destroy();
   }
+}
+
+ipcMain.handle("print-preview:render-pdf", async (_event, payload) => {
+  return renderPdfBase64(payload?.html || "", payload?.options || {});
+});
+
+/*
+ * Desktop "Download PDF": render locally, then let the user pick where to save.
+ * Returns the saved path, or null when the user cancels - the renderer shows
+ * the toast either way so the button is never a silent no-op.
+ */
+ipcMain.handle("print-preview:save-pdf", async (_event, payload) => {
+  const html = payload?.html || "";
+  const filename = String(payload?.filename || "document.pdf").replace(/[\\/:*?"<>|]/g, "_");
+  const defaultName = filename.toLowerCase().endsWith(".pdf") ? filename : `${filename}.pdf`;
+  const defaultPath = path.join(app.getPath("documents"), defaultName);
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: "Save PDF",
+    defaultPath,
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
+  });
+  if (canceled || !filePath) return null;
+
+  const base64 = await renderPdfBase64(html, payload?.options || {});
+  await fs.promises.writeFile(filePath, Buffer.from(base64, "base64"));
+  appendAppLog(`pdf saved: ${filePath}`);
+  return filePath;
 });
 
 ipcMain.handle("print-preview:print-html", async (_event, payload) => {
@@ -465,7 +520,7 @@ ipcMain.handle("print-preview:print-html", async (_event, payload) => {
           silent,
           printBackground: true,
           deviceName: deviceName || "",
-          landscape: false,
+          landscape: geometry.landscape,
           pageSize: {
             width: Math.round(geometry.widthMm * MICRONS_PER_MM),
             height: Math.round(geometry.heightMm * MICRONS_PER_MM),

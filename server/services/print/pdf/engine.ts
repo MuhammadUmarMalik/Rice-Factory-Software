@@ -1,5 +1,6 @@
 import type { PrintFormat, PrintOrientation } from "../types";
 import { resolvePageSizeMm } from "../types";
+import { escapeHtml } from "../../../views/print/base";
 
 type PdfOptions = {
   orientation: PrintOrientation;
@@ -10,6 +11,9 @@ type PdfOptions = {
   marginRightMm: number;
   marginBottomMm: number;
   marginLeftMm: number;
+  headerLabel?: string;
+  companyName?: string;
+  logoUrl?: string;
 };
 
 let browserPromise: Promise<import("playwright").Browser> | null = null;
@@ -27,12 +31,6 @@ export async function closePdfBrowser(): Promise<void> {
 async function getBrowser() {
   if (!browserPromise) {
     const { chromium } = await import("playwright");
-    /*
-     * Chromium's sandbox stays on by default. It used to be disabled
-     * unconditionally, which also gave up the sandbox on the desktop/Electron
-     * build, where it works fine. Only containerised or root deployments that
-     * genuinely cannot start the sandbox should opt out via PDF_DISABLE_SANDBOX=1.
-     */
     const noSandbox = process.env.PDF_DISABLE_SANDBOX === "1";
     browserPromise = chromium.launch({
       args: noSandbox ? ["--no-sandbox", "--disable-setuid-sandbox"] : [],
@@ -41,48 +39,52 @@ async function getBrowser() {
   return browserPromise;
 }
 
-/** Chromium needs ~8mm of bottom margin before a footer stops overlapping content. */
-const FOOTER_MIN_BOTTOM_MM = 8;
+const HEADER_MIN_TOP_MM = 12;
+const FOOTER_MIN_BOTTOM_MM = 12;
 
 export async function renderPdf(html: string, options: PdfOptions): Promise<Buffer> {
   const browser = await getBrowser();
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: "networkidle" });
-  // The preview iframe renders screen media; force print media so the PDF matches
-  // the `@media print` rules the preview simulates.
   await page.emulateMedia({ media: "print" });
 
-  /*
-   * Size is always passed explicitly rather than via Playwright's `format` +
-   * `landscape` pair. `Thermal80` is not a Playwright format name, and mixing the
-   * two mechanisms was how landscape and custom sizes ended up disagreeing with
-   * the HTML's own `@page` size.
-   */
   const size = resolvePageSizeMm(options);
 
+  const showHeader = options.marginTopMm >= HEADER_MIN_TOP_MM;
+  const companyName = escapeHtml(options.companyName || "");
+  const headerLabel = escapeHtml(options.headerLabel || "");
+  const logoImg = options.logoUrl
+    ? `<img src="${escapeHtml(options.logoUrl)}" style="width:20px;height:20px;object-fit:contain;border-radius:3px;margin-right:6px;" />`
+    : "";
+
+  const headerTemplate = showHeader
+    ? `<div style="width:100%;font-size:8px;color:#6b7385;padding:0 ${options.marginLeftMm}mm;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #dde1e8;padding-bottom:2px;">
+        <span style="display:flex;align-items:center;">${logoImg}<span style="font-weight:600;color:#1c2028;">${companyName}</span></span>
+        <span>${headerLabel}</span>
+      </div>`
+    : `<div></div>`;
+
   const showFooter = options.marginBottomMm >= FOOTER_MIN_BOTTOM_MM;
-  const footer = `
-    <div style="width:100%;font-size:9px;color:#64748b;padding:0 ${options.marginLeftMm}mm 0 ${options.marginRightMm}mm;display:flex;justify-content:space-between;">
-      <span>Rice Mill ERP</span>
-      <span>Page <span class="pageNumber"></span> / <span class="totalPages"></span></span>
-    </div>
-  `;
+  const footerTemplate = showFooter
+    ? `<div style="width:100%;font-size:8px;color:#6b7385;padding:0 ${options.marginLeftMm}mm;display:flex;justify-content:space-between;align-items:center;border-top:1px solid #dde1e8;padding-top:2px;">
+        <span>${companyName}${headerLabel ? ` &mdash; ${headerLabel}` : ""}</span>
+        <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
+      </div>`
+    : `<div></div>`;
 
   const pdf = await page.pdf({
     width: `${size.width}mm`,
     height: `${size.height}mm`,
     printBackground: true,
-    // Margins are honoured exactly as requested, including 0mm. The document CSS
-    // collapses its own padding under `@media print`, so the two never stack.
     margin: {
       top: `${options.marginTopMm}mm`,
       bottom: `${options.marginBottomMm}mm`,
       left: `${options.marginLeftMm}mm`,
       right: `${options.marginRightMm}mm`,
     },
-    displayHeaderFooter: showFooter,
-    footerTemplate: showFooter ? footer : `<div></div>`,
-    headerTemplate: `<div></div>`,
+    displayHeaderFooter: showHeader || showFooter,
+    headerTemplate,
+    footerTemplate,
   });
 
   await page.close();

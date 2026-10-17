@@ -33,6 +33,14 @@ export function formatDateInput(value?: Date | null) {
   return format(value, "yyyy-MM-dd");
 }
 
+export function todayLocal(): string {
+  return format(new Date(), "yyyy-MM-dd");
+}
+
+export function toLocalDateString(date: Date): string {
+  return format(date, "yyyy-MM-dd");
+}
+
 export function parseDateInput(value?: string) {
   if (!value) return null;
   const parsed = new Date(`${value}T00:00:00`);
