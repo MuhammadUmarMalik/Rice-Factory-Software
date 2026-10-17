@@ -10,6 +10,7 @@ import { useLanguage } from "@/contexts/language-context";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateApi, invalidationGroups, scopedInvalidation } from "@/api/invalidation";
 import { useToast } from "@/hooks/use-toast";
+import { todayLocal } from "@/utils/dateRanges";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/auth.store";
+import { confirmAction } from "@/components/confirm-dialog";
 
 type PayrollWithEmployee = Payroll & { employee: Employee | null };
 type PayrollAuditRow = {
@@ -54,7 +56,7 @@ export default function PayrollPage() {
   const canPay = ["admin", "accountant"].includes(role);
   const canManageRegister = ["admin", "manager", "hr", "accountant"].includes(role);
 
-  const [month, setMonth] = useState<string>(new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState<string>(todayLocal().slice(0, 7));
   const [payDialogOpen, setPayDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -65,8 +67,8 @@ export default function PayrollPage() {
     resolver: zodResolver(paymentSchema),
     defaultValues: {
       method: "Cash",
-      paymentAccountId: "",
-      paymentDate: new Date().toISOString().slice(0, 10),
+      paymentAccountId: undefined,
+      paymentDate: todayLocal(),
     },
   });
 
@@ -254,8 +256,8 @@ export default function PayrollPage() {
                 variant="ghost"
                 className="text-destructive"
                 disabled={deleteMutation.isPending}
-                onClick={() => {
-                  const ok = window.confirm("Delete this payroll? Linked payroll journal vouchers will also be removed.");
+                onClick={async () => {
+                  const ok = await confirmAction("Delete this payroll? Linked payroll journal vouchers will also be removed.");
                   if (!ok) return;
                   deleteMutation.mutate(p.id);
                 }}
@@ -282,7 +284,7 @@ export default function PayrollPage() {
                   paymentForm.reset({
                     method: "Cash",
                     paymentAccountId: "",
-                    paymentDate: new Date().toISOString().slice(0, 10),
+                    paymentDate: todayLocal(),
                   });
                   setPayDialogOpen(true);
                 }}
@@ -419,7 +421,7 @@ export default function PayrollPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Payment Method</FormLabel>
-                      <Select value={field.value} onValueChange={field.onChange}>
+                      <Select value={field.value || undefined} onValueChange={field.onChange}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue />
@@ -441,7 +443,7 @@ export default function PayrollPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Bank Account</FormLabel>
-                        <Select value={field.value || ""} onValueChange={field.onChange}>
+                        <Select value={field.value || undefined} onValueChange={field.onChange}>
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue placeholder="Select bank" />

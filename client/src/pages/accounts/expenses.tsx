@@ -24,6 +24,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -32,6 +33,9 @@ import type { Account } from "@/types/schema";
 const expenseFormSchema = z.object({
   name: z.string().min(1, "Category name is required"),
   nameUrdu: z.string().optional(),
+  openingBalance: z.string().optional(),
+  openingType: z.enum(["debit", "credit"]).default("debit"),
+  description: z.string().optional(),
 });
 
 type ExpenseFormData = z.infer<typeof expenseFormSchema>;
@@ -47,6 +51,9 @@ export default function ExpensesPage() {
     defaultValues: {
       name: "",
       nameUrdu: "",
+      openingBalance: "",
+      openingType: "debit",
+      description: "",
     },
   });
 
@@ -57,8 +64,17 @@ export default function ExpensesPage() {
   const createMutation = useMutation({
     mutationKey: ["/api/accounts", "expense", "create"],
     meta: scopedInvalidation,
-    mutationFn: (data: ExpenseFormData) =>
-      apiRequest("POST", "/api/accounts", { ...data, type: "expense" }),
+    mutationFn: (data: ExpenseFormData) => {
+      const amt = parseFloat(data.openingBalance || "0") || 0;
+      const ob = amt > 0 && data.openingType === "credit" ? (-amt).toString() : amt.toString();
+      return apiRequest("POST", "/api/accounts", {
+        name: data.name,
+        nameUrdu: data.nameUrdu,
+        type: "expense",
+        openingBalance: ob,
+        description: data.description,
+      });
+    },
     onSuccess: () => {
       invalidateApi(invalidationGroups.accounts);
       setIsDialogOpen(false);
@@ -119,9 +135,13 @@ export default function ExpensesPage() {
 
   const handleEdit = (expense: Account) => {
     setEditingExpense(expense);
+    const obVal = parseFloat(expense.openingBalance || "0");
     form.reset({
       name: expense.name,
       nameUrdu: expense.nameUrdu || "",
+      openingBalance: obVal !== 0 ? Math.abs(obVal).toString() : "",
+      openingType: obVal < 0 ? "credit" : "debit",
+      description: "",
     });
     setIsDialogOpen(true);
   };
@@ -271,6 +291,54 @@ export default function ExpensesPage() {
                   </FormItem>
                 )}
               />
+              {!editingExpense && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <FormField
+                      control={form.control}
+                      name="openingBalance"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Opening Balance</FormLabel>
+                          <FormControl>
+                            <Input type="number" min="0" step="0.01" placeholder="0" {...field} />
+                          </FormControl>
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="openingType"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Type</FormLabel>
+                          <Select value={field.value} onValueChange={field.onChange}>
+                            <FormControl>
+                              <SelectTrigger><SelectValue /></SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="debit">Debit</SelectItem>
+                              <SelectItem value="credit">Credit</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description / Narration</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Optional" {...field} />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                </>
+              )}
               <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   {t("cancel")}

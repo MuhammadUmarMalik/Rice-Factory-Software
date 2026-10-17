@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Plus, Edit, Eye, Building2, Wallet, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/data-table";
 import { useLanguage } from "@/contexts/language-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -34,6 +35,7 @@ const bankFormSchema = z.object({
   nameUrdu: z.string().optional(),
   address: z.string().optional(),
   openingBalance: z.string().default("0"),
+  balanceType: z.enum(["DR", "CR"]).default("DR"),
 });
 
 type BankFormData = z.infer<typeof bankFormSchema>;
@@ -52,6 +54,7 @@ export default function BanksPage() {
       nameUrdu: "",
       address: "",
       openingBalance: "0",
+      balanceType: "DR",
     },
   });
 
@@ -62,7 +65,7 @@ export default function BanksPage() {
   const createMutation = useMutation({
     mutationKey: ["/api/accounts", "bank", "create"],
     meta: scopedInvalidation,
-    mutationFn: (data: BankFormData) =>
+    mutationFn: (data: Omit<BankFormData, "balanceType">) =>
       apiRequest("POST", "/api/accounts", { ...data, type: "bank" }),
     onSuccess: () => {
       invalidateApi(invalidationGroups.accounts);
@@ -75,7 +78,7 @@ export default function BanksPage() {
   const updateMutation = useMutation({
     mutationKey: ["/api/accounts", "bank", "update"],
     meta: scopedInvalidation,
-    mutationFn: (data: BankFormData & { id: number }) =>
+    mutationFn: (data: Omit<BankFormData, "balanceType"> & { id: number }) =>
       apiRequest("PATCH", `/api/accounts/${data.id}`, data),
     onSuccess: () => {
       invalidateApi(invalidationGroups.accounts);
@@ -102,11 +105,14 @@ export default function BanksPage() {
     },
   });
 
-  const handleSubmit = (data: BankFormData) => {
+  const handleSubmit = ({ balanceType, ...data }: BankFormData) => {
+    const abs = Math.abs(parseFloat(data.openingBalance || "0"));
+    const signed = balanceType === "CR" ? -abs : abs;
+    const payload = { ...data, openingBalance: String(signed) };
     if (editingBank) {
-      updateMutation.mutate({ ...data, id: editingBank.id });
+      updateMutation.mutate({ ...payload, id: editingBank.id });
     } else {
-      createMutation.mutate(data);
+      createMutation.mutate(payload);
     }
   };
 
@@ -116,14 +122,21 @@ export default function BanksPage() {
       name: bank.name,
       nameUrdu: bank.nameUrdu || "",
       address: bank.address || "",
-      openingBalance: bank.openingBalance || "0",
+      openingBalance: String(Math.abs(parseFloat(bank.openingBalance || "0"))),
+      balanceType: parseFloat(bank.openingBalance || "0") < 0 ? "CR" : "DR",
     });
     setIsDialogOpen(true);
   };
 
   const handleAddNew = () => {
     setEditingBank(null);
-    form.reset();
+    form.reset({
+      name: "",
+      nameUrdu: "",
+      address: "",
+      openingBalance: "0",
+      balanceType: "DR",
+    });
     setIsDialogOpen(true);
   };
 
@@ -317,19 +330,37 @@ export default function BanksPage() {
                   </FormItem>
                 )}
               />
-              <FormField
-                control={form.control}
-                name="openingBalance"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("openingBalance")}</FormLabel>
-                    <FormControl>
-                      <Input {...field} type="number" step="0.01" data-testid="input-opening-balance" />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              <div className="space-y-2">
+                <FormField
+                  control={form.control}
+                  name="openingBalance"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("openingBalance")}</FormLabel>
+                      <div className="flex gap-2">
+                        <FormControl>
+                          <Input {...field} type="number" step="0.01" min="0" className="flex-1" data-testid="input-opening-balance" />
+                        </FormControl>
+                        <FormField
+                          control={form.control}
+                          name="balanceType"
+                          render={({ field: typeField }) => (
+                            <div className="flex rounded-md border">
+                              <Button type="button" size="sm" variant={typeField.value === "DR" ? "default" : "ghost"} className="rounded-r-none px-3" onClick={() => typeField.onChange("DR")}>
+                                {t("debit")}
+                              </Button>
+                              <Button type="button" size="sm" variant={typeField.value === "CR" ? "default" : "ghost"} className="rounded-l-none px-3" onClick={() => typeField.onChange("CR")}>
+                                {t("credit")}
+                              </Button>
+                            </div>
+                          )}
+                        />
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
               <div className={`flex gap-2 pt-4 ${isRTL ? "flex-row-reverse" : "justify-end"}`}>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                   {t("cancel")}
@@ -371,7 +402,14 @@ export default function BanksPage() {
               )}
               <div className="flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">Opening Balance</span>
-                <span className="font-mono">Rs. {Number(viewingBank.openingBalance || 0).toLocaleString()}</span>
+                <div className="flex items-center gap-1">
+                  <span className="font-mono">Rs. {Math.abs(Number(viewingBank.openingBalance || 0)).toLocaleString()}</span>
+                  {Number(viewingBank.openingBalance || 0) !== 0 && (
+                    <Badge variant={Number(viewingBank.openingBalance || 0) >= 0 ? "default" : "destructive"} className="text-xs">
+                      {Number(viewingBank.openingBalance || 0) >= 0 ? "DR" : "CR"}
+                    </Badge>
+                  )}
+                </div>
               </div>
               <div className="flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">Current Balance</span>
