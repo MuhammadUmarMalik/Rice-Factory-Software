@@ -24,6 +24,7 @@ cookies.txt
 # Local runtime data (live SQLite databases, settings, backups)
 .local/
 server/.local/
+server/.test-data/
 app-data/
 *.db
 *.db-journal
@@ -66,3 +67,7 @@ CODEBASE_AUDIT.md
 CODEBASE_REAUDIT.md
 prompt.md
 ARCHITECTURE_REVIEW.md
+# Local data dumps (never commit business data)
+today_backup*.json
+server/backup_test.json
+/nul

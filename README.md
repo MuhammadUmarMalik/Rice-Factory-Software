@@ -431,7 +431,6 @@ Scripts in `script/`
 - `seed-admin.ts`: Create initial admin user.
 - `test-reports.ts`: Unit tests for report calculations.
 - `migrate_accounts_split.sql`: Optional migration to split account profiles.
-- `report_indexes.sql`: Optional indexes for report performance.
 - `clean-desktop.js`: Clears the desktop build output directory.
 
 ## Security Notes

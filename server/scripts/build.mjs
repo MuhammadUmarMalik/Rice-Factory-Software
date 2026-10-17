@@ -21,6 +21,8 @@ const allowlist = [
   "helmet",
   "jsonwebtoken",
   "nanoid",
+  "qrcode",
+  "socket.io",
   "zod",
   "zod-validation-error",
 ];
@@ -73,8 +75,14 @@ async function assertExternalsResolvable(bundlePath) {
       .filter((id) => !id.startsWith(".") && !id.startsWith("node:")),
   );
   const requireFromBundle = createRequire(bundlePath);
+  // `socket.io` pulls in `ws`, whose optional native speed-ups (`bufferutil`,
+  // `utf-8-validate`) are loaded with try/catch and are perfectly fine to leave
+  // missing — ws falls back to its pure-JS path. They can't be bundled (native
+  // addons) and aren't installed, so skip them rather than shipping broken.
+  const optionalSkips = new Set(["bufferutil", "utf-8-validate"]);
   const missing = [];
   for (const id of requested) {
+    if (optionalSkips.has(id)) continue;
     try {
       requireFromBundle.resolve(id);
     } catch {

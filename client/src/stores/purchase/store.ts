@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { apiRequest } from "@/lib/queryClient";
+import { toLocalDateString } from "@/utils/dateRanges";
 import type {
   PurchaseDraft,
   PurchaseListItem,
@@ -77,7 +78,7 @@ export const usePurchaseStore = create<PurchaseState & PurchaseActions>((set, ge
       return {
         draft: {
           id: source.id,
-          purchaseDate: source.purchaseDate ? new Date(source.purchaseDate).toISOString().slice(0, 10) : undefined,
+          purchaseDate: source.purchaseDate ? toLocalDateString(new Date(source.purchaseDate)) : undefined,
           moundBaseKg: "40",
           billNo: (source as any).billNo ?? "",
           bookNo: (source as any).bookNo ?? "",
