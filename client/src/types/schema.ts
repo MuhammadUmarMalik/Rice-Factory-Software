@@ -15,6 +15,7 @@ export type Account = {
   addressUrdu: string | null;
   openingBalance: string;
   currentBalance: string;
+  description: string | null;
   isActive: boolean;
   isSystemAccount: boolean;
   createdAt: Date | string;
@@ -22,6 +23,8 @@ export type Account = {
 
 export type Product = {
   id: number;
+  /** Has purchases/sales/processing/gate passes, so opening stock is fixed. */
+  stockLocked?: boolean;
   name: string;
   nameUrdu: string | null;
   productType: string;
@@ -72,6 +75,8 @@ export type Purchase = {
   deletedBy: number | null;
   items?: Array<Record<string, unknown>>;
   charges?: Array<Record<string, unknown>>;
+  /** Gate passes linked to this purchase (usually the arrival IN pass). */
+  gatePasses?: LinkedGatePassRef[];
 };
 
 export type Sale = {
@@ -97,6 +102,8 @@ export type Sale = {
   paymentMode?: string | null;
   cashReceiptId?: number | null;
   cashReceiptVoucherNo?: string | null;
+  /** Per-sale dispatch roll-up attached by the list endpoint. */
+  dispatch?: SaleDispatchProgress | null;
   createdBy: number | null;
   createdAt: Date | string;
 };
@@ -106,6 +113,7 @@ export type ExpenseEntry = {
   voucherNo: string;
   expenseAccountId: number;
   payFromAccountId: number;
+  direction: string;
   amount: string;
   description: string | null;
   expenseDate: Date | string;
@@ -154,6 +162,8 @@ export type Employee = {
   joiningDate: Date | string | null;
   employmentType: string;
   status: string;
+  openingBalance: string;
+  openingBalanceType: "debit" | "credit";
   accountId: number | null;
   createdBy: number | null;
   createdAt: Date | string;
@@ -199,4 +209,137 @@ export type Payroll = {
   paidAt: Date | string | null;
   /** Present when API includes payment state (e.g. Paid/Unpaid) */
   paymentStatus?: string;
+};
+
+// ---------------------------------------------------------------------------
+// Gate passes
+// ---------------------------------------------------------------------------
+
+export type GatePassDirection = "IN" | "OUT";
+export type GatePassStatus = "ISSUED" | "COMPLETED" | "CANCELLED";
+export type GatePassSourceType = "PURCHASE" | "SALE" | "JOB_RECEIVE" | "JOB_RETURN";
+export type DispatchLineStatus = "not_dispatched" | "partly_dispatched" | "fully_dispatched";
+
+export type GatePassItem = {
+  id: number;
+  productId: number;
+  productName: string | null;
+  productNameUrdu: string | null;
+  bags: number;
+  /** Weight in integer grams. */
+  weightG: number;
+  /** Weight in decimal kilograms, as a string from the server. */
+  weightKg: string;
+  saleItemId: number | null;
+  purchaseItemId: number | null;
+};
+
+export type GatePassLinkedDocument = {
+  type: GatePassSourceType;
+  id: number;
+  number: string;
+  label: string;
+  date: string | null;
+};
+
+export type GatePass = {
+  id: number;
+  number: string;
+  direction: GatePassDirection;
+  status: GatePassStatus;
+  issuedAt: string;
+  completedAt: string | null;
+  vehicleNo: string | null;
+  driverName: string | null;
+  driverPhone: string | null;
+  partyId: number | null;
+  sourceType: GatePassSourceType | null;
+  sourceId: number | null;
+  /** Weights in integer grams. */
+  grossG: number | null;
+  tareG: number | null;
+  netG: number | null;
+  remarks: string | null;
+  createdBy: number | null;
+  cancelledReason: string | null;
+  cancelledBy: number | null;
+  cancelledAt: string | null;
+  fiscalYearId: number | null;
+  createdAt: string;
+  updatedAt: string;
+  // Detail-only fields (present on GET /api/gate-passes/:id)
+  items?: GatePassItem[];
+  totalBags?: number;
+  totalWeightG?: number;
+  totalWeightKg?: string;
+  partyName?: string | null;
+  linkedDocument?: GatePassLinkedDocument | null;
+  /** Set by the server when the weighbridge net differs from the linked document net by >0.5%. */
+  weighbridgeWarning?: string | null;
+};
+
+export type GatePassListRow = {
+  id: number;
+  number: string;
+  direction: GatePassDirection;
+  status: GatePassStatus;
+  issuedAt: string;
+  completedAt: string | null;
+  vehicleNo: string | null;
+  driverName: string | null;
+  partyId: number | null;
+  partyName: string | null;
+  sourceType: GatePassSourceType | null;
+  sourceId: number | null;
+  netG: number | null;
+  totalBags: number;
+  totalWeightG: number;
+  itemCount: number;
+};
+
+export type LinkedGatePassRef = {
+  id: number;
+  number: string;
+  status: GatePassStatus;
+  direction: GatePassDirection;
+};
+
+/** Per-sale dispatch roll-up attached to sale list rows. */
+export type SaleDispatchProgress = {
+  saleId: number;
+  status: DispatchLineStatus;
+  orderedKg: number;
+  dispatchedKg: number;
+  pendingKg: number;
+  orderedBags: number | null;
+  dispatchedBags: number;
+};
+
+export type DispatchItemSummary = {
+  productId: number;
+  productName: string | null;
+  orderedKg: number;
+  dispatchedKg: number;
+  pendingKg: number;
+  orderedBags: number | null;
+  dispatchedBags: number;
+  status: DispatchLineStatus;
+};
+
+export type SaleDispatchSummary = {
+  saleId: number;
+  invoiceNumber: string;
+  status: DispatchLineStatus;
+  orderedKg: number;
+  dispatchedKg: number;
+  pendingKg: number;
+  items: DispatchItemSummary[];
+  passes: GatePassListRow[];
+};
+
+export type GatePassDashboard = {
+  vehiclesInside: number;
+  dispatchedBagsToday: number;
+  openPasses: number;
+  staleOpenPasses: GatePassListRow[];
 };

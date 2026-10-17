@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { sqliteTable, text, integer, check, uniqueIndex, AnySQLiteColumn } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, check, uniqueIndex, index, AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -63,6 +63,7 @@ export const accounts = sqliteTable("accounts", {
   addressUrdu: text("address_urdu"),
   openingBalance: text("opening_balance").notNull().default("0"),
   currentBalance: text("current_balance").notNull().default("0"),
+  description: text("description"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   isSystemAccount: integer("is_system_account", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
@@ -195,6 +196,15 @@ export const employees = sqliteTable("employees", {
   joiningDate: integer("joining_date", { mode: "timestamp" }),
   employmentType: text("employment_type", { enum: ["permanent", "contract"] }).notNull().default("permanent"),
   status: text("status", { enum: ["active", "inactive"] }).notNull().default("active"),
+  openingBalance: text("opening_balance").notNull().default("0"),
+  /**
+   * Whether the opening balance is a debit (asset/receivable the employee
+   * owes the business — advances, recoverable advances) or a credit
+   * (liability — salary payable in advance). Stored as text so existing rows
+   * written before this column existed default to "debit", which is the
+   * conventional treatment for an employee opening balance.
+   */
+  openingBalanceType: text("opening_balance_type", { enum: ["debit", "credit"] }).notNull().default("debit"),
   accountId: integer("account_id").references(() => accounts.id),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
@@ -282,22 +292,6 @@ export const insertPayrollSchema = createInsertSchema(payrolls).omit({
 export type InsertPayroll = z.infer<typeof insertPayrollSchema>;
 export type Payroll = typeof payrolls.$inferSelect;
 
-export const payrollAuditLogs = sqliteTable("payroll_audit_logs", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  payrollId: integer("payroll_id").notNull().references(() => payrolls.id, { onDelete: "cascade" }),
-  action: text("action").notNull(), // generated|approved|paid|updated
-  performedBy: integer("performed_by").references(() => users.id),
-  performedByRole: text("performed_by_role"),
-  performedAt: integer("performed_at", { mode: "timestamp" }).notNull().default(now),
-  detailsJson: text("details_json"),
-});
-
-export const insertPayrollAuditLogSchema = createInsertSchema(payrollAuditLogs).omit({
-  id: true,
-  performedAt: true,
-});
-export type InsertPayrollAuditLog = z.infer<typeof insertPayrollAuditLogSchema>;
-export type PayrollAuditLog = typeof payrollAuditLogs.$inferSelect;
 
 // Products table (Rice types)
 export const products = sqliteTable("products", {
@@ -405,8 +399,8 @@ export const purchaseCharges = sqliteTable("purchase_charges", {
   purchaseId: integer("purchase_id").notNull().references(() => purchases.id, { onDelete: "cascade" }),
   type: text("type", {
     enum: [
-      "weight",
       "freight",
+      "weight",
       "loading_filling",
       "market_fee",
       "mitha_sukri",
@@ -419,7 +413,7 @@ export const purchaseCharges = sqliteTable("purchase_charges", {
       "accountant_clerk",
     ],
   }).notNull(),
-  mode: text("mode", { enum: ["add", "less"] }).notNull().default("add"),
+  mode: text("mode", { enum: ["add", "less"] }).notNull().default("less"),
   amount: text("amount").notNull().default("0"),
   accountId: integer("account_id").references(() => accounts.id),
   note: text("note"),
@@ -485,9 +479,15 @@ export const sales = sqliteTable("sales", {
   customerId: integer("customer_id").notNull().references(() => accounts.id),
   vehicleNumber: text("vehicle_number"),
   loadingCharges: text("loading_charges").default("0"),
+  loadingChargesMode: text("loading_charges_mode", { enum: ["add", "less"] }),
   weighingCharges: text("weighing_charges").default("0"),
+  weighingChargesMode: text("weighing_charges_mode", { enum: ["add", "less"] }),
   otherCharges: text("other_charges").default("0"),
+  otherChargesMode: text("other_charges_mode", { enum: ["add", "less"] }),
   rentCharges: text("rent_charges").default("0"),
+  rentChargesMode: text("rent_charges_mode", { enum: ["add", "less"] }),
+  freightCharges: text("freight_charges").default("0"),
+  freightChargesMode: text("freight_charges_mode", { enum: ["add", "less"] }),
   discountAmount: text("discount_amount").default("0"),
   taxTypeId: integer("tax_type_id").references(() => taxTypes.id),
   taxAmount: text("tax_amount").notNull().default("0"),
@@ -550,7 +550,10 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
   journalVoucherId: integer("journal_voucher_id").references(() => journalVouchers.id),
   contraVoucherId: integer("contra_voucher_id").references(() => contraVouchers.id),
   expenseEntryId: integer("expense_entry_id").references(() => expenseEntries.id),
+  cashReceiptId: integer("cash_receipt_id").references(() => cashReceipts.id),
+  cashPaymentId: integer("cash_payment_id").references(() => cashPayments.id),
   entryDate: integer("entry_date", { mode: "timestamp" }).notNull().default(now),
+  cleared: integer("cleared", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 }, (table) => ({
   ckLedgerEntriesSingleRef: check(
@@ -561,7 +564,9 @@ export const ledgerEntries = sqliteTable("ledger_entries", {
       (CASE WHEN ${table.receiptVoucherId} IS NOT NULL THEN 1 ELSE 0 END) +
       (CASE WHEN ${table.journalVoucherId} IS NOT NULL THEN 1 ELSE 0 END) +
       (CASE WHEN ${table.contraVoucherId} IS NOT NULL THEN 1 ELSE 0 END) +
-      (CASE WHEN ${table.expenseEntryId} IS NOT NULL THEN 1 ELSE 0 END)
+      (CASE WHEN ${table.expenseEntryId} IS NOT NULL THEN 1 ELSE 0 END) +
+      (CASE WHEN ${table.cashReceiptId} IS NOT NULL THEN 1 ELSE 0 END) +
+      (CASE WHEN ${table.cashPaymentId} IS NOT NULL THEN 1 ELSE 0 END)
     ) = 1`,
   ),
 }));
@@ -617,27 +622,6 @@ export const insertReceiptVoucherLineSchema = createInsertSchema(receiptVoucherL
 export type InsertReceiptVoucherLine = z.infer<typeof insertReceiptVoucherLineSchema>;
 export type ReceiptVoucherLine = typeof receiptVoucherLines.$inferSelect;
 
-// Audit trail for receipt/payment vouchers. Modeled on daybookAuditLogs so the
-// money-moving voucher flows get the same before/after record the daybooks have.
-export const receiptVoucherAuditLogs = sqliteTable("receipt_voucher_audit_logs", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  voucherType: text("voucher_type").notNull(),
-  recordId: integer("record_id").notNull(),
-  action: text("action").notNull(),
-  beforeJson: text("before_json"),
-  afterJson: text("after_json"),
-  // No FK to users, matching daybookAuditLogs: an audit row must never be
-  // rejected because the acting user id can't be resolved.
-  changedBy: integer("changed_by"),
-  changedAt: integer("changed_at", { mode: "timestamp" }).notNull().default(now),
-});
-
-export const insertReceiptVoucherAuditLogSchema = createInsertSchema(receiptVoucherAuditLogs).omit({
-  id: true,
-  changedAt: true,
-});
-export type InsertReceiptVoucherAuditLog = z.infer<typeof insertReceiptVoucherAuditLogSchema>;
-export type ReceiptVoucherAuditLog = typeof receiptVoucherAuditLogs.$inferSelect;
 
 // FIXED: 12
 // Journal Vouchers
@@ -658,7 +642,7 @@ export const journalVoucherEntries = sqliteTable("journal_voucher_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   journalVoucherId: integer("journal_voucher_id").notNull().references(() => journalVouchers.id, { onDelete: "cascade" }),
   accountId: integer("account_id").notNull().references(() => accounts.id),
-  entryType: text("entry_type", { enum: ["DEBIT", "CREDIT"] }).notNull(),
+  entryType: text("entry_type", { enum: ["debit", "credit"] }).notNull(),
   amount: text("amount").notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
@@ -685,11 +669,13 @@ export const cashTransactions = sqliteTable("cash_transactions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   accountId: integer("account_id").notNull().references(() => accounts.id),
   transactionDate: integer("transaction_date", { mode: "timestamp" }).notNull().default(now),
-  transactionType: text("transaction_type", { enum: ["DEBIT", "CREDIT"] }).notNull(),
+  transactionType: text("transaction_type", { enum: ["debit", "credit"] }).notNull(),
   journalVoucherId: integer("journal_voucher_id").references(() => journalVouchers.id),
   receiptVoucherId: integer("receipt_voucher_id").references(() => receiptVouchers.id),
   contraVoucherId: integer("contra_voucher_id").references(() => contraVouchers.id),
   expenseEntryId: integer("expense_entry_id").references(() => expenseEntries.id),
+  cashReceiptId: integer("cash_receipt_id").references(() => cashReceipts.id, { onDelete: "set null" }),
+  cashPaymentId: integer("cash_payment_id").references(() => cashPayments.id, { onDelete: "set null" }),
   amount: text("amount").notNull(),
   narration: text("narration"),
   createdBy: integer("created_by").references(() => users.id),
@@ -740,7 +726,7 @@ export const contraVoucherLines = sqliteTable("contra_voucher_lines", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   contraVoucherId: integer("contra_voucher_id").notNull().references(() => contraVouchers.id, { onDelete: "cascade" }),
   accountId: integer("account_id").notNull().references(() => accounts.id),
-  entryType: text("entry_type", { enum: ["DEBIT", "CREDIT"] }).notNull(),
+  entryType: text("entry_type", { enum: ["debit", "credit"] }).notNull(),
   amount: text("amount").notNull().default("0"),
 });
 
@@ -928,6 +914,7 @@ export const expenseEntries = sqliteTable("expense_entries", {
   voucherNo: text("voucher_no").notNull().unique(),
   expenseAccountId: integer("expense_account_id").notNull().references(() => accounts.id),
   payFromAccountId: integer("pay_from_account_id").notNull().references(() => accounts.id),
+  direction: text("direction", { enum: ["debit", "credit"] }).notNull().default("debit"),
   amount: text("amount").notNull().default("0"),
   description: text("description"),
   expenseDate: integer("expense_date", { mode: "timestamp" }).notNull().default(now),
@@ -979,24 +966,6 @@ export const cashPayments = sqliteTable("cash_payments", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
 });
 
-export const cashJournalVouchers = sqliteTable("cash_journal_vouchers", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  voucherNo: text("voucher_no").notNull().unique(),
-  voucherDate: integer("voucher_date", { mode: "timestamp" }).notNull().default(now),
-  narration: text("narration"),
-  totalDebit: text("total_debit").notNull().default("0"),
-  totalCredit: text("total_credit").notNull().default("0"),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
-});
-
-export const cashJournalItems = sqliteTable("cash_journal_items", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  journalId: integer("journal_id").notNull().references(() => cashJournalVouchers.id, { onDelete: "cascade" }),
-  accountHead: text("account_head").notNull(),
-  debitAmount: text("debit_amount").notNull().default("0"),
-  creditAmount: text("credit_amount").notNull().default("0"),
-  narration: text("narration"),
-});
 
 export const insertCashAccountSchema = createInsertSchema(cashAccounts).omit({ id: true, createdAt: true });
 export type InsertCashAccount = z.infer<typeof insertCashAccountSchema>;
@@ -1010,75 +979,9 @@ export const insertCashPaymentSchema = createInsertSchema(cashPayments).omit({ i
 export type InsertCashPayment = z.infer<typeof insertCashPaymentSchema>;
 export type CashPayment = typeof cashPayments.$inferSelect;
 
-export const insertCashJournalVoucherSchema = createInsertSchema(cashJournalVouchers).omit({
-  id: true,
-  totalDebit: true,
-  totalCredit: true,
-  createdAt: true,
-});
-export type InsertCashJournalVoucher = z.infer<typeof insertCashJournalVoucherSchema>;
-export type CashJournalVoucher = typeof cashJournalVouchers.$inferSelect;
 
-export const insertCashJournalItemSchema = createInsertSchema(cashJournalItems).omit({ id: true });
-export type InsertCashJournalItem = z.infer<typeof insertCashJournalItemSchema>;
-export type CashJournalItem = typeof cashJournalItems.$inferSelect;
-
-// Specialized Daybooks
-export const salesDaybook = sqliteTable("sales_daybook", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  // FIXED: 18
-  saleId: integer("sale_id").references(() => sales.id),
-  transactionDate: integer("transaction_date", { mode: "timestamp" }).notNull().default(now),
-  invoiceNumber: text("invoice_number").notNull(), // legacy
-  customerId: integer("customer_id").references(() => accounts.id),
-  customerName: text("customer_name").notNull(),
-  customerAccountDetails: text("customer_account_details"),
-  description: text("description"),
-  quantity: text("quantity").notNull().default("0"),
-  unitPrice: text("unit_price").notNull().default("0"),
-  subtotalAmount: text("subtotal_amount").notNull().default("0"),
-  taxAmount: text("tax_amount").notNull().default("0"),
-  totalAmount: text("total_amount").notNull().default("0"),
-  paymentTerms: text("payment_terms"),
-  dueDate: integer("due_date", { mode: "timestamp" }),
-  paidAmount: text("paid_amount").notNull().default("0"),
-  status: text("status", { enum: ["pending", "partially_paid", "fully_paid"] }).notNull().default("pending"),
-  notes: text("notes"),
-  createdBy: integer("created_by").references(() => users.id),
-  updatedBy: integer("updated_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
-  migrationDate: integer("migration_date", { mode: "timestamp" }),
-});
-
-export const purchasesDaybook = sqliteTable("purchases_daybook", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  // FIXED: 19
-  purchaseId: integer("purchase_id").references(() => purchases.id),
-  transactionDate: integer("transaction_date", { mode: "timestamp" }).notNull().default(now),
-  invoiceNumber: text("invoice_number").notNull(), // legacy
-  supplierId: integer("supplier_id").references(() => accounts.id),
-  supplierName: text("supplier_name").notNull(),
-  supplierAccountDetails: text("supplier_account_details"),
-  description: text("description"),
-  quantity: text("quantity").notNull().default("0"),
-  unitPrice: text("unit_price").notNull().default("0"),
-  subtotalAmount: text("subtotal_amount").notNull().default("0"),
-  taxAmount: text("tax_amount").notNull().default("0"),
-  totalAmount: text("total_amount").notNull().default("0"),
-  paymentTerms: text("payment_terms"),
-  dueDate: integer("due_date", { mode: "timestamp" }),
-  paidAmount: text("paid_amount").notNull().default("0"),
-  status: text("status", { enum: ["pending", "partially_paid", "fully_paid"] }).notNull().default("pending"),
-  notes: text("notes"),
-  createdBy: integer("created_by").references(() => users.id),
-  updatedBy: integer("updated_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
-  migrationDate: integer("migration_date", { mode: "timestamp" }),
-});
+// sales_daybook and purchases_daybook are SQL views (created by daybooks.service.ts)
+// that project from the sales/purchases tables — no Drizzle definition needed.
 
 export const cashBook = sqliteTable("cash_book", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -1154,74 +1057,7 @@ export const purchaseReturnsDaybook = sqliteTable("purchase_returns_daybook", {
   migrationDate: integer("migration_date", { mode: "timestamp" }),
 });
 
-// FIXED: 23
-// @deprecated legacy journal layer retained for migration compatibility
-export const generalJournal = sqliteTable("general_journal", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  journalVoucherId: integer("journal_voucher_id").references(() => journalVouchers.id),
-  transactionDate: integer("transaction_date", { mode: "timestamp" }).notNull().default(now),
-  journalEntryNumber: text("journal_entry_number").notNull().unique(),
-  description: text("description").notNull(),
-  entryType: text("entry_type"),
-  totalDebits: text("total_debits").notNull().default("0"),
-  totalCredits: text("total_credits").notNull().default("0"),
-  status: text("status", { enum: ["draft", "approved", "reversed", "cancelled"] }).notNull().default("draft"),
-  approvedBy: integer("approved_by").references(() => users.id),
-  attachmentPaths: text("attachment_paths"),
-  notes: text("notes"),
-  createdBy: integer("created_by").references(() => users.id),
-  updatedBy: integer("updated_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
-  migrationDate: integer("migration_date", { mode: "timestamp" }),
-});
 
-// FIXED: 24
-// @deprecated legacy journal lines retained for migration compatibility
-export const journalLines = sqliteTable("journal_lines", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  journalId: integer("journal_id").notNull().references(() => generalJournal.id, { onDelete: "cascade" }),
-  accountId: integer("account_id").notNull().references(() => accounts.id),
-  accountName: text("account_name").notNull(),
-  debitAmount: text("debit_amount").notNull().default("0"),
-  creditAmount: text("credit_amount").notNull().default("0"),
-  lineDescription: text("line_description"),
-  notes: text("notes"),
-  createdBy: integer("created_by").references(() => users.id),
-  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
-  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
-});
-
-export const daybookAuditLogs = sqliteTable("daybook_audit_logs", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  daybookType: text("daybook_type").notNull(),
-  recordId: integer("record_id").notNull(),
-  action: text("action").notNull(),
-  beforeJson: text("before_json"),
-  afterJson: text("after_json"),
-  changedBy: integer("changed_by").references(() => users.id),
-  changedAt: integer("changed_at", { mode: "timestamp" }).notNull().default(now),
-});
-
-export const insertSalesDaybookSchema = createInsertSchema(salesDaybook).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  isDeleted: true,
-});
-export type InsertSalesDaybook = z.infer<typeof insertSalesDaybookSchema>;
-export type SalesDaybook = typeof salesDaybook.$inferSelect;
-
-export const insertPurchasesDaybookSchema = createInsertSchema(purchasesDaybook).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  isDeleted: true,
-});
-export type InsertPurchasesDaybook = z.infer<typeof insertPurchasesDaybookSchema>;
-export type PurchasesDaybook = typeof purchasesDaybook.$inferSelect;
 
 export const insertCashBookSchema = createInsertSchema(cashBook).omit({
   id: true,
@@ -1250,30 +1086,76 @@ export const insertPurchaseReturnsDaybookSchema = createInsertSchema(purchaseRet
 export type InsertPurchaseReturnsDaybook = z.infer<typeof insertPurchaseReturnsDaybookSchema>;
 export type PurchaseReturnsDaybook = typeof purchaseReturnsDaybook.$inferSelect;
 
-export const insertGeneralJournalSchema = createInsertSchema(generalJournal).omit({
+/**
+ * Gate Passes — physical movement control documents.
+ *
+ * A gate pass records a vehicle crossing the mill gate: IN when a load
+ * arrives (later tied to a purchase or a processing receipt), OUT when a load
+ * is dispatched (tied to a sale or a processing return). It is deliberately
+ * *not* a posting document: nothing here touches the ledger, balances or
+ * product stock. Purchase/Sale/Processing remain the only stock+ledger writers;
+ * the gate pass only proves what physically moved and when.
+ *
+ * Weight is stored as integer grams (gross_g/tare_g/net_g) so weighbridge
+ * values never suffer floating-point drift; helpers convert to the decimal-kg
+ * strings the rest of the app speaks.
+ */
+export const gatePasses = sqliteTable("gate_passes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  number: text("number").notNull().unique(),
+  direction: text("direction", { enum: ["IN", "OUT"] }).notNull(),
+  status: text("status", { enum: ["ISSUED", "COMPLETED", "CANCELLED"] }).notNull().default("ISSUED"),
+  issuedAt: integer("issued_at", { mode: "timestamp" }).notNull().default(now),
+  completedAt: integer("completed_at", { mode: "timestamp" }),
+  vehicleNo: text("vehicle_no"),
+  driverName: text("driver_name"),
+  driverPhone: text("driver_phone"),
+  partyId: integer("party_id").references(() => accounts.id),
+  sourceType: text("source_type", { enum: ["PURCHASE", "SALE", "JOB_RECEIVE", "JOB_RETURN"] }),
+  sourceId: integer("source_id"),
+  grossG: integer("gross_g"),
+  tareG: integer("tare_g"),
+  netG: integer("net_g"),
+  remarks: text("remarks"),
+  createdBy: integer("created_by").references(() => users.id),
+  cancelledReason: text("cancelled_reason"),
+  cancelledBy: integer("cancelled_by").references(() => users.id),
+  cancelledAt: integer("cancelled_at", { mode: "timestamp" }),
+  fiscalYearId: integer("fiscal_year_id").references(() => fiscalYears.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(now),
+}, (table) => ({
+  idxGatePassesSource: index("idx_gate_passes_source").on(table.sourceType, table.sourceId),
+  idxGatePassesVehicle: index("idx_gate_passes_vehicle").on(table.vehicleNo),
+  idxGatePassesIssuedAt: index("idx_gate_passes_issued_at").on(table.issuedAt),
+}));
+
+export const gatePassItems = sqliteTable("gate_pass_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  gatePassId: integer("gate_pass_id").notNull().references(() => gatePasses.id, { onDelete: "cascade" }),
+  productId: integer("product_id").notNull().references(() => products.id),
+  bags: integer("bags").notNull().default(0),
+  weightG: integer("weight_g").notNull().default(0),
+  saleItemId: integer("sale_item_id").references(() => saleItems.id),
+  purchaseItemId: integer("purchase_item_id").references(() => purchaseItems.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(now),
+});
+
+export const insertGatePassSchema = createInsertSchema(gatePasses).omit({
   id: true,
+  number: true,
   createdAt: true,
   updatedAt: true,
-  isDeleted: true,
 });
-export type InsertGeneralJournal = z.infer<typeof insertGeneralJournalSchema>;
-export type GeneralJournal = typeof generalJournal.$inferSelect;
+export type InsertGatePass = z.infer<typeof insertGatePassSchema>;
+export type GatePass = typeof gatePasses.$inferSelect;
 
-export const insertJournalLineSchema = createInsertSchema(journalLines).omit({
+export const insertGatePassItemSchema = createInsertSchema(gatePassItems).omit({
   id: true,
   createdAt: true,
-  updatedAt: true,
-  isDeleted: true,
 });
-export type InsertJournalLine = z.infer<typeof insertJournalLineSchema>;
-export type JournalLine = typeof journalLines.$inferSelect;
-
-export const insertDaybookAuditLogSchema = createInsertSchema(daybookAuditLogs).omit({
-  id: true,
-  changedAt: true,
-});
-export type InsertDaybookAuditLog = z.infer<typeof insertDaybookAuditLogSchema>;
-export type DaybookAuditLog = typeof daybookAuditLogs.$inferSelect;
+export type InsertGatePassItem = z.infer<typeof insertGatePassItemSchema>;
+export type GatePassItem = typeof gatePassItems.$inferSelect;
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
@@ -1397,15 +1279,6 @@ export const payrollsRelations = relations(payrolls, ({ one, many }) => ({
     relationName: "paymentJV",
   }),
   paymentAccount: one(accounts, { fields: [payrolls.paymentAccountId], references: [accounts.id] }),
-  auditLogs: many(payrollAuditLogs),
-}));
-
-export const payrollAuditLogsRelations = relations(payrollAuditLogs, ({ one }) => ({
-  payroll: one(payrolls, { fields: [payrollAuditLogs.payrollId], references: [payrolls.id] }),
-  performedByUser: one(users, {
-    fields: [payrollAuditLogs.performedBy],
-    references: [users.id],
-  }),
 }));
 
 export const productsRelations = relations(products, ({ many }) => ({
@@ -1801,54 +1674,6 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   }),
 }));
 
-export const generalJournalRelations = relations(generalJournal, ({ one, many }) => ({
-  lines: many(journalLines),
-  createdByUser: one(users, {
-    fields: [generalJournal.createdBy],
-    references: [users.id],
-  }),
-  approvedByUser: one(users, {
-    fields: [generalJournal.approvedBy],
-    references: [users.id],
-  }),
-  journalVoucher: one(journalVouchers, {
-    fields: [generalJournal.journalVoucherId],
-    references: [journalVouchers.id],
-  }),
-}));
-
-export const journalLinesRelations = relations(journalLines, ({ one }) => ({
-  journal: one(generalJournal, {
-    fields: [journalLines.journalId],
-    references: [generalJournal.id],
-  }),
-  account: one(accounts, {
-    fields: [journalLines.accountId],
-    references: [accounts.id],
-  }),
-}));
-
-export const salesDaybookRelations = relations(salesDaybook, ({ one }) => ({
-  customer: one(accounts, {
-    fields: [salesDaybook.customerId],
-    references: [accounts.id],
-  }),
-  sale: one(sales, {
-    fields: [salesDaybook.saleId],
-    references: [sales.id],
-  }),
-}));
-
-export const purchasesDaybookRelations = relations(purchasesDaybook, ({ one }) => ({
-  supplier: one(accounts, {
-    fields: [purchasesDaybook.supplierId],
-    references: [accounts.id],
-  }),
-  purchase: one(purchases, {
-    fields: [purchasesDaybook.purchaseId],
-    references: [purchases.id],
-  }),
-}));
 
 export const cashBookRelations = relations(cashBook, ({ one }) => ({
   bankAccount: one(accounts, {
@@ -1887,16 +1712,42 @@ export const purchaseReturnsDaybookRelations = relations(purchaseReturnsDaybook,
   }),
 }));
 
-export const daybookAuditLogsRelations = relations(daybookAuditLogs, ({ one }) => ({
-  changedByUser: one(users, {
-    fields: [daybookAuditLogs.changedBy],
+export const gatePassesRelations = relations(gatePasses, ({ one, many }) => ({
+  party: one(accounts, {
+    fields: [gatePasses.partyId],
+    references: [accounts.id],
+  }),
+  createdByUser: one(users, {
+    fields: [gatePasses.createdBy],
     references: [users.id],
+  }),
+  cancelledByUser: one(users, {
+    fields: [gatePasses.cancelledBy],
+    references: [users.id],
+  }),
+  fiscalYear: one(fiscalYears, {
+    fields: [gatePasses.fiscalYearId],
+    references: [fiscalYears.id],
+  }),
+  items: many(gatePassItems),
+}));
+
+export const gatePassItemsRelations = relations(gatePassItems, ({ one }) => ({
+  gatePass: one(gatePasses, {
+    fields: [gatePassItems.gatePassId],
+    references: [gatePasses.id],
+  }),
+  product: one(products, {
+    fields: [gatePassItems.productId],
+    references: [products.id],
+  }),
+  saleItem: one(saleItems, {
+    fields: [gatePassItems.saleItemId],
+    references: [saleItems.id],
+  }),
+  purchaseItem: one(purchaseItems, {
+    fields: [gatePassItems.purchaseItemId],
+    references: [purchaseItems.id],
   }),
 }));
 
-export const receiptVoucherAuditLogsRelations = relations(receiptVoucherAuditLogs, ({ one }) => ({
-  changedByUser: one(users, {
-    fields: [receiptVoucherAuditLogs.changedBy],
-    references: [users.id],
-  }),
-}));
