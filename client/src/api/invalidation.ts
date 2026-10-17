@@ -34,6 +34,21 @@ export function invalidateApi(prefixes: readonly string[]) {
 }
 
 /**
+ * Refetch every /api/ query. Used only when the real-time socket reconnects
+ * (or loses state) so the UI catches up to anything that happened while the
+ * connection was down — the per-event invalidation above only touches the
+ * entities a single event names.
+ */
+export function invalidateAllApi() {
+  return queryClient.invalidateQueries({
+    predicate: (query) => {
+      const key = query.queryKey[0];
+      return typeof key === "string" && key.startsWith("/api/");
+    },
+  });
+}
+
+/**
  * What each kind of write actually affects. Keep these lists honest: queries use
  * `staleTime: Infinity`, so anything omitted here keeps serving cached data until
  * it is garbage-collected, while anything added back costs a refetch.
@@ -156,6 +171,18 @@ export const invalidationGroups = {
     "/api/reports/trial-balance",
   ],
 
+  /**
+   * Gate passes are physical-control documents: they never post to the ledger or
+   * move stock. They do change the sale dispatch roll-ups and the purchase's
+   * linked-pass reference, and they feed the dashboard's "vehicles inside" card.
+   */
+  gatePasses: [
+    "/api/gate-passes",
+    "/api/sales",
+    "/api/purchases",
+    "/api/dashboard",
+  ],
+
   /** Catalogue edits and opening stock; no ledger posting of their own. */
   products: ["/api/products", "/api/dashboard", "/api/reports/stock"],
 
@@ -191,9 +218,18 @@ export const invalidationGroups = {
   /** Employee records and salary structures; nothing is posted until payroll runs. */
   employees: ["/api/employees", "/api/payrolls", "/api/financial/salary"],
 
-  /** The cash daybook screens. */
+  /**
+   * The cash daybook screens.
+   *
+   * Cash in Hand and the Cash Receipts / Cash Payments screens are two views of
+   * one book, so a write on either side has to redraw the other. Both prefixes
+   * are here for that reason — the /api/cash queries alone left the voucher
+   * screens serving their cached list after a receipt was added in Cash in Hand.
+   */
   cash: [
     "/api/cash",
+    "/api/receipts",
+    "/api/payments",
     "/api/accounts",
     "/api/dashboard",
     "/api/ledger",
@@ -201,6 +237,19 @@ export const invalidationGroups = {
     "/api/reports/trial-balance",
     "/api/reports/day-book",
   ],
+
+  /**
+   * The general ledger and the per-cash-ledger report share one endpoint
+   * (/api/ledger and /api/cash/ledger). Kept separate from `cash` so editing a
+   * ledger line only refetches ledger views, not the whole cash module.
+   */
+  ledger: ["/api/ledger", "/api/cash/ledger"],
+
+  /**
+   * The dashboard aggregates stats, alerts and charts; invalidate all of them
+   * together whenever any underlying entity changes.
+   */
+  dashboard: ["/api/dashboard"],
 
   /** Settings, including the shortcut map and the data-management summary. */
   settings: ["/api/settings", "/api/data"],

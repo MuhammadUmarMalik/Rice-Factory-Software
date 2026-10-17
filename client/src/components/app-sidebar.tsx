@@ -15,6 +15,8 @@ import Receipt from "lucide-react/dist/esm/icons/receipt";
 import Wallet from "lucide-react/dist/esm/icons/wallet";
 import UserRound from "lucide-react/dist/esm/icons/user-round";
 import ReceiptText from "lucide-react/dist/esm/icons/receipt-text";
+import Truck from "lucide-react/dist/esm/icons/truck";
+import HandCoins from "lucide-react/dist/esm/icons/hand-coins";
 import {
   Sidebar,
   SidebarContent,
@@ -42,11 +44,12 @@ const mainMenuItems = [
   { title: "products", url: "/products", icon: Package, roles: readProductsRoles },
   { title: "purchases", url: "/purchases", icon: ShoppingCart, roles: Roles.purchasing },
   { title: "cashReceipts", url: "/receipts", icon: Receipt, roles: Roles.finance },
-  { title: "cashPayments", url: "/payments", icon: Receipt, roles: Roles.finance },
+  { title: "cashPayments", url: "/payments", icon: HandCoins, roles: Roles.finance },
   { title: "expenses", url: "/expenses", icon: ReceiptText, roles: Roles.finance },
   { title: "cashInHand", url: "/cash", icon: Wallet, roles: Roles.finance },
   { title: "journalVoucher", url: "/journal", icon: FileText, roles: Roles.finance },
   { title: "processing", url: "/processing", icon: Factory, roles: Roles.ops },
+  { title: "gatePass", url: "/gate-passes", icon: Truck, roles: Roles.all },
   { title: "sales", url: "/sales", icon: TrendingUp, roles: Roles.sales },
 ];
 
@@ -79,7 +82,6 @@ const reportsSubmenuGroups = [
       { title: "dayBookCash", url: "/reports/day-book-cash", roles: Roles.finance },
       { title: "dayBookSalesReturns", url: "/reports/day-book-sales-returns", roles: Roles.finance },
       { title: "dayBookPurchaseReturns", url: "/reports/day-book-purchase-returns", roles: Roles.finance },
-      { title: "dayBookGeneralJournal", url: "/reports/day-book-general-journal", roles: Roles.finance },
     ],
   },
   {
@@ -94,6 +96,7 @@ const reportsSubmenuGroups = [
     items: [
       { title: "cashLedger", url: "/reports/cash-ledger", roles: Roles.finance },
       { title: "ledger", url: "/reports/ledger", roles: Roles.finance },
+      { title: "productLedger", url: "/reports/product-ledger", roles: Roles.purchasing },
     ],
   },
   {
@@ -115,6 +118,16 @@ const reportsSubmenuGroups = [
 const hrSubmenu = [
   { title: "employees", url: "/hr/employees", roles: Roles.all },
   { title: "payroll", url: "/hr/payroll", roles: readPayrollRoles },
+];
+
+/** Every navigable page, flattened — feeds the header's jump-to-page search. */
+export const allNavItems: { title: string; url: string; roles: readonly string[] }[] = [
+  ...mainMenuItems,
+  ...accountsSubmenu,
+  ...reportsSubmenuGroups.flatMap((g) => g.items),
+  ...hrSubmenu,
+  { title: "settings", url: "/settings", roles: Roles.settings },
+  { title: "users", url: "/admin/users", roles: Roles.adminOnly },
 ];
 
 export function AppSidebar() {
