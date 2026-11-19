@@ -1,6 +1,8 @@
-# Mill Manager (Rice Mill ERP)
+# MUNSHI — Rice Mill ERP
 
-Mill Manager is a full-stack ERP for rice mills covering procurement, stock processing, sales, accounting, HR/payroll, reporting, and printing. It runs as a web app (React + Express + SQLite) and can be packaged as a Windows desktop app with Electron.
+> Developed under the working name Mill Manager.
+
+MUNSHI is a full-stack ERP for rice mills covering procurement, stock processing, sales, accounting, HR/payroll, reporting, and printing. It runs as a web app (React + Express + SQLite) and can be packaged as a Windows desktop app with Electron.
 
 ## Overview
 - Single repo with separate `client/` and `server/` packages, each with its own `package.json` and `node_modules`. Electron wrapper at root for desktop build.
